@@ -1,0 +1,23 @@
+[package]
+name = "nixup"
+version = "0.1.0"
+edition = "2021"
+description = "TUI tool to check for NixOS package updates"
+
+[dependencies]
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+# HTTP & sérialisation
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+
+# Utilitaires
+regex = "1"
+anyhow = "1"
+dirs = "6"
