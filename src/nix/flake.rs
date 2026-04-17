@@ -13,13 +13,16 @@ use tracing::debug;
 pub struct FlakeInput {
     /// Input name (e.g. "zen-browser", "claude-code")
     pub name: String,
-    /// Last modified timestamp (unix seconds) — used for age calculation
+    /// Last modified timestamp (unix seconds)
     #[allow(dead_code)]
     pub last_modified: u64,
     /// Short git revision hash
+    #[allow(dead_code)]
     pub rev: String,
     /// How many days since last update
     pub days_old: u64,
+    /// Installed version (from the nix store, if found)
+    pub installed_version: Option<String>,
 }
 
 /// Inputs that are infrastructure, not user-facing packages.
@@ -31,6 +34,22 @@ const INFRASTRUCTURE_INPUTS: &[&str] = &[
     "rust-overlay",
     "nixpkgs-esp-dev",
     "nixup",
+];
+
+/// Mapping from flake input names to store package names.
+/// Used to find the installed version of a flake input package.
+/// Input name → store name prefix (matched case-insensitively).
+const INPUT_STORE_MAPPINGS: &[(&str, &str)] = &[
+    ("claude-code", "claude-code"),
+    ("zen-browser", "zen-browser"),
+    ("affinity-nix", "Affinity-Designer"),
+    ("kesp-controller", "kesp-controller"),
+];
+
+/// Store paths to scan for installed versions.
+const STORE_PATHS: &[&str] = &[
+    "/run/current-system/sw",
+    "/etc/profiles/per-user/mae",  // TODO: detect username dynamically
 ];
 
 /// Read all non-infrastructure flake inputs from flake.lock.
@@ -112,18 +131,83 @@ pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
 
         let days_old = now.saturating_sub(last_modified) / 86400;
 
-        debug!("Flake input: {} ({}d old, rev {})", input_name, days_old, rev);
+        // Try to find the installed version from the store
+        let installed_version = find_store_version(input_name);
+
+        debug!(
+            "Flake input: {} v{} ({}d old, rev {})",
+            input_name,
+            installed_version.as_deref().unwrap_or("?"),
+            days_old,
+            rev
+        );
 
         result.push(FlakeInput {
             name: input_name.clone(),
             last_modified,
             rev,
             days_old,
+            installed_version,
         });
     }
 
     result.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(result)
+}
+
+/// Try to find the installed version of a flake input from the nix store.
+///
+/// Uses the INPUT_STORE_MAPPINGS table to find the store package name,
+/// then looks it up in the store output.
+fn find_store_version(input_name: &str) -> Option<String> {
+    // Find the store name for this input
+    let store_prefix = INPUT_STORE_MAPPINGS.iter()
+        .find(|(input, _)| *input == input_name)
+        .map(|(_, store)| *store)?;
+
+    // Scan all store paths (system + user profile)
+    for store_path in STORE_PATHS {
+        if let Some(version) = scan_store_for_version(store_path, store_prefix) {
+            return Some(version);
+        }
+    }
+
+    None
+}
+
+/// Scan a single store path for a package version.
+fn scan_store_for_version(store_path: &str, store_prefix: &str) -> Option<String> {
+    let output = std::process::Command::new("nix-store")
+        .args(["-qR", store_path])
+        .output()
+        .ok()?;
+
+    let stdout = String::from_utf8(output.stdout).ok()?;
+
+    for line in stdout.lines() {
+        // Extract store name: /nix/store/<hash>-<name>-<version>
+        let store_name = line.strip_prefix("/nix/store/")?;
+        if store_name.len() < 34 {
+            continue;
+        }
+        let name_version = &store_name[33..];
+
+        // Check if it matches our prefix (case-insensitive)
+        if name_version.to_lowercase().starts_with(&store_prefix.to_lowercase()) {
+            // Extract version: everything after "prefix-"
+            let after_prefix = &name_version[store_prefix.len()..];
+            if let Some(version) = after_prefix.strip_prefix('-') {
+                // Skip sub-outputs
+                if version.contains("-man") || version.contains("-doc")
+                    || version.ends_with(".desktop") || version.ends_with(".svg") {
+                    continue;
+                }
+                return Some(version.to_string());
+            }
+        }
+    }
+
+    None
 }
 
 /// Check if a name corresponds to a flake input (not a nixpkgs package).

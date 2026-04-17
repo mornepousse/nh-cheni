@@ -216,10 +216,14 @@ pub async fn run(category: Option<&str>) -> Result<()> {
                         format!("{} days ago", age_color)
                     };
 
+                    let version_str = input.installed_version
+                        .as_deref()
+                        .unwrap_or("?");
+
                     println!(
                         "  {:<24} {:<14} {}",
                         input.name,
-                        input.rev.dimmed(),
+                        version_str.dimmed(),
                         age_label,
                     );
                 }
