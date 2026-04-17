@@ -12,4 +12,5 @@ pub mod pin;
 pub mod search;
 pub mod status;
 pub mod update;
+pub mod upgrade;
 pub mod why;

@@ -104,6 +104,17 @@ enum Commands {
     /// Apply pinned updates: refresh nixpkgs-latest and rebuild the system
     Update,
 
+    /// Full system upgrade: update all inputs, rebuild, clean pins, GC
+    Upgrade {
+        /// Skip garbage collection at the end
+        #[arg(long)]
+        no_gc: bool,
+
+        /// Skip cleanup of obsolete pins
+        #[arg(long)]
+        no_clean_pins: bool,
+    },
+
     /// Build and switch with human-readable error parsing
     Build,
 
@@ -208,6 +219,13 @@ async fn main() -> Result<()> {
 
         Commands::Update => {
             cmd::update::run()?;
+        }
+
+        Commands::Upgrade { no_gc, no_clean_pins } => {
+            cmd::upgrade::run(cmd::upgrade::UpgradeOptions {
+                no_gc,
+                no_clean_pins,
+            })?;
         }
 
         Commands::Build => {
