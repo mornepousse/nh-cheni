@@ -11,7 +11,7 @@ use colored::Colorize;
 use tracing::debug;
 
 use crate::api::repology;
-use crate::nix::{config, pins, store};
+use crate::nix::{config, flake, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::parse_version;
 
@@ -195,6 +195,37 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     if minor_updates.is_empty() && major_updates.is_empty() {
         println!("{}", "Everything is up to date!".green().bold());
         println!();
+    }
+
+    // 8. Show flake inputs (if not filtering by category)
+    if category.is_none() {
+        if let Ok(inputs) = flake::read_flake_inputs(&nix_config.flake_dir) {
+            if !inputs.is_empty() {
+                println!("{}:", "Flake inputs".bold());
+                for input in &inputs {
+                    let age_color = if input.days_old > 30 {
+                        input.days_old.to_string().yellow()
+                    } else {
+                        input.days_old.to_string().green()
+                    };
+                    let age_label = if input.days_old == 0 {
+                        "today".to_string()
+                    } else if input.days_old == 1 {
+                        "1 day ago".to_string()
+                    } else {
+                        format!("{} days ago", age_color)
+                    };
+
+                    println!(
+                        "  {:<24} {:<14} {}",
+                        input.name,
+                        input.rev.dimmed(),
+                        age_label,
+                    );
+                }
+                println!();
+            }
+        }
     }
 
     // Summary line

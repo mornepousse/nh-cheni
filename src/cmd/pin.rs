@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 use std::io::{self, Write};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use crate::api::repology;
-use crate::nix::{config, pins, store};
+use crate::nix::{config, flake, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::parse_version;
 
@@ -19,6 +19,11 @@ use crate::version::parse::parse_version;
 /// Pins a single package by name.
 pub async fn pin_one(name: &str, force: bool) -> Result<()> {
     let nix_config = config::detect()?;
+
+    // Check if this is a flake input (e.g. zen-browser, claude-code)
+    if flake::is_flake_input(&nix_config.flake_dir, name) {
+        return pin_flake_input(&nix_config.flake_dir, name);
+    }
 
     // Check if the package exists in the store
     let store_packages = store::read_installed_packages()?;
@@ -288,3 +293,29 @@ fn confirm(question: &str, default_yes: bool) -> Result<bool> {
 
     Ok(answer == "y" || answer == "yes")
 }
+
+/// Pin a flake input by updating it directly.
+///
+/// Instead of using the nixpkgs-latest overlay, this runs
+/// `nix flake update <input-name>` to get the latest version.
+fn pin_flake_input(flake_dir: &std::path::Path, name: &str) -> Result<()> {
+    println!(
+        "{} is a flake input — updating directly.\n",
+        name.bold()
+    );
+
+    let status = std::process::Command::new("nix")
+        .args(["flake", "update", name])
+        .current_dir(flake_dir)
+        .status()
+        .context("Failed to run 'nix flake update'")?;
+
+    if !status.success() {
+        anyhow::bail!("nix flake update {} failed", name);
+    }
+
+    println!("\n{} Updated flake input {}.", "✓".green(), name.bold());
+    println!("Run '{}' to apply.", "update".bold());
+    Ok(())
+}
+
