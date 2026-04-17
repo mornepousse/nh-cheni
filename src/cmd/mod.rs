@@ -10,6 +10,7 @@ pub mod init;
 pub mod obsolete;
 pub mod pin;
 pub mod search;
+pub mod self_update;
 pub mod status;
 pub mod update;
 pub mod upgrade;

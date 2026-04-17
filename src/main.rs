@@ -128,6 +128,10 @@ enum Commands {
     /// Run health checks on your cheni setup
     Doctor,
 
+    /// Update cheni itself (nix flake update cheni + rebuild)
+    #[command(name = "self-update")]
+    SelfUpdate,
+
     /// Search nixpkgs for a package
     Search {
         /// Search query
@@ -239,6 +243,10 @@ async fn main() -> Result<()> {
 
         Commands::Doctor => {
             cmd::doctor::run()?;
+        }
+
+        Commands::SelfUpdate => {
+            cmd::self_update::run()?;
         }
 
         Commands::Search { query } => {
