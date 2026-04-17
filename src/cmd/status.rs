@@ -7,9 +7,10 @@ use std::path::Path;
 
 use anyhow::Result;
 use colored::Colorize;
-use tracing::debug;
 
 use crate::nix::{config, pins};
+
+use super::obsolete::count_obsolete_pins;
 
 /// Run `nixup status`.
 pub fn run() -> Result<()> {
@@ -60,7 +61,7 @@ pub fn run() -> Result<()> {
         println!("  {} No active pins.", "●".dimmed());
     } else {
         // Check if pins are obsolete (nixpkgs caught up)
-        let pins_obsolete = are_pins_obsolete(&lock_path);
+        let pins_obsolete = count_obsolete_pins(&lock_path, &current_pins) > 0;
 
         if pins_obsolete {
             println!(
@@ -84,38 +85,13 @@ pub fn run() -> Result<()> {
         if pins_obsolete {
             println!(
                 "\n  Run '{}' to clean up obsolete pins.",
-                "nixup unpin --all".bold()
+                "nixup clean".bold()
             );
         }
     }
 
     println!();
     Ok(())
-}
-
-/// Check if nixpkgs has caught up with nixpkgs-latest (pins are obsolete).
-fn are_pins_obsolete(lock_path: &Path) -> bool {
-    let content = match std::fs::read_to_string(lock_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    let lock: serde_json::Value = match serde_json::from_str(&content) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    let base_time = get_input_timestamp(&lock, "nixpkgs");
-    let latest_time = get_input_timestamp(&lock, "nixpkgs-latest");
-
-    match (base_time, latest_time) {
-        (Some(base), Some(latest)) => {
-            debug!("nixpkgs: {}, nixpkgs-latest: {}", base, latest);
-            // Pins are obsolete if nixpkgs is at or ahead of nixpkgs-latest
-            base >= latest
-        }
-        _ => false,
-    }
 }
 
 /// Read human-readable dates from flake.lock for both nixpkgs inputs.

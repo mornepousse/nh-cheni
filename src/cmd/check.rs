@@ -11,9 +11,11 @@ use colored::Colorize;
 use tracing::debug;
 
 use crate::api::repology;
-use crate::nix::{config, store};
+use crate::nix::{config, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::parse_version;
+
+use super::obsolete::count_obsolete_pins;
 
 /// A package with its update status, ready for display.
 struct CheckResult {
@@ -28,6 +30,21 @@ struct CheckResult {
 pub async fn run(category: Option<&str>) -> Result<()> {
     // 1. Detect the NixOS configuration
     let nix_config = config::detect()?;
+
+    // Avertissement automatique si des pins sont obsolètes
+    let current_pins = pins::read(&nix_config.flake_dir)?;
+    if !current_pins.is_empty() {
+        let lock_path = nix_config.flake_dir.join("flake.lock");
+        let obsolete = count_obsolete_pins(&lock_path, &current_pins);
+        if obsolete > 0 {
+            println!(
+                "{} {} obsolete pin(s) detected. Run '{}' to remove.\n",
+                "Note:".yellow(),
+                obsolete,
+                "nixup clean".bold()
+            );
+        }
+    }
 
     // 2. Get installed packages from the store
     let store_packages = store::read_installed_packages()?;
