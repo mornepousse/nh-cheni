@@ -1,4 +1,4 @@
-//! `nixup update` command.
+//! `cheni update` command.
 //!
 //! Applies all current pins by updating `nixpkgs-latest` and rebuilding
 //! the system. This is the command that actually makes changes.
@@ -15,7 +15,7 @@ use tracing::{debug, warn};
 
 use crate::nix::{config, pins};
 
-/// Run `nixup update`.
+/// Run `cheni update`.
 ///
 /// 1. Read current pins
 /// 2. Update nixpkgs-latest flake input
@@ -25,16 +25,16 @@ pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     let current_pins = pins::read(&nix_config.flake_dir)?;
 
-    // Check if flake.lock is dirty (flake inputs were updated via nixup pin)
+    // Check if flake.lock is dirty (flake inputs were updated via cheni pin)
     let flake_lock_dirty = is_flake_lock_dirty(&nix_config.flake_dir);
 
     if current_pins.is_empty() && !flake_lock_dirty {
         println!("No packages pinned and no pending flake updates.");
-        println!("Use '{}' to pin packages first.", "nixup pin <pkg>".bold());
+        println!("Use '{}' to pin packages first.", "cheni pin <pkg>".bold());
         return Ok(());
     }
 
-    println!("{}", "=== nixup update ===\n".bold());
+    println!("{}", "=== cheni update ===\n".bold());
 
     // Show what will be updated
     if !current_pins.is_empty() {
@@ -66,7 +66,7 @@ pub fn run() -> Result<()> {
             anyhow::bail!(
                 "nix flake update nixpkgs-latest failed.\n\
                  Hint: make sure 'nixpkgs-latest' is defined in your flake.nix.\n\
-                 Run 'nixup init' to set it up."
+                 Run 'cheni init' to set it up."
             );
         }
 
@@ -88,7 +88,7 @@ pub fn run() -> Result<()> {
                 "!".yellow()
             );
             println!("Pins won't have any effect. Run '{}' to update nixpkgs first.", "upgrade".bold());
-            println!("Or '{}' to remove pins.", "nixup unpin --all".bold());
+            println!("Or '{}' to remove pins.", "cheni unpin --all".bold());
             return Ok(());
         }
         InputOrder::LatestIsOlder => {
@@ -97,7 +97,7 @@ pub fn run() -> Result<()> {
                 "!".red()
             );
             println!("This can happen after a full '{}'. Pins are no longer needed.", "upgrade".bold());
-            println!("Run '{}' to clean up.", "nixup unpin --all".bold());
+            println!("Run '{}' to clean up.", "cheni unpin --all".bold());
             return Ok(());
         }
         InputOrder::Unknown => {
@@ -121,7 +121,7 @@ pub fn run() -> Result<()> {
         anyhow::bail!(
             "System rebuild failed.\n\
              Your pins are still in package-pins.json.\n\
-             Fix the issue and run 'nixup update' again, or 'nixup unpin --all' to revert."
+             Fix the issue and run 'cheni update' again, or 'cheni unpin --all' to revert."
         );
     }
 

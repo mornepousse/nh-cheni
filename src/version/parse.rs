@@ -14,7 +14,7 @@
 ///
 /// # Examples
 /// ```
-/// use nixup::version::parse::parse_version;
+/// use cheni::version::parse::parse_version;
 /// assert_eq!(parse_version("1.2.3"), vec![1, 2, 3]);
 /// assert_eq!(parse_version("1.94.1-x86_64"), vec![1, 94, 1]);
 /// assert_eq!(parse_version("0.17.0"), vec![0, 17, 0]);

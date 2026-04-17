@@ -1,4 +1,4 @@
-//! nixup — Granular package updates for NixOS.
+//! cheni — Granular package updates for NixOS.
 //!
 //! Library crate exposing the core modules for testing and reuse.
 

@@ -23,7 +23,7 @@ pub struct NixConfig {
 /// Searches for flake.nix in standard locations, then detects the hostname.
 pub fn detect() -> Result<NixConfig> {
     let flake_dir = find_flake_dir()
-        .context("Could not find a NixOS flake configuration.\nHint: run nixup from your config directory, or set $NIXUP_CONFIG")?;
+        .context("Could not find a NixOS flake configuration.\nHint: run cheni from your config directory, or set $CHENI_CONFIG")?;
 
     debug!("Config found: {}", flake_dir.display());
 
@@ -36,19 +36,19 @@ pub fn detect() -> Result<NixConfig> {
 /// Search for flake.nix in standard locations.
 ///
 /// Priority order:
-/// 1. $NIXUP_CONFIG environment variable
+/// 1. $CHENI_CONFIG environment variable
 /// 2. Current directory
 /// 3. ~/nixos-config
 /// 4. /etc/nixos
 fn find_flake_dir() -> Option<PathBuf> {
     // 1. Environment variable
-    if let Ok(env_path) = std::env::var("NIXUP_CONFIG") {
+    if let Ok(env_path) = std::env::var("CHENI_CONFIG") {
         let path = PathBuf::from(&env_path);
         if has_flake(&path) {
-            debug!("Using $NIXUP_CONFIG: {}", path.display());
+            debug!("Using $CHENI_CONFIG: {}", path.display());
             return Some(path);
         }
-        warn!("$NIXUP_CONFIG is set to '{}' but no flake.nix found there", env_path);
+        warn!("$CHENI_CONFIG is set to '{}' but no flake.nix found there", env_path);
     }
 
     // 2. Current directory

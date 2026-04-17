@@ -1,7 +1,7 @@
 //! Build script — capture git metadata at compile time.
 //!
 //! Emits `GIT_SHORT_HASH` so the binary can display
-//! `nixup 0.1.0-alpha (abc1234)` in --version output.
+//! `cheni 0.1.0-alpha (abc1234)` in --version output.
 
 fn main() {
     // Récupérer le hash court du dernier commit

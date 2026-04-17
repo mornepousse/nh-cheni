@@ -1,4 +1,4 @@
-//! `nixup clean` command.
+//! `cheni clean` command.
 //!
 //! Detects obsolete pins (when nixpkgs has caught up with nixpkgs-latest
 //! after a regular `upgrade`) and removes them automatically.
@@ -10,7 +10,7 @@ use crate::nix::{config, pins};
 
 use super::obsolete::count_obsolete_pins;
 
-/// Run `nixup clean`.
+/// Run `cheni clean`.
 ///
 /// Checks whether nixpkgs has caught up with nixpkgs-latest.
 /// If so, removes all pins (they are no longer needed).

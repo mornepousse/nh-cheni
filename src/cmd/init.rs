@@ -1,4 +1,4 @@
-//! `nixup init` command.
+//! `cheni init` command.
 //!
 //! First-time setup: adds `nixpkgs-latest` input and the overlay
 //! to the user's flake.nix, and creates `package-pins.json`.
@@ -14,12 +14,12 @@ use tracing::{debug, warn};
 
 use crate::nix::config;
 
-/// Run `nixup init`.
+/// Run `cheni init`.
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     let flake_dir = &nix_config.flake_dir;
 
-    println!("{}\n", "=== nixup init ===".bold());
+    println!("{}\n", "=== cheni init ===".bold());
     println!("  Config:   {}", flake_dir.display());
     println!("  Hostname: {}\n", nix_config.hostname);
 
@@ -67,7 +67,7 @@ pub fn run() -> Result<()> {
         match add_overlay(&flake_path, &flake_content, &nix_config.hostname) {
             Ok(()) => {
                 println!(
-                    "{} Added nixup overlay to flake.nix.       {}",
+                    "{} Added cheni overlay to flake.nix.       {}",
                     "[2/2]".dimmed(),
                     "OK".green()
                 );
@@ -86,9 +86,9 @@ pub fn run() -> Result<()> {
     }
 
     println!(
-        "\n{} nixup is ready! Try '{}'.",
+        "\n{} cheni is ready! Try '{}'.",
         "✓".green(),
-        "nixup check".bold()
+        "cheni check".bold()
     );
 
     Ok(())
@@ -166,7 +166,7 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
         if i == insert_line {
             new_lines.push(String::new());
             new_lines.push(
-                "    # nixpkgs-latest: independently updated for per-package updates (nixup)"
+                "    # nixpkgs-latest: independently updated for per-package updates (cheni)"
                     .to_string(),
             );
             new_lines.push(
@@ -183,14 +183,14 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// Add the nixup overlay to the nixosSystem modules.
+/// Add the cheni overlay to the nixosSystem modules.
 ///
 /// Strategy: find the `nixpkgs.overlays = [` block for the matching
-/// hostname and add the nixup overlay.
+/// hostname and add the cheni overlay.
 fn add_overlay(flake_path: &Path, content: &str, _hostname: &str) -> Result<()> {
     // Look for the overlay block in the matching nixosConfiguration
     // We look for `nixpkgs.overlays = [` within the hostname's section
-    let overlay_code = r#"              # nixup: per-package updates from nixpkgs-latest
+    let overlay_code = r#"              # cheni: per-package updates from nixpkgs-latest
               (let
                 pkgs-latest = import inputs.nixpkgs-latest {
                   system = "x86_64-linux";
@@ -254,7 +254,7 @@ fn print_overlay_instructions(_hostname: &str) {
     pins = builtins.fromJSON (builtins.readFile ./package-pins.json);
   in {
     nixpkgs.overlays = [
-      # nixup: pinned packages from nixpkgs-latest
+      # cheni: pinned packages from nixpkgs-latest
       (final: prev: builtins.listToAttrs (builtins.filter (x: x != null) (map (name:
         if pkgs-latest ? ${name}
         then { inherit name; value = pkgs-latest.${name}; }

@@ -1,7 +1,7 @@
 //! Flake input parsing.
 //!
 //! Reads flake.lock to identify non-nixpkgs inputs and their current
-//! revision timestamps. Used to show flake input status in `nixup check`.
+//! revision timestamps. Used to show flake input status in `cheni check`.
 
 use std::path::Path;
 
@@ -45,7 +45,7 @@ const INFRASTRUCTURE_INPUTS: &[&str] = &[
     "home-manager",
     "rust-overlay",
     "nixpkgs-esp-dev",
-    "nixup",
+    "cheni",
 ];
 
 /// Mapping from flake input names to store package names.
@@ -245,7 +245,7 @@ struct RemoteCommitInfo {
 /// revision with the latest commit on the default branch via GitHub/GitLab API.
 pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
     let client = reqwest::blocking::Client::builder()
-        .user_agent("nixup/0.1")
+        .user_agent("cheni/0.1")
         .timeout(std::time::Duration::from_secs(5))
         .build();
 

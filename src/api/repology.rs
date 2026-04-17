@@ -100,7 +100,7 @@ pub async fn lookup_versions(names: &[String]) -> Result<Vec<PackageLookup>> {
 
     // Query the API for cache misses
     let client = reqwest::Client::builder()
-        .user_agent("nixup/0.1")
+        .user_agent("cheni/0.1")
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .context("Failed to create HTTP client")?;

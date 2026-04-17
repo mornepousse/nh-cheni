@@ -1,4 +1,4 @@
-//! `nixup pin` and `nixup unpin` commands.
+//! `cheni pin` and `cheni unpin` commands.
 //!
 //! Pin packages to nixpkgs-latest for granular updates.
 //! When pinned, a package is pulled from the newer nixpkgs-latest input
@@ -14,7 +14,7 @@ use crate::nix::{config, flake, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::parse_version;
 
-/// Run `nixup pin <package>`.
+/// Run `cheni pin <package>`.
 ///
 /// Pins a single package by name.
 pub async fn pin_one(name: &str, force: bool) -> Result<()> {
@@ -103,11 +103,11 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
         println!("\n{} Pinned {}.", "✓".green(), name.bold());
     }
 
-    println!("Run '{}' to apply.", "nixup update".bold());
+    println!("Run '{}' to apply.", "cheni update".bold());
     Ok(())
 }
 
-/// Run `nixup pin --<category>`.
+/// Run `cheni pin --<category>`.
 ///
 /// Pins all packages from a module category that have minor updates.
 /// Major updates are shown separately and require confirmation.
@@ -240,12 +240,12 @@ pub async fn pin_category(category: &str, force: bool) -> Result<()> {
         "✓".green(),
         added.len().to_string().bold()
     );
-    println!("Run '{}' to apply.", "nixup update".bold());
+    println!("Run '{}' to apply.", "cheni update".bold());
 
     Ok(())
 }
 
-/// Run `nixup unpin <package>`.
+/// Run `cheni unpin <package>`.
 pub fn unpin_one(name: &str) -> Result<()> {
     let nix_config = config::detect()?;
 
@@ -255,13 +255,13 @@ pub fn unpin_one(name: &str) -> Result<()> {
         println!("'{}' was not pinned.", name);
     } else {
         println!("{} Unpinned {}.", "✓".green(), name.bold());
-        println!("Run '{}' to apply.", "nixup update".bold());
+        println!("Run '{}' to apply.", "cheni update".bold());
     }
 
     Ok(())
 }
 
-/// Run `nixup unpin --all`.
+/// Run `cheni unpin --all`.
 pub fn unpin_all() -> Result<()> {
     let nix_config = config::detect()?;
 
@@ -271,7 +271,7 @@ pub fn unpin_all() -> Result<()> {
         println!("No pins to remove.");
     } else {
         println!("{} Removed {} pin(s).", "✓".green(), count.to_string().bold());
-        println!("Run '{}' to apply.", "nixup update".bold());
+        println!("Run '{}' to apply.", "cheni update".bold());
     }
 
     Ok(())
@@ -294,7 +294,7 @@ fn confirm(question: &str, default_yes: bool) -> Result<bool> {
     Ok(answer == "y" || answer == "yes")
 }
 
-/// Run `nixup pin --flakes`.
+/// Run `cheni pin --flakes`.
 ///
 /// Shows all flake inputs with available updates and offers
 /// to update them via `nix flake update <input>`.

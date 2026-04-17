@@ -1,4 +1,4 @@
-//! `nixup check` command.
+//! `cheni check` command.
 //!
 //! Shows available updates for installed packages.
 //! Compares local versions (from the nix store) with the latest
@@ -24,7 +24,7 @@ struct CheckResult {
     available: String,
 }
 
-/// Run the `nixup check` command.
+/// Run the `cheni check` command.
 ///
 /// If `category` is Some, only show packages from that module directory.
 pub async fn run(category: Option<&str>) -> Result<()> {
@@ -41,7 +41,7 @@ pub async fn run(category: Option<&str>) -> Result<()> {
                 "{} {} obsolete pin(s) detected. Run '{}' to remove.\n",
                 "Note:".yellow(),
                 obsolete,
-                "nixup clean".bold()
+                "cheni clean".bold()
             );
         }
     }
@@ -176,7 +176,7 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         println!(
             "{} {}:",
             "Major updates".red().bold(),
-            "(use 'nixup pin --force' to apply)".dimmed(),
+            "(use 'cheni pin --force' to apply)".dimmed(),
         );
         for r in &major_updates {
             println!(

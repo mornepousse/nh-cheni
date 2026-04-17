@@ -1,4 +1,4 @@
-//! nixup — Granular package updates for NixOS.
+//! cheni — Granular package updates for NixOS.
 //!
 //! A CLI tool that lets you check, select, and apply updates
 //! per-package on NixOS, integrated with your flake configuration.
@@ -15,20 +15,20 @@ use tracing_subscriber::EnvFilter;
 /// Granular package updates for NixOS.
 #[derive(Parser)]
 #[command(
-    name = "nixup",
+    name = "cheni",
     version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHORT_HASH"), ")"),
     about = "Granular package updates for NixOS",
     long_about = "Granular package updates for NixOS.\n\n\
-        nixup lets you check, select, and apply updates per-package\n\
+        cheni lets you check, select, and apply updates per-package\n\
         on NixOS, integrated with your flake configuration.\n\
         Packages are pinned to nixpkgs-latest for safe, incremental updates.",
     after_help = "\
 Quick start:\n  \
-  nixup check          See available updates\n  \
-  nixup pin vivaldi    Pin a single package\n  \
-  nixup pin --dev      Pin all minor updates in modules/dev/\n  \
-  nixup pin --flakes   Update flake inputs (zen-browser, claude-code, ...)\n  \
-  nixup update         Apply pinned updates"
+  cheni check          See available updates\n  \
+  cheni pin vivaldi    Pin a single package\n  \
+  cheni pin --dev      Pin all minor updates in modules/dev/\n  \
+  cheni pin --flakes   Update flake inputs (zen-browser, claude-code, ...)\n  \
+  cheni update         Apply pinned updates"
 )]
 struct Cli {
     /// Increase verbosity (-v for debug, -vv for trace)
@@ -129,8 +129,8 @@ async fn main() -> Result<()> {
     // Set up logging based on verbosity level
     let filter = match cli.verbose {
         0 => "warn",
-        1 => "nixup=debug",
-        _ => "nixup=trace",
+        1 => "cheni=debug",
+        _ => "cheni=trace",
     };
 
     tracing_subscriber::fmt()
@@ -168,9 +168,9 @@ async fn main() -> Result<()> {
                     None => {
                         anyhow::bail!(
                             "Specify a package name or a category.\n\
-                             Usage: nixup pin <package>\n\
-                             Usage: nixup pin --dev\n\
-                             Usage: nixup pin --flakes"
+                             Usage: cheni pin <package>\n\
+                             Usage: cheni pin --dev\n\
+                             Usage: cheni pin --flakes"
                         );
                     }
                 }
@@ -185,8 +185,8 @@ async fn main() -> Result<()> {
             } else {
                 anyhow::bail!(
                     "Specify a package name or --all.\n\
-                     Usage: nixup unpin <package>\n\
-                     Usage: nixup unpin --all"
+                     Usage: cheni unpin <package>\n\
+                     Usage: cheni unpin --all"
                 );
             }
         }

@@ -1,6 +1,6 @@
 //! On-disk cache for API results.
 //!
-//! Stores Repology query results in ~/.cache/nixup/versions.json
+//! Stores Repology query results in ~/.cache/cheni/versions.json
 //! to avoid hitting the API on every run. Cache expires after 1 hour.
 
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ pub struct CachedPackage {
 fn cache_path() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("nixup")
+        .join("cheni")
         .join("versions.json")
 }
 

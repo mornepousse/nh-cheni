@@ -27,7 +27,7 @@ pub enum VersionDiff {
 ///
 /// # Examples
 /// ```
-/// use nixup::version::compare::{compare_versions, VersionDiff};
+/// use cheni::version::compare::{compare_versions, VersionDiff};
 /// assert_eq!(compare_versions(&[1, 2, 3], &[1, 2, 3]), VersionDiff::Equal);
 /// assert_eq!(compare_versions(&[1, 2, 0], &[1, 3, 0]), VersionDiff::Minor);
 /// assert_eq!(compare_versions(&[9, 0, 2], &[10, 0, 1]), VersionDiff::Major);

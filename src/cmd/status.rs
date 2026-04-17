@@ -1,4 +1,4 @@
-//! `nixup status` command.
+//! `cheni status` command.
 //!
 //! Shows the current state: config location, active pins,
 //! and input timestamps. Also warns if pins are obsolete.
@@ -12,13 +12,13 @@ use crate::nix::{config, pins};
 
 use super::obsolete::count_obsolete_pins;
 
-/// Run `nixup status`.
+/// Run `cheni status`.
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     let current_pins = pins::read(&nix_config.flake_dir)?;
 
     // Config info
-    println!("{}", "=== nixup status ===\n".bold());
+    println!("{}", "=== cheni status ===\n".bold());
     println!(
         "  {:<16} {}",
         "Config:".dimmed(),
@@ -85,7 +85,7 @@ pub fn run() -> Result<()> {
         if pins_obsolete {
             println!(
                 "\n  Run '{}' to clean up obsolete pins.",
-                "nixup clean".bold()
+                "cheni clean".bold()
             );
         }
     }

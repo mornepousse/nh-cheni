@@ -1,4 +1,4 @@
-# nixup — Design Document
+# cheni — Design Document
 
 ## Vision
 
@@ -9,7 +9,7 @@ NixOS is powerful but its UX is hostile:
 - Build errors are walls of cryptic nix store paths
 - No visual overview of what's installed or outdated
 
-nixup is a CLI tool that fixes this. It's humble, utilitarian, and works
+cheni is a CLI tool that fixes this. It's humble, utilitarian, and works
 with any flake-based NixOS configuration.
 
 ## Core Principles
@@ -25,7 +25,7 @@ with any flake-based NixOS configuration.
 ### The nixpkgs-latest mechanism
 
 NixOS pulls all packages from a single `nixpkgs` snapshot. Updating one
-package means updating everything. nixup solves this with a second input:
+package means updating everything. cheni solves this with a second input:
 
 ```
 nixpkgs          (Apr 1)  →  everything
@@ -37,23 +37,23 @@ nixpkgs-latest   (Apr 17) →  only pinned packages (via overlay)
 ["legcord", "cmake"]
 ```
 
-When the user runs `upgrade` later and `nixpkgs` catches up, nixup
+When the user runs `upgrade` later and `nixpkgs` catches up, cheni
 auto-cleans obsolete pins.
 
 ### Flake input packages
 
 Packages from flake inputs (zen-browser, affinity, claude-code) are
-handled differently — `nixup pin zen-browser` runs
+handled differently — `cheni pin zen-browser` runs
 `nix flake update zen-browser` instead of adding an overlay pin.
 Same UX for the user, different mechanism under the hood.
 
 ## Commands
 
-### `nixup check`
+### `cheni check`
 Show available updates. Read-only, no side effects.
 
 ```
-$ nixup check
+$ cheni check
 
 nixpkgs (47 packages):
   legcord          1.1.0  →  1.2.2     (minor)
@@ -69,29 +69,29 @@ Up to date: 41 | Minor: 2 | Major: 1 | Unknown: 2
 
 Supports filtering by module directory:
 ```
-$ nixup check --dev       # only packages from modules/dev/
-$ nixup check --apps      # only packages from modules/apps/
+$ cheni check --dev       # only packages from modules/dev/
+$ cheni check --apps      # only packages from modules/apps/
 ```
 
 The `--dev`, `--apps`, etc. flags are auto-detected from the `modules/`
 directory structure. If a user has `modules/gaming/`, then `--gaming` works.
 
-### `nixup pin <pkg>`
+### `cheni pin <pkg>`
 Pin a package to nixpkgs-latest (or update its flake input).
 
 ```
-$ nixup pin legcord
+$ cheni pin legcord
 Pinned legcord (nixpkgs-latest)
-Run 'nixup update' to apply.
+Run 'cheni update' to apply.
 
-$ nixup pin zen-browser
+$ cheni pin zen-browser
 Pinned zen-browser (flake input)
-Run 'nixup update' to apply.
+Run 'cheni update' to apply.
 ```
 
 Pin by module directory with grouped confirmation:
 ```
-$ nixup pin --dev
+$ cheni pin --dev
 
 Minor updates (safe):
   gcc-arm-embedded   14.2.0  →  14.2.1
@@ -106,25 +106,25 @@ Major updates (breaking changes possible):
 Pin 1 major update? [y/N] n
 
 Pinned 3 packages.
-Run 'nixup update' to apply.
+Run 'cheni update' to apply.
 ```
 
-### `nixup unpin <pkg>`
+### `cheni unpin <pkg>`
 Remove a pin.
 
 ```
-$ nixup unpin legcord
+$ cheni unpin legcord
 Unpinned legcord.
 
-$ nixup unpin --all
+$ cheni unpin --all
 Removed 5 pins.
 ```
 
-### `nixup update`
+### `cheni update`
 Apply all current pins: update nixpkgs-latest + rebuild.
 
 ```
-$ nixup update
+$ cheni update
 
 [1/3] Updating nixpkgs-latest...
 [2/3] Updating flake inputs: zen-browser...
@@ -133,11 +133,11 @@ $ nixup update
 3 packages updated successfully.
 ```
 
-### `nixup init`
+### `cheni init`
 First-time setup. Modifies the user's flake.nix.
 
 ```
-$ nixup init
+$ cheni init
 
 Detected flake at ~/nixos-config
 Hostname: morthinkpad
@@ -146,17 +146,17 @@ Hostname: morthinkpad
 [2/3] Adding overlay to nixosConfigurations... OK
 [3/3] Creating package-pins.json...         OK
 
-Done! You can now use 'nixup check' and 'nixup pin'.
+Done! You can now use 'cheni check' and 'cheni pin'.
 ```
 
 If auto-modification fails (exotic flake structure), falls back to
 printing manual instructions.
 
-### `nixup status`
+### `cheni status`
 Show current state: active pins, generations.
 
 ```
-$ nixup status
+$ cheni status
 
 Config: ~/nixos-config (morthinkpad)
 nixpkgs:        Apr 1, 2026  (4747257)
@@ -172,14 +172,14 @@ Current generation: 142 (Apr 17, 2026)
 
 ## Config Detection
 
-nixup finds the NixOS config in this order:
-1. `$NIXUP_CONFIG` environment variable (if set)
+cheni finds the NixOS config in this order:
+1. `$CHENI_CONFIG` environment variable (if set)
 2. Current directory (if it contains a flake.nix with nixosConfigurations)
 3. `~/nixos-config`
 4. `/etc/nixos`
 
 Hostname is detected via `hostname` command and matched against
-`nixosConfigurations` in the flake. If no match, nixup asks the user.
+`nixosConfigurations` in the flake. If no match, cheni asks the user.
 
 ## Package Name Resolution
 
@@ -189,11 +189,11 @@ Store path names don't always match Repology names. Resolution cascade:
 2. If not found → `nix eval nixpkgs#<name>.name` to get the real attr (slow, cached)
 3. If still not found → show "unknown"
 
-Results are cached on disk (~/.cache/nixup/versions.json, 1h TTL).
+Results are cached on disk (~/.cache/cheni/versions.json, 1h TTL).
 
 ## Pin Auto-Cleanup
 
-After a system `upgrade` (when nixpkgs is updated), nixup checks if
+After a system `upgrade` (when nixpkgs is updated), cheni checks if
 `nixpkgs` has caught up with `nixpkgs-latest`. If so, obsolete pins
 are removed automatically:
 
@@ -204,16 +204,16 @@ Cleaned 3 obsolete pins (nixpkgs caught up)
 ## Architecture
 
 ```
-nixup/
+cheni/
 ├── src/
 │   ├── main.rs              # CLI entry (clap), subcommand routing
 │   ├── cmd/                 # One file per command
 │   │   ├── mod.rs
-│   │   ├── check.rs         # nixup check
-│   │   ├── pin.rs           # nixup pin / unpin
-│   │   ├── update.rs        # nixup update
-│   │   ├── init.rs          # nixup init
-│   │   └── status.rs        # nixup status
+│   │   ├── check.rs         # cheni check
+│   │   ├── pin.rs           # cheni pin / unpin
+│   │   ├── update.rs        # cheni update
+│   │   ├── init.rs          # cheni init
+│   │   └── status.rs        # cheni status
 │   ├── nix/                 # NixOS system interaction
 │   │   ├── mod.rs
 │   │   ├── store.rs         # Read installed packages from store
@@ -275,7 +275,7 @@ tracing::debug!("Package '{}': store={}  repology={} → minor update", name, in
 - User-facing errors are clear and actionable:
   ```
   Error: could not find flake.nix
-  Hint: run 'nixup init' in your NixOS config directory
+  Hint: run 'cheni init' in your NixOS config directory
   ```
 
 ### Color Output
@@ -287,11 +287,11 @@ tracing::debug!("Package '{}': store={}  repology={} → minor update", name, in
 
 Alpha releases — expect breaking changes:
 ```
-v0.1.0-alpha  →  nixup check
-v0.2.0-alpha  →  + nixup pin / unpin
-v0.3.0-alpha  →  + nixup update
-v0.4.0-alpha  →  + nixup init
-v0.5.0-alpha  →  + nixup status
+v0.1.0-alpha  →  cheni check
+v0.2.0-alpha  →  + cheni pin / unpin
+v0.3.0-alpha  →  + cheni update
+v0.4.0-alpha  →  + cheni init
+v0.5.0-alpha  →  + cheni status
 v1.0.0        →  stable, tested, documented
 ```
 
@@ -312,13 +312,13 @@ Human-readable view of generations and packages:
 
 ### TUI Mode
 Visual layer on top of the CLI commands:
-- `nixup tui` — interactive package manager
+- `cheni tui` — interactive package manager
 - Uses the same logic as CLI commands
 - Multi-select, search, detail views
 
 ## Non-goals
 
-- Replace nix/nixos-rebuild (nixup wraps them)
+- Replace nix/nixos-rebuild (cheni wraps them)
 - Package installation GUI (declarative config is the NixOS way)
 - Work on non-NixOS systems
 - Work without flakes (channels not supported)

@@ -1,4 +1,4 @@
-//! `nixup build` command.
+//! `cheni build` command.
 //!
 //! Wraps `nh os switch` and parses Nix build errors into
 //! human-readable messages with hints for fixing them.
@@ -23,7 +23,7 @@ struct ParsedError {
     hint: Option<String>,
 }
 
-/// Run `nixup build`.
+/// Run `cheni build`.
 ///
 /// Wraps `nh os switch` and, if it fails, parses the error output
 /// to provide human-readable error messages and fix suggestions.
@@ -34,7 +34,7 @@ pub fn run() -> Result<()> {
 
     println!(
         "{}\n",
-        "=== nixup build ===".bold()
+        "=== cheni build ===".bold()
     );
 
     // nh sends everything (progress + errors) to stderr.
