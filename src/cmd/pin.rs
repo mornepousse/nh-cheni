@@ -315,7 +315,7 @@ fn pin_flake_input(flake_dir: &std::path::Path, name: &str) -> Result<()> {
     }
 
     println!("\n{} Updated flake input {}.", "✓".green(), name.bold());
-    println!("Run '{}' to apply.", "update".bold());
+    println!("Run '{}' to rebuild.", "update".bold());
     Ok(())
 }
 

@@ -25,8 +25,11 @@ pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     let current_pins = pins::read(&nix_config.flake_dir)?;
 
-    if current_pins.is_empty() {
-        println!("No packages pinned. Nothing to update.");
+    // Check if flake.lock is dirty (flake inputs were updated via nixup pin)
+    let flake_lock_dirty = is_flake_lock_dirty(&nix_config.flake_dir);
+
+    if current_pins.is_empty() && !flake_lock_dirty {
+        println!("No packages pinned and no pending flake updates.");
         println!("Use '{}' to pin packages first.", "nixup pin <pkg>".bold());
         return Ok(());
     }
@@ -34,39 +37,46 @@ pub fn run() -> Result<()> {
     println!("{}", "=== nixup update ===\n".bold());
 
     // Show what will be updated
-    println!("Pinned packages:");
-    for name in &current_pins {
-        println!("  {} {}", "+".green(), name);
+    if !current_pins.is_empty() {
+        println!("Pinned packages:");
+        for name in &current_pins {
+            println!("  {} {}", "+".green(), name);
+        }
+        println!();
     }
-    println!();
 
-    // Step 1: Update nixpkgs-latest
-    println!(
-        "{} Updating nixpkgs-latest...",
-        "[1/3]".dimmed()
-    );
+    if flake_lock_dirty && current_pins.is_empty() {
+        println!("Flake inputs updated — rebuilding.\n");
+    }
 
-    let update_status = Command::new("nix")
-        .args(["flake", "update", "nixpkgs-latest"])
-        .current_dir(&nix_config.flake_dir)
-        .status()
-        .context("Failed to run 'nix flake update'")?;
-
-    if !update_status.success() {
-        anyhow::bail!(
-            "nix flake update nixpkgs-latest failed.\n\
-             Hint: make sure 'nixpkgs-latest' is defined in your flake.nix.\n\
-             Run 'nixup init' to set it up."
+    if !current_pins.is_empty() {
+        // Step 1: Update nixpkgs-latest (only needed for nixpkgs pins)
+        println!(
+            "{} Updating nixpkgs-latest...",
+            "[1/3]".dimmed()
         );
-    }
 
-    debug!("nixpkgs-latest updated successfully");
+        let update_status = Command::new("nix")
+            .args(["flake", "update", "nixpkgs-latest"])
+            .current_dir(&nix_config.flake_dir)
+            .status()
+            .context("Failed to run 'nix flake update'")?;
 
-    // Step 2: Verify nixpkgs-latest is ahead of nixpkgs
-    println!(
-        "{} Checking versions...",
-        "[2/3]".dimmed()
-    );
+        if !update_status.success() {
+            anyhow::bail!(
+                "nix flake update nixpkgs-latest failed.\n\
+                 Hint: make sure 'nixpkgs-latest' is defined in your flake.nix.\n\
+                 Run 'nixup init' to set it up."
+            );
+        }
+
+        debug!("nixpkgs-latest updated successfully");
+
+        // Step 2: Verify nixpkgs-latest is ahead of nixpkgs
+        println!(
+            "{} Checking versions...",
+            "[2/3]".dimmed()
+        );
 
     match check_nixpkgs_order(&nix_config.flake_dir) {
         InputOrder::LatestIsNewer => {
@@ -94,12 +104,10 @@ pub fn run() -> Result<()> {
             warn!("Could not compare nixpkgs revisions, proceeding anyway");
         }
     }
+    } // end of if !current_pins.is_empty()
 
-    // Step 3: Rebuild
-    println!(
-        "{} Rebuilding system...\n",
-        "[3/3]".dimmed()
-    );
+    // Rebuild
+    println!("{} Rebuilding system...\n", "Rebuilding...".dimmed());
 
     let config_path = nix_config.flake_dir.to_str()
         .context("Config path is not valid UTF-8")?;
@@ -171,6 +179,19 @@ fn check_nixpkgs_order(flake_dir: &Path) -> InputOrder {
             debug!("Could not read lastModified from flake.lock");
             InputOrder::Unknown
         }
+    }
+}
+
+/// Check if flake.lock has uncommitted changes (flake inputs updated).
+fn is_flake_lock_dirty(flake_dir: &Path) -> bool {
+    let output = Command::new("git")
+        .args(["diff", "--name-only", "flake.lock"])
+        .current_dir(flake_dir)
+        .output();
+
+    match output {
+        Ok(o) => !o.stdout.is_empty(),
+        Err(_) => false,
     }
 }
 
