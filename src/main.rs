@@ -14,7 +14,22 @@ use tracing_subscriber::EnvFilter;
 
 /// Granular package updates for NixOS.
 #[derive(Parser)]
-#[command(name = "nixup", version, about)]
+#[command(
+    name = "nixup",
+    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHORT_HASH"), ")"),
+    about = "Granular package updates for NixOS",
+    long_about = "Granular package updates for NixOS.\n\n\
+        nixup lets you check, select, and apply updates per-package\n\
+        on NixOS, integrated with your flake configuration.\n\
+        Packages are pinned to nixpkgs-latest for safe, incremental updates.",
+    after_help = "\
+Quick start:\n  \
+  nixup check          See available updates\n  \
+  nixup pin vivaldi    Pin a single package\n  \
+  nixup pin --dev      Pin all minor updates in modules/dev/\n  \
+  nixup pin --flakes   Update flake inputs (zen-browser, claude-code, ...)\n  \
+  nixup update         Apply pinned updates"
+)]
 struct Cli {
     /// Increase verbosity (-v for debug, -vv for trace)
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]
@@ -30,7 +45,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show available package updates
+    /// Show available package updates (nixpkgs + flake inputs)
     Check {
         /// Filter by module category (e.g. --dev, --apps)
         #[arg(long)]
@@ -46,49 +61,56 @@ enum Commands {
         category: Option<String>,
     },
 
-    /// Pin a package to nixpkgs-latest for update
+    /// Pin a package or category for update via nixpkgs-latest
     Pin {
-        /// Package name to pin (omit to use --dev/--apps/etc.)
+        /// Package name to pin (e.g. "vivaldi", "zen-browser")
         package: Option<String>,
 
         /// Pin all minor updates in modules/dev/
         #[arg(long)]
         dev: bool,
+        /// Pin all minor updates in modules/apps/
         #[arg(long)]
         apps: bool,
+        /// Pin all minor updates in modules/desktop/
         #[arg(long)]
         desktop: bool,
+        /// Pin all minor updates in modules/hardware/
         #[arg(long)]
         hardware: bool,
         /// Custom category name
         #[arg(long, value_name = "CATEGORY")]
         category: Option<String>,
 
+        /// Check and update flake inputs (zen-browser, claude-code, ...)
+        #[arg(long)]
+        flakes: bool,
+
         /// Allow pinning major version updates
         #[arg(long)]
         force: bool,
     },
 
-    /// Remove a package pin
+    /// Remove a package pin (or all pins with --all)
     Unpin {
-        /// Package name to unpin (omit with --all to clear all)
+        /// Package name to unpin
         package: Option<String>,
 
-        /// Remove all pins
+        /// Remove all pins at once
         #[arg(long)]
         all: bool,
     },
 
-    /// Apply pinned updates (update nixpkgs-latest + rebuild)
+    /// Apply pinned updates: refresh nixpkgs-latest and rebuild the system
     Update,
 
-    /// Remove obsolete pins (after nixpkgs catches up)
+    /// Remove obsolete pins whose nixpkgs version has caught up
     Clean,
 
-    /// First-time setup (add nixpkgs-latest to your flake)
+    /// First-time setup: add nixpkgs-latest input to your flake
     Init,
 
-    /// Show current status (config, active pins)
+    /// Show current status: config path, active pins, and flake inputs
     Status,
 }
 
@@ -127,9 +149,12 @@ async fn main() -> Result<()> {
         }
 
         Commands::Pin {
-            package, dev, apps, desktop, hardware, category, force,
+            package, dev, apps, desktop, hardware, category, flakes, force,
         } => {
-            if let Some(name) = package {
+            if flakes {
+                // Mettre à jour les flake inputs
+                cmd::pin::pin_flake_inputs().await?;
+            } else if let Some(name) = package {
                 // Pin a single package
                 cmd::pin::pin_one(&name, force).await?;
             } else {
@@ -141,7 +166,8 @@ async fn main() -> Result<()> {
                         anyhow::bail!(
                             "Specify a package name or a category.\n\
                              Usage: nixup pin <package>\n\
-                             Usage: nixup pin --dev"
+                             Usage: nixup pin --dev\n\
+                             Usage: nixup pin --flakes"
                         );
                     }
                 }

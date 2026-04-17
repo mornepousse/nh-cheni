@@ -294,6 +294,119 @@ fn confirm(question: &str, default_yes: bool) -> Result<bool> {
     Ok(answer == "y" || answer == "yes")
 }
 
+/// Run `nixup pin --flakes`.
+///
+/// Shows all flake inputs with available updates and offers
+/// to update them via `nix flake update <input>`.
+pub async fn pin_flake_inputs() -> Result<()> {
+    let nix_config = config::detect()?;
+
+    // Lire les flake inputs depuis flake.lock
+    let mut inputs = flake::read_flake_inputs(&nix_config.flake_dir)
+        .context("Failed to read flake inputs")?;
+
+    if inputs.is_empty() {
+        println!("{}", "No flake inputs found (besides infrastructure).".dimmed());
+        return Ok(());
+    }
+
+    // Vérifier les mises à jour disponibles via GitHub/GitLab API
+    println!("{}", "Checking flake inputs for updates...\n".dimmed());
+    flake::check_flake_updates(&mut inputs);
+
+    // Séparer les inputs avec et sans mise à jour
+    let inputs_with_updates: Vec<&flake::FlakeInput> = inputs.iter()
+        .filter(|i| i.has_update == Some(true))
+        .collect();
+
+    let inputs_up_to_date: Vec<&flake::FlakeInput> = inputs.iter()
+        .filter(|i| i.has_update == Some(false))
+        .collect();
+
+    let inputs_unknown: Vec<&flake::FlakeInput> = inputs.iter()
+        .filter(|i| i.has_update.is_none())
+        .collect();
+
+    // Afficher les inputs à jour
+    if !inputs_up_to_date.is_empty() {
+        for input in &inputs_up_to_date {
+            let version_str = input.installed_version.as_deref().unwrap_or("?");
+            println!(
+                "  {:<24} {:<14} {}",
+                input.name,
+                version_str.dimmed(),
+                "ok".green(),
+            );
+        }
+    }
+
+    // Afficher les inputs dont le statut est inconnu
+    if !inputs_unknown.is_empty() {
+        for input in &inputs_unknown {
+            let version_str = input.installed_version.as_deref().unwrap_or("?");
+            println!(
+                "  {:<24} {:<14} {}",
+                input.name,
+                version_str.dimmed(),
+                "? (could not check)".dimmed(),
+            );
+        }
+    }
+
+    // Si rien à mettre à jour, on s'arrête
+    if inputs_with_updates.is_empty() {
+        println!("\n{}", "All flake inputs are up to date!".green());
+        return Ok(());
+    }
+
+    // Afficher les inputs avec mise à jour disponible
+    println!("\n{}:", "Flake inputs with updates".yellow().bold());
+    for input in &inputs_with_updates {
+        let version_str = input.installed_version.as_deref().unwrap_or("?");
+        let age_info = match &input.remote_age {
+            Some(date) => format!("({date})"),
+            None => String::new(),
+        };
+        println!(
+            "  {:<24} {:<14} {} {}",
+            input.name,
+            version_str.dimmed(),
+            "UPDATE".yellow(),
+            age_info.dimmed(),
+        );
+    }
+    println!();
+
+    // Demander confirmation
+    let count = inputs_with_updates.len();
+    if !confirm(&format!("Update {} flake input(s)?", count), true)? {
+        println!("No flake inputs updated.");
+        return Ok(());
+    }
+
+    // Mettre à jour chaque input
+    let mut updated = 0;
+    for input in &inputs_with_updates {
+        println!("\n{} {}...", "Updating".dimmed(), input.name.bold());
+        let result = pin_flake_input(&nix_config.flake_dir, &input.name);
+        match result {
+            Ok(()) => updated += 1,
+            Err(e) => {
+                println!("{} Failed to update {}: {}", "!".red(), input.name, e);
+            }
+        }
+    }
+
+    println!(
+        "\n{} Updated {} flake input(s).",
+        "✓".green(),
+        updated.to_string().bold(),
+    );
+    println!("Run '{}' to rebuild.", "update".bold());
+
+    Ok(())
+}
+
 /// Pin a flake input by updating it directly.
 ///
 /// Instead of using the nixpkgs-latest overlay, this runs
