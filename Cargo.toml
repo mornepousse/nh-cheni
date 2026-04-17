@@ -2,7 +2,9 @@
 name = "nixup"
 version = "0.1.0"
 edition = "2021"
-description = "TUI tool to check for NixOS package updates"
+description = "Granular package updates for NixOS"
+license = "MIT"
+repository = "https://gitlab.com/harrael/nixup"
 
 [dependencies]
 # TUI
