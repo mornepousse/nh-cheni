@@ -1,90 +1,81 @@
 # nixup
 
-A TUI (Terminal User Interface) for NixOS -- the equivalent of [pacseek](https://github.com/moson-mo/pacseek) (Arch) for the Nix ecosystem.
+Granular package updates for NixOS.
 
-## Problem
+On NixOS, updating one package means updating everything. nixup fixes this
+by letting you check, select, and apply updates per-package — integrated
+with your flake configuration.
 
-On NixOS, there is no simple tool to:
-- See which installed packages have an update available
-- Compare installed versions vs the latest available on nixos-unstable
-- Search for new packages with their descriptions
-- Do all of this **without downloading/evaluating nixpkgs** (50+ MB, slow)
+## Quick Start
 
-## Solution
-
-A lightweight TUI that uses the Repology API to compare installed versions (read from the local nix store) with the latest versions available on nixos-unstable. Zero heavy downloads.
-
-## Features
-
-### MVP (v0.1)
-- [x] List installed packages with their version (from `/run/current-system/sw`)
-- [x] Compare with the latest available version (Repology API)
-- [x] Highlight packages with available updates (color-coded)
-- [x] Filter/search through the list
-- [x] Detail view for a package (description, homepage)
-- [x] Select and update packages via `nix flake update` + rebuild
-
-### Planned
-- [ ] Search for new packages
-- [ ] Copy package name to clipboard
-- [ ] Show which NixOS module a package is installed from
-- [ ] Support for flake inputs (zen-browser, etc.) -- not just nixpkgs
-
-## Tech Stack
-
-- **Language**: Rust
-- **TUI**: ratatui (standard Rust TUI framework)
-- **HTTP**: reqwest (async API requests)
-- **JSON**: serde + serde_json
-- **Async**: tokio
-- **Store path parsing**: regex
-
-## Architecture
-
-```
-nixup/
-  src/
-    main.rs           # Entry point, TUI setup
-    app.rs            # Application state
-    ui.rs             # ratatui widget rendering
-    store.rs          # Reading packages from the nix store
-    api.rs            # Repology API client
-    pins.rs           # Package pinning and update logic
-    types.rs          # Data structures (Package, UpdateStatus, etc.)
-  Cargo.toml
-  flake.nix           # Reproducible Nix build
-```
-
-## Data Sources
-
-### Installed packages (local, instant)
 ```bash
-nix-store -qR /run/current-system/sw | sed 's|/nix/store/[a-z0-9]{32}-||'
+nixup init              # one-time setup (adds nixpkgs-latest to your flake)
+nixup check             # see what's outdated
+nixup pin legcord       # pin a package to the latest version
+nixup update            # apply pins (rebuild system)
 ```
-Returns entries like `legcord-1.5.4`, `vivaldi-7.1.3693.46`, etc.
 
-### Available versions (API, lightweight)
-Repology API:
+## Commands
+
+| Command              | Description                                      |
+|----------------------|--------------------------------------------------|
+| `nixup check`        | Show available updates                           |
+| `nixup check --dev`  | Show updates for packages in `modules/dev/` only |
+| `nixup pin <pkg>`    | Pin a package to nixpkgs-latest                  |
+| `nixup pin --dev`    | Pin all minor updates in `modules/dev/`          |
+| `nixup unpin <pkg>`  | Remove a pin                                     |
+| `nixup unpin --all`  | Remove all pins                                  |
+| `nixup update`       | Apply pins (update nixpkgs-latest + rebuild)     |
+| `nixup init`         | First-time setup                                 |
+| `nixup status`       | Show active pins and system info                 |
+
+## How It Works
+
+nixup adds a second `nixpkgs` input (`nixpkgs-latest`) to your flake.
+When you pin a package, it gets pulled from `nixpkgs-latest` via an
+overlay. Everything else stays on your regular `nixpkgs`.
+
+When you do a full system `upgrade` later, `nixpkgs` catches up and
+nixup auto-cleans the obsolete pins.
+
+For flake input packages (zen-browser, etc.), `nixup pin` updates the
+flake input directly instead.
+
+## Version Safety
+
+nixup distinguishes between:
+- **Minor updates** (1.2.0 → 1.3.0) — safe, selectable with `nixup pin`
+- **Major updates** (9.0 → 10.0) — breaking changes possible, requires `--force`
+
 ```
-GET https://repology.org/api/v1/project/<package>
+$ nixup check
+
+nixpkgs:
+  legcord          1.1.0  →  1.2.2     (minor)
+  kicad            9.0.2  →  10.0.1    (major)
 ```
-Returns version, description, and more for nix_unstable and other repos.
 
-## Keybindings
+## Requirements
 
-| Key     | Action                          |
-|---------|---------------------------------|
-| `j`/`k` | Navigate up/down                |
-| `/`     | Search/filter packages          |
-| `Tab`   | Toggle view (All / Updates only)|
-| `Space` | Select package for update       |
-| `u`     | Update selected packages        |
-| `Enter` | Show package details            |
-| `Esc`   | Close popup / clear message     |
-| `q`     | Quit                            |
+- NixOS with flakes enabled
+- A flake-based configuration
 
-## Inspiration
+## Install
 
-- [pacseek](https://github.com/moson-mo/pacseek) -- TUI for Arch/AUR
-- [disktui](https://github.com/mitsuhiko/disktui) -- Minimalist Rust TUI
-- [lazygit](https://github.com/jesseduffield/lazygit) -- Exemplary TUI UX
+```bash
+# Try it
+nix run gitlab:harrael/nixup
+
+# Or add to your flake
+{
+  inputs.nixup.url = "gitlab:harrael/nixup";
+}
+```
+
+## Status
+
+Early development. See [DESIGN.md](DESIGN.md) for the roadmap.
+
+## License
+
+MIT
