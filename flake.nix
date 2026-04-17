@@ -15,7 +15,7 @@
         version = "0.1.0";
         src = ./.;
 
-        cargoHash = "sha256-4h3huWQSobUTKaGW+22Kj+uEyLnchyRfufySYzvibtI=";
+        cargoHash = "sha256-IurfS7oZwA/cw5rP41Lr99H6GI0Rr1dqWxio2B+TO2s=";
 
         # reqwest utilise rustls-tls, pas besoin de pkg-config ni openssl
         nativeBuildInputs = [];
