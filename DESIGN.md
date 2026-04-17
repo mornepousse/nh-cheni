@@ -234,6 +234,67 @@ nixup/
 └── README.md
 ```
 
+## Code Standards
+
+### Readability
+Code must be accessible for review by anyone. This means:
+- Clear, descriptive variable and function names
+- Comments explaining **why**, not what
+- Each function does one thing
+- No clever tricks — boring code is good code
+- Public API documented with `///` doc comments
+- Modules have a top-level `//!` doc comment explaining their purpose
+
+### Testing
+Unit tests from day one. Every module has tests:
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_version_simple() { ... }
+}
+```
+Integration tests in `tests/` for CLI commands.
+
+### Debugging
+Three verbosity levels via `tracing` crate:
+- Default: clean user-facing output only
+- `-v` (debug): config detection, cache hits/misses, API calls, decisions
+- `-vv` (trace): raw store paths, HTTP responses, version comparisons
+
+Every decision point logs why it chose a path:
+```rust
+tracing::debug!("Package '{}': store={}  repology={} → minor update", name, installed, latest);
+```
+
+### Error Handling
+- `anyhow` for application errors with context
+- Never panic in production paths
+- User-facing errors are clear and actionable:
+  ```
+  Error: could not find flake.nix
+  Hint: run 'nixup init' in your NixOS config directory
+  ```
+
+### Color Output
+- Colored output by default (via `colored` crate)
+- `--no-color` flag and `NO_COLOR` env var support
+- Accessible: don't rely on color alone (use symbols too: ✓ ↑ ⚠ ?)
+
+## Versioning
+
+Alpha releases — expect breaking changes:
+```
+v0.1.0-alpha  →  nixup check
+v0.2.0-alpha  →  + nixup pin / unpin
+v0.3.0-alpha  →  + nixup update
+v0.4.0-alpha  →  + nixup init
+v0.5.0-alpha  →  + nixup status
+v1.0.0        →  stable, tested, documented
+```
+
 ## Future Modules (v2+)
 
 ### Build Error Parser
