@@ -106,9 +106,31 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         Some(cat) => format!("Checking {} packages (modules/{}/)", names.len(), cat),
         None => format!("Checking {} packages...", names.len()),
     };
-    println!("{}\n", header.dimmed());
+    println!("{}", header.dimmed());
+
+    // Spinner in background while API calls are running
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let done = Arc::new(AtomicBool::new(false));
+    let done_clone = done.clone();
+    let spinner = std::thread::spawn(move || {
+        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let mut i = 0;
+        while !done_clone.load(Ordering::Relaxed) {
+            eprint!("\r  {} Querying Repology...", frames[i % frames.len()]);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            i += 1;
+        }
+        eprint!("\r                              \r"); // Clear spinner line
+    });
 
     let lookups = repology::lookup_versions(&names).await?;
+
+    // Stop spinner
+    done.store(true, Ordering::Relaxed);
+    let _ = spinner.join();
+
+    println!();
     let lookup_map: HashMap<String, repology::PackageLookup> = lookups
         .into_iter()
         .map(|l| (l.name.clone(), l))
