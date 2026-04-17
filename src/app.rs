@@ -1,50 +1,56 @@
 use crate::api::ApiResult;
 use crate::types::{Package, UpdateStatus};
 
-/// Mode d'affichage de la liste
+/// List display mode
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewMode {
-    /// Afficher tous les paquets
+    /// Show all packages
     All,
-    /// Afficher seulement ceux avec une mise à jour disponible
+    /// Show only packages with an available update
     UpdatesOnly,
 }
 
-/// Mode d'interaction
+/// Interaction mode
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputMode {
-    /// Navigation normale (j/k, flèches, etc.)
+    /// Normal navigation (j/k, arrows, etc.)
     Normal,
-    /// Saisie dans la barre de recherche
+    /// Typing in the search bar
     Search,
 }
 
-/// État principal de l'application
+/// Main application state
 pub struct App {
-    /// Liste complète des paquets (non filtrée)
+    /// Full list of packages (unfiltered)
     pub packages: Vec<Package>,
-    /// Indices des paquets filtrés (dans `packages`)
+    /// Indices of filtered packages (into `packages`)
     pub filtered_indices: Vec<usize>,
-    /// Index sélectionné dans la liste filtrée
+    /// Selected index in the filtered list
     pub selected: usize,
-    /// Texte de recherche/filtre
+    /// Search/filter text
     pub filter_text: String,
-    /// Mode d'affichage (tous / mises à jour seulement)
+    /// Display mode (all / updates only)
     pub view_mode: ViewMode,
-    /// Mode d'interaction
+    /// Interaction mode
     pub input_mode: InputMode,
-    /// Afficher la vue détaillée du paquet sélectionné
+    /// Show the detail view for the selected package
     pub show_detail: bool,
-    /// Nombre de paquets dont la version a été vérifiée
+    /// Number of packages whose version has been checked
     pub checked_count: usize,
-    /// Nombre total de paquets à vérifier
+    /// Total number of packages to check
     pub total_count: usize,
-    /// L'application doit quitter
+    /// Whether the application should quit
     pub should_quit: bool,
+    /// Update message to display
+    pub update_message: Option<String>,
+    /// Packages pending update
+    pub pending_updates: Vec<String>,
+    /// Indices of packages selected for update
+    pub selected_for_update: std::collections::HashSet<usize>,
 }
 
 impl App {
-    /// Crée une nouvelle app avec les paquets donnés
+    /// Create a new app with the given packages
     pub fn new(packages: Vec<Package>) -> Self {
         let total_count = packages.len();
 
@@ -61,12 +67,15 @@ impl App {
             checked_count: 0,
             total_count,
             should_quit: false,
+            update_message: None,
+            pending_updates: Vec::new(),
+            selected_for_update: std::collections::HashSet::new(),
         }
     }
 
-    /// Applique un résultat de l'API à un paquet
+    /// Apply an API result to a package
     pub fn apply_api_result(&mut self, result: ApiResult) {
-        // Chercher le paquet correspondant par nom
+        // Find the matching package by name
         let matching_package = self.packages.iter_mut().find(|p| p.name == result.query_name);
 
         let package = match matching_package {
@@ -74,7 +83,7 @@ impl App {
             None => return,
         };
 
-        // Mettre à jour les infos du paquet
+        // Update the package info
         package.description = result.description;
         package.homepage = result.homepage;
 
@@ -82,7 +91,7 @@ impl App {
             Some(ref latest) => {
                 package.latest_version = Some(latest.clone());
 
-                // Si la version installée est inconnue, on ne peut pas comparer
+                // If the installed version is unknown, we cannot compare
                 if package.installed_version == "?" {
                     package.status = UpdateStatus::Unknown;
                 } else {
@@ -91,7 +100,13 @@ impl App {
 
                     package.status = match compare_versions(&installed_parts, &latest_parts) {
                         std::cmp::Ordering::Equal => UpdateStatus::UpToDate,
-                        std::cmp::Ordering::Less => UpdateStatus::UpdateAvailable,
+                        std::cmp::Ordering::Less => {
+                            if is_major_update(&installed_parts, &latest_parts) {
+                                UpdateStatus::MajorUpdate
+                            } else {
+                                UpdateStatus::UpdateAvailable
+                            }
+                        }
                         std::cmp::Ordering::Greater => UpdateStatus::Newer,
                     };
                 }
@@ -103,24 +118,24 @@ impl App {
 
         self.checked_count += 1;
 
-        // Recalculer le filtre
+        // Recalculate the filter
         self.rebuild_filtered_list();
     }
 
-    /// Recalcule la liste filtrée en fonction du texte de recherche et du mode
+    /// Rebuild the filtered list based on search text and view mode
     pub fn rebuild_filtered_list(&mut self) {
         let filter_lower = self.filter_text.to_lowercase();
 
         self.filtered_indices = self.packages.iter()
             .enumerate()
             .filter(|(_i, pkg)| {
-                // Filtre par mode d'affichage
+                // Filter by display mode
                 let passes_view_filter = match self.view_mode {
                     ViewMode::All => true,
                     ViewMode::UpdatesOnly => pkg.status == UpdateStatus::UpdateAvailable,
                 };
 
-                // Filtre par texte de recherche
+                // Filter by search text
                 let passes_text_filter = if filter_lower.is_empty() {
                     true
                 } else {
@@ -132,12 +147,12 @@ impl App {
             .map(|(i, _)| i)
             .collect();
 
-        // Trier : mises à jour d'abord, puis alphabétique
+        // Sort: updates first, then alphabetical
         self.filtered_indices.sort_by(|&a, &b| {
             let pkg_a = &self.packages[a];
             let pkg_b = &self.packages[b];
 
-            // Les UpdateAvailable passent en premier
+            // UpdateAvailable comes first
             let priority_a = status_sort_priority(&pkg_a.status);
             let priority_b = status_sort_priority(&pkg_b.status);
 
@@ -146,11 +161,11 @@ impl App {
                 return priority_cmp;
             }
 
-            // Puis tri alphabétique
+            // Then alphabetical sort
             pkg_a.name.to_lowercase().cmp(&pkg_b.name.to_lowercase())
         });
 
-        // Ajuster la sélection si nécessaire
+        // Adjust selection if needed
         if self.filtered_indices.is_empty() {
             self.selected = 0;
         } else if self.selected >= self.filtered_indices.len() {
@@ -158,20 +173,20 @@ impl App {
         }
     }
 
-    /// Retourne le paquet actuellement sélectionné (s'il existe)
+    /// Return the currently selected package (if any)
     pub fn selected_package(&self) -> Option<&Package> {
         let filtered_index = self.filtered_indices.get(self.selected)?;
         self.packages.get(*filtered_index)
     }
 
-    /// Déplace la sélection vers le haut
+    /// Move selection up
     pub fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
         }
     }
 
-    /// Déplace la sélection vers le bas
+    /// Move selection down
     pub fn move_down(&mut self) {
         let max_index = self.filtered_indices.len().saturating_sub(1);
         if self.selected < max_index {
@@ -179,7 +194,7 @@ impl App {
         }
     }
 
-    /// Bascule entre les modes d'affichage
+    /// Toggle between display modes
     pub fn toggle_view_mode(&mut self) {
         self.view_mode = match self.view_mode {
             ViewMode::All => ViewMode::UpdatesOnly,
@@ -188,17 +203,53 @@ impl App {
         self.rebuild_filtered_list();
     }
 
-    /// Bascule l'affichage du détail
+    /// Toggle the detail view
     pub fn toggle_detail(&mut self) {
         self.show_detail = !self.show_detail;
     }
 
-    /// Retourne true si le chargement est terminé
+    /// Select/deselect the current package for update (minor only)
+    pub fn toggle_selected_for_update(&mut self) {
+        if let Some(&pkg_idx) = self.filtered_indices.get(self.selected) {
+            if self.packages[pkg_idx].status == UpdateStatus::UpdateAvailable {
+                if self.selected_for_update.contains(&pkg_idx) {
+                    self.selected_for_update.remove(&pkg_idx);
+                } else {
+                    self.selected_for_update.insert(pkg_idx);
+                }
+            }
+        }
+    }
+
+    /// Force select/deselect a major update package
+    pub fn toggle_selected_force(&mut self) {
+        if let Some(&pkg_idx) = self.filtered_indices.get(self.selected) {
+            let status = &self.packages[pkg_idx].status;
+            if *status == UpdateStatus::MajorUpdate || *status == UpdateStatus::UpdateAvailable {
+                if self.selected_for_update.contains(&pkg_idx) {
+                    self.selected_for_update.remove(&pkg_idx);
+                } else {
+                    self.selected_for_update.insert(pkg_idx);
+                }
+            }
+        }
+    }
+
+    /// Return the names of packages selected for update
+    pub fn get_selected_update_names(&self) -> Vec<String> {
+        self.selected_for_update
+            .iter()
+            .filter_map(|&idx| self.packages.get(idx))
+            .map(|p| p.name.clone())
+            .collect()
+    }
+
+    /// Return true if loading is complete
     pub fn is_loading_done(&self) -> bool {
         self.checked_count >= self.total_count
     }
 
-    /// Retourne le pourcentage de progression du chargement
+    /// Return the loading progress percentage
     pub fn loading_progress(&self) -> f64 {
         if self.total_count == 0 {
             return 100.0;
@@ -207,9 +258,9 @@ impl App {
     }
 }
 
-/// Parse une version en vecteur de nombres pour comparaison
-/// "1.94.1-x86_64-unknown-linux-gnu" → [1, 94, 1]
-/// "0.17.0" → [0, 17, 0]
+/// Parse a version into a vector of numbers for comparison
+/// "1.94.1-x86_64-unknown-linux-gnu" -> [1, 94, 1]
+/// "0.17.0" -> [0, 17, 0]
 fn parse_version(version: &str) -> Vec<u64> {
     version
         .split(|c: char| !c.is_ascii_digit())
@@ -219,7 +270,7 @@ fn parse_version(version: &str) -> Vec<u64> {
         .collect()
 }
 
-/// Compare deux versions parsées
+/// Compare two parsed versions
 fn compare_versions(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
     let max_len = a.len().max(b.len());
     for i in 0..max_len {
@@ -233,13 +284,23 @@ fn compare_versions(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
     std::cmp::Ordering::Equal
 }
 
-/// Priorité de tri par statut (plus petit = affiché en premier)
+/// Check if the update is a major version bump (first number changed)
+/// e.g. [9, 0, 1] → [10, 0, 0] = major
+///      [1, 2, 0] → [1, 3, 0] = minor
+fn is_major_update(installed: &[u64], latest: &[u64]) -> bool {
+    let installed_major = installed.first().copied().unwrap_or(0);
+    let latest_major = latest.first().copied().unwrap_or(0);
+    latest_major > installed_major
+}
+
+/// Sort priority by status (lower = displayed first)
 fn status_sort_priority(status: &UpdateStatus) -> u8 {
     match status {
         UpdateStatus::UpdateAvailable => 0,
-        UpdateStatus::Newer => 1,
-        UpdateStatus::Loading => 2,
-        UpdateStatus::Unknown => 3,
-        UpdateStatus::UpToDate => 4,
+        UpdateStatus::MajorUpdate => 1,
+        UpdateStatus::Newer => 2,
+        UpdateStatus::Loading => 3,
+        UpdateStatus::Unknown => 4,
+        UpdateStatus::UpToDate => 5,
     }
 }

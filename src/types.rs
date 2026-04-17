@@ -1,37 +1,39 @@
-/// Statut de mise à jour d'un paquet
+/// Update status for a package
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateStatus {
-    /// Version installée correspond à la dernière disponible
+    /// Installed version matches the latest available
     UpToDate,
-    /// Une version plus récente est disponible sur nixpkgs
+    /// A newer minor version is available (safe to update)
     UpdateAvailable,
-    /// Version installée plus récente que nixpkgs (en avance)
+    /// A newer major version is available (breaking changes possible)
+    MajorUpdate,
+    /// Installed version is newer than nixpkgs (ahead)
     Newer,
-    /// Impossible de déterminer (paquet pas trouvé via l'API)
+    /// Unable to determine (package not found via API)
     Unknown,
-    /// En cours de vérification
+    /// Currently being checked
     Loading,
 }
 
-/// Représente un paquet installé et ses informations de version
+/// Represents an installed package and its version information
 #[derive(Debug, Clone)]
 pub struct Package {
-    /// Nom du paquet (ex: "firefox", "gtk+3")
+    /// Package name (e.g. "firefox", "gtk+3")
     pub name: String,
-    /// Version installée localement
+    /// Locally installed version
     pub installed_version: String,
-    /// Version disponible sur nixos-unstable (si trouvée)
+    /// Available version on nixos-unstable (if found)
     pub latest_version: Option<String>,
-    /// Description du paquet depuis l'API
+    /// Package description from the API
     pub description: Option<String>,
-    /// Page d'accueil du paquet
+    /// Package homepage
     pub homepage: Option<String>,
-    /// Statut de mise à jour
+    /// Update status
     pub status: UpdateStatus,
 }
 
 impl Package {
-    /// Crée un nouveau paquet avec seulement les infos locales
+    /// Create a new package with only local info
     pub fn new(name: String, installed_version: String) -> Self {
         Self {
             name,

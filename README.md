@@ -1,94 +1,90 @@
-# nix-update-checker
+# nixup
 
-TUI (Terminal User Interface) pour NixOS — equivalent de `pacseek` (Arch) pour l'ecosysteme Nix.
+A TUI (Terminal User Interface) for NixOS -- the equivalent of [pacseek](https://github.com/moson-mo/pacseek) (Arch) for the Nix ecosystem.
 
-## Probleme
+## Problem
 
-Sur NixOS, il n'existe pas d'outil simple pour :
-- Voir quels paquets installes ont une mise a jour disponible
-- Comparer les versions installees vs les dernieres dispo sur nixos-unstable
-- Chercher de nouveaux paquets avec leurs descriptions
-- Tout ca **sans telecharger/evaluer nixpkgs** (50+ Mo, lent)
+On NixOS, there is no simple tool to:
+- See which installed packages have an update available
+- Compare installed versions vs the latest available on nixos-unstable
+- Search for new packages with their descriptions
+- Do all of this **without downloading/evaluating nixpkgs** (50+ MB, slow)
 
 ## Solution
 
-Un TUI leger qui utilise l'API search.nixos.org pour comparer les versions
-installees (lues depuis le nix store local) avec les dernieres versions
-disponibles sur nixos-unstable. Zero telechargement lourd.
+A lightweight TUI that uses the Repology API to compare installed versions (read from the local nix store) with the latest versions available on nixos-unstable. Zero heavy downloads.
 
-## Fonctionnalites prevues
+## Features
 
 ### MVP (v0.1)
-- [ ] Lister les paquets installes avec leur version (depuis `/run/current-system/sw`)
-- [ ] Comparer avec la derniere version dispo (API search.nixos.org)
-- [ ] Afficher les paquets avec MAJ disponible (surlignage couleur)
-- [ ] Filtrer/rechercher dans la liste
-- [ ] Vue detaillee d'un paquet (description, license, homepage)
+- [x] List installed packages with their version (from `/run/current-system/sw`)
+- [x] Compare with the latest available version (Repology API)
+- [x] Highlight packages with available updates (color-coded)
+- [x] Filter/search through the list
+- [x] Detail view for a package (description, homepage)
+- [x] Select and update packages via `nix flake update` + rebuild
 
-### v0.2
-- [ ] Recherche de nouveaux paquets (search.nixos.org)
-- [ ] Copier le nom du paquet dans le presse-papier
-- [ ] Afficher depuis quel module NixOS le paquet est installe
-- [ ] Support des flake inputs (zen-browser, etc.) — pas seulement nixpkgs
+### Planned
+- [ ] Search for new packages
+- [ ] Copy package name to clipboard
+- [ ] Show which NixOS module a package is installed from
+- [ ] Support for flake inputs (zen-browser, etc.) -- not just nixpkgs
 
-### v0.3
-- [ ] Generer la commande `nix shell nixpkgs#<pkg>` pour tester un paquet
-- [ ] Historique des mises a jour (stocker les versions precedentes)
-- [ ] Notification des mises a jour critiques (securite)
+## Tech Stack
 
-## Stack technique
-
-- **Langage** : Rust
-- **TUI** : ratatui (framework TUI standard en Rust)
-- **HTTP** : reqwest (requetes API async)
-- **JSON** : serde + serde_json
-- **Async** : tokio
-- **Parsing store paths** : regex ou nom
+- **Language**: Rust
+- **TUI**: ratatui (standard Rust TUI framework)
+- **HTTP**: reqwest (async API requests)
+- **JSON**: serde + serde_json
+- **Async**: tokio
+- **Store path parsing**: regex
 
 ## Architecture
 
 ```
-nix-update-checker/
+nixup/
   src/
-    main.rs           # Point d'entree, setup TUI
-    app.rs            # Etat de l'application
-    ui.rs             # Rendu des widgets ratatui
-    store.rs          # Lecture des paquets depuis le nix store
-    api.rs            # Client search.nixos.org
-    compare.rs        # Logique de comparaison de versions
-    types.rs          # Structures de donnees (Package, Version, etc.)
+    main.rs           # Entry point, TUI setup
+    app.rs            # Application state
+    ui.rs             # ratatui widget rendering
+    store.rs          # Reading packages from the nix store
+    api.rs            # Repology API client
+    pins.rs           # Package pinning and update logic
+    types.rs          # Data structures (Package, UpdateStatus, etc.)
   Cargo.toml
-  flake.nix           # Build Nix reproductible
+  flake.nix           # Reproducible Nix build
 ```
 
-## Sources de donnees
+## Data Sources
 
-### Paquets installes (local, instantane)
+### Installed packages (local, instant)
 ```bash
 nix-store -qR /run/current-system/sw | sed 's|/nix/store/[a-z0-9]{32}-||'
 ```
-Retourne des entrees comme `legcord-1.5.4`, `vivaldi-7.1.3693.46`, etc.
+Returns entries like `legcord-1.5.4`, `vivaldi-7.1.3693.46`, etc.
 
-### Versions disponibles (API, leger)
-Elasticsearch API de search.nixos.org :
+### Available versions (API, lightweight)
+Repology API:
 ```
-POST https://search.nixos.org/backend/latest-46-nixos-unstable/_search
-Content-Type: application/json
-
-{"query":{"match":{"package_attr_name":"legcord"}},"size":1}
+GET https://repology.org/api/v1/project/<package>
 ```
-Retourne version, description, license, homepage, etc.
+Returns version, description, and more for nix_unstable and other repos.
 
-## Nom
+## Keybindings
 
-Propositions :
-- **nix-update-checker** (descriptif)
-- **nixpac** (nix + pac(kage), clin d'oeil a pacseek)
-- **nup** (nix update preview)
-- **nixvu** (nix version updater)
+| Key     | Action                          |
+|---------|---------------------------------|
+| `j`/`k` | Navigate up/down                |
+| `/`     | Search/filter packages          |
+| `Tab`   | Toggle view (All / Updates only)|
+| `Space` | Select package for update       |
+| `u`     | Update selected packages        |
+| `Enter` | Show package details            |
+| `Esc`   | Close popup / clear message     |
+| `q`     | Quit                            |
 
 ## Inspiration
 
-- [pacseek](https://github.com/moson-mo/pacseek) — TUI pour Arch/AUR
-- [disktui](https://github.com/mitsuhiko/disktui) — TUI minimaliste en Rust
-- [lazygit](https://github.com/jesseduffield/lazygit) — UX TUI exemplaire
+- [pacseek](https://github.com/moson-mo/pacseek) -- TUI for Arch/AUR
+- [disktui](https://github.com/mitsuhiko/disktui) -- Minimalist Rust TUI
+- [lazygit](https://github.com/jesseduffield/lazygit) -- Exemplary TUI UX

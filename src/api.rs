@@ -1,30 +1,36 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
-/// URL de l'API Repology
+/// Repology API URL
 const REPOLOGY_API_URL: &str = "https://repology.org/api/v1/project";
 
-/// Nombre maximum de requêtes en parallèle
-const MAX_CONCURRENT_REQUESTS: usize = 5;
+/// Maximum number of concurrent requests
+const MAX_CONCURRENT_REQUESTS: usize = 10;
 
-/// Délai entre les batches pour éviter le rate-limit Repology
-const BATCH_DELAY_MS: u64 = 200;
+/// Cache validity duration (in seconds) -- 1 hour
+const CACHE_TTL_SECS: u64 = 3600;
 
-/// Résultat d'une requête API pour un paquet
-#[derive(Debug, Clone)]
+/// Result of an API request for a package
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiResult {
-    /// Nom du paquet (tel que recherché)
     pub query_name: String,
-    /// Version trouvée sur nixos-unstable
     pub version: Option<String>,
-    /// Description du paquet
     pub description: Option<String>,
-    /// Page d'accueil
     pub homepage: Option<String>,
 }
 
-/// Structure de la réponse Repology
+/// On-disk cache
+#[derive(Debug, Serialize, Deserialize, Default)]
+struct Cache {
+    timestamp: u64,
+    entries: HashMap<String, ApiResult>,
+}
+
+/// Repology response structure
 #[derive(Debug, Deserialize)]
 struct RepologyEntry {
     #[serde(default)]
@@ -35,41 +41,100 @@ struct RepologyEntry {
     summary: Option<String>,
 }
 
-/// Lance la récupération des versions pour une liste de noms de paquets.
-/// Envoie les résultats au fur et à mesure via le channel `tx`.
+/// Cache file path
+fn cache_path() -> PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("nixup")
+        .join("versions.json")
+}
+
+/// Load the cache from disk
+fn load_cache() -> Cache {
+    let path = cache_path();
+    if !path.exists() {
+        return Cache::default();
+    }
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Cache::default(),
+    };
+
+    match serde_json::from_str(&content) {
+        Ok(cache) => cache,
+        Err(_) => Cache::default(),
+    }
+}
+
+/// Save the cache to disk
+fn save_cache(cache: &Cache) {
+    let path = cache_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(content) = serde_json::to_string(cache) {
+        let _ = std::fs::write(&path, content);
+    }
+}
+
+/// Current timestamp in seconds
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+/// Fetch the latest versions for a list of package names.
+/// Uses cache for recent results, queries the API for the rest.
 pub async fn fetch_latest_versions(
     package_names: Vec<String>,
     tx: mpsc::UnboundedSender<ApiResult>,
 ) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .user_agent("nix-update-checker/0.1")
-        .build()
-        .context("Impossible de créer le client HTTP")?;
+    let now = now_secs();
+    let cache = load_cache();
+    let cache_valid = now.saturating_sub(cache.timestamp) < CACHE_TTL_SECS;
 
-    // Utiliser un sémaphore pour limiter la concurrence
+    // Separate cached packages from those needing a request
+    let mut to_fetch = Vec::new();
+
+    for name in &package_names {
+        if cache_valid {
+            if let Some(cached) = cache.entries.get(name) {
+                let _ = tx.send(cached.clone());
+                continue;
+            }
+        }
+        to_fetch.push(name.clone());
+    }
+
+    if to_fetch.is_empty() {
+        return Ok(());
+    }
+
+    // Query the API for non-cached packages
+    let client = reqwest::Client::builder()
+        .user_agent("nixup/0.1")
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("Unable to create HTTP client")?;
+
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_REQUESTS));
+    let new_results = std::sync::Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     let mut handles = Vec::new();
 
-    for (i, name) in package_names.into_iter().enumerate() {
+    for name in to_fetch {
         let client = client.clone();
         let tx = tx.clone();
         let permit = semaphore.clone();
+        let results = new_results.clone();
 
         let handle = tokio::spawn(async move {
-            // Petit délai progressif pour éviter le rate-limit
-            if i > 0 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(
-                    (i as u64 / MAX_CONCURRENT_REQUESTS as u64) * BATCH_DELAY_MS,
-                ))
-                .await;
-            }
-
-            // Attendre un slot de concurrence
             let _permit = permit.acquire().await;
 
-            let result = query_package(&client, &name).await;
-            let api_result = match result {
+            let api_result = match query_package(&client, &name).await {
                 Ok(r) => r,
                 Err(_) => ApiResult {
                     query_name: name,
@@ -79,22 +144,32 @@ pub async fn fetch_latest_versions(
                 },
             };
 
-            // Ignorer l'erreur si le receiver est fermé (l'app quitte)
+            // Store for cache
+            results.lock().await.insert(api_result.query_name.clone(), api_result.clone());
+
             let _ = tx.send(api_result);
         });
 
         handles.push(handle);
     }
 
-    // Attendre que toutes les tâches se terminent
     for handle in handles {
         let _ = handle.await;
     }
 
+    // Update the cache
+    let fetched = new_results.lock().await;
+    let mut updated_cache = if cache_valid { cache } else { Cache::default() };
+    updated_cache.timestamp = now;
+    for (name, result) in fetched.iter() {
+        updated_cache.entries.insert(name.clone(), result.clone());
+    }
+    save_cache(&updated_cache);
+
     Ok(())
 }
 
-/// Requête l'API Repology pour un seul paquet
+/// Query the Repology API for a single package
 async fn query_package(client: &reqwest::Client, name: &str) -> Result<ApiResult> {
     let url = format!("{}/{}", REPOLOGY_API_URL, name);
 
@@ -102,35 +177,33 @@ async fn query_package(client: &reqwest::Client, name: &str) -> Result<ApiResult
         .get(&url)
         .send()
         .await
-        .context("Erreur lors de la requête API")?;
+        .context("Error during API request")?;
 
-    // Gérer le rate-limit (429)
     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        // Attendre et réessayer une fois
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
         let response = client
             .get(&url)
             .send()
             .await
-            .context("Erreur lors du retry API")?;
-
+            .context("Error during API retry")?;
         return parse_response(response, name).await;
     }
 
     parse_response(response, name).await
 }
 
-/// Parse la réponse Repology et extrait l'entrée nix_unstable
+/// Parse the Repology response and extract the nix_unstable entry
 async fn parse_response(response: reqwest::Response, name: &str) -> Result<ApiResult> {
     let entries: Vec<RepologyEntry> = response
         .json()
         .await
-        .context("Erreur de parsing de la réponse API")?;
+        .context("Error parsing API response")?;
 
-    // Chercher l'entrée nix_unstable
+    // Look for the nix_unstable entry, fall back to nix_stable
     let nix_entry = entries
         .iter()
-        .find(|e| e.repo == "nix_unstable");
+        .find(|e| e.repo == "nix_unstable")
+        .or_else(|| entries.iter().find(|e| e.repo.starts_with("nix_stable")));
 
     let api_result = match nix_entry {
         Some(entry) => ApiResult {
@@ -139,27 +212,12 @@ async fn parse_response(response: reqwest::Response, name: &str) -> Result<ApiRe
             description: entry.summary.clone(),
             homepage: None,
         },
-        None => {
-            // Fallback: chercher nix_stable
-            let stable_entry = entries
-                .iter()
-                .find(|e| e.repo.starts_with("nix_stable"));
-
-            match stable_entry {
-                Some(entry) => ApiResult {
-                    query_name: name.to_string(),
-                    version: entry.version.clone(),
-                    description: entry.summary.clone(),
-                    homepage: None,
-                },
-                None => ApiResult {
-                    query_name: name.to_string(),
-                    version: None,
-                    description: None,
-                    homepage: None,
-                },
-            }
-        }
+        None => ApiResult {
+            query_name: name.to_string(),
+            version: None,
+            description: None,
+            homepage: None,
+        },
     };
 
     Ok(api_result)
