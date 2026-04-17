@@ -110,6 +110,9 @@ enum Commands {
     /// Remove obsolete pins whose nixpkgs version has caught up
     Clean,
 
+    /// Run health checks on your cheni setup
+    Doctor,
+
     /// First-time setup: add nixpkgs-latest input to your flake
     Init,
 
@@ -197,6 +200,10 @@ async fn main() -> Result<()> {
 
         Commands::Build => {
             cmd::build::run()?;
+        }
+
+        Commands::Doctor => {
+            cmd::doctor::run()?;
         }
 
         Commands::Clean => {
