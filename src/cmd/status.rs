@@ -111,19 +111,29 @@ fn read_input_dates(lock_path: &Path) -> Option<(String, String)> {
     Some((base_date, latest_date))
 }
 
-/// Extract lastModified timestamp for a flake input.
+/// Resolve a root input name to its actual node.
+/// Handles indirection: root.inputs[name] may point to "nixpkgs_4".
+fn resolve_node<'a>(lock: &'a serde_json::Value, name: &str) -> Option<&'a serde_json::Value> {
+    let root_input = lock.get("nodes")?
+        .get("root")?
+        .get("inputs")?
+        .get(name)?;
+
+    let node_name = root_input.as_str().unwrap_or(name);
+    lock.get("nodes")?.get(node_name)
+}
+
+/// Extract lastModified timestamp for a flake input (resolves via root).
 fn get_input_timestamp(lock: &serde_json::Value, name: &str) -> Option<u64> {
-    lock.get("nodes")?
-        .get(name)?
+    resolve_node(lock, name)?
         .get("locked")?
         .get("lastModified")?
         .as_u64()
 }
 
-/// Extract the short rev for a flake input.
+/// Extract the short rev for a flake input (resolves via root).
 fn get_input_rev(lock: &serde_json::Value, name: &str) -> Option<String> {
-    let rev = lock.get("nodes")?
-        .get(name)?
+    let rev = resolve_node(lock, name)?
         .get("locked")?
         .get("rev")?
         .as_str()?;

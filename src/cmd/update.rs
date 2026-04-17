@@ -196,9 +196,23 @@ fn is_flake_lock_dirty(flake_dir: &Path) -> bool {
 }
 
 /// Extract the lastModified timestamp for a flake input from flake.lock.
+///
+/// Resolves the input via the root node (root.inputs[name]) since the
+/// top-level node may be a transitive one, not the root's direct input.
 fn get_input_timestamp(lock: &serde_json::Value, input_name: &str) -> Option<u64> {
+    // First resolve the actual node name via root.inputs[input_name]
+    let root_input = lock.get("nodes")?
+        .get("root")?
+        .get("inputs")?
+        .get(input_name)?;
+
+    let node_name = match root_input.as_str() {
+        Some(s) => s,
+        None => input_name, // Fallback if the input is inlined
+    };
+
     lock.get("nodes")?
-        .get(input_name)?
+        .get(node_name)?
         .get("locked")?
         .get("lastModified")?
         .as_u64()

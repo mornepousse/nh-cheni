@@ -53,10 +53,21 @@ fn are_pins_obsolete(lock_path: &Path) -> bool {
     }
 }
 
-/// Extract the lastModified timestamp for a flake input from flake.lock.
+/// Extract the lastModified timestamp for a flake input (resolves via root).
+/// Handles indirection: root.inputs[name] may point to "nixpkgs_4".
 fn get_input_timestamp(lock: &serde_json::Value, name: &str) -> Option<u64> {
+    // Resolve root input to the actual node name
+    let root_input = lock.get("nodes")
+        .and_then(|n| n.get("root"))
+        .and_then(|r| r.get("inputs"))
+        .and_then(|i| i.get(name));
+
+    let node_name = root_input
+        .and_then(|v| v.as_str())
+        .unwrap_or(name);
+
     lock.get("nodes")?
-        .get(name)?
+        .get(node_name)?
         .get("locked")?
         .get("lastModified")?
         .as_u64()
@@ -67,6 +78,7 @@ mod tests {
     use super::*;
 
     /// Create a fake flake.lock with the given timestamps.
+    /// Includes root.inputs mapping to simulate real flake.lock structure.
     fn write_fake_lock(dir: &Path, nixpkgs_ts: u64, latest_ts: u64) {
         let lock_content = serde_json::json!({
             "nodes": {
@@ -82,7 +94,12 @@ mod tests {
                         "rev": "def456"
                     }
                 },
-                "root": {}
+                "root": {
+                    "inputs": {
+                        "nixpkgs": "nixpkgs",
+                        "nixpkgs-latest": "nixpkgs-latest"
+                    }
+                }
             },
             "root": "root",
             "version": 7
