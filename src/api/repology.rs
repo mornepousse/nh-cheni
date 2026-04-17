@@ -28,6 +28,27 @@ const JITTER_MAX_MS: u64 = 200;
 /// Repology API base URL.
 const API_URL: &str = "https://repology.org/api/v1/project";
 
+/// Nix package names that differ from Repology project names.
+/// Maps nix_name → repology_name.
+/// Maintained by the community — add mappings as discovered.
+const NAME_MAPPINGS: &[(&str, &str)] = &[
+    // LLVM/Clang — all part of the "llvm" project
+    ("clang", "llvm"),
+    ("clang-tools", "llvm"),
+    ("lldb", "llvm"),
+    // Python
+    ("python3", "python"),
+    // Terminal emulators / tools with different Repology names
+    ("kitty", "kitty-terminal"),
+    ("mako", "mako-notifier"),
+    // Fonts — Repology uses "fonts:" category prefix
+    ("noto-fonts", "fonts:noto"),
+    ("noto-fonts-cjk-sans", "fonts:noto"),
+    ("noto-fonts-color-emoji", "fonts:noto"),
+    // Others
+    ("discover", "plasma-discover"),
+];
+
 /// Result of looking up a package version.
 #[derive(Debug, Clone)]
 pub struct PackageLookup {
@@ -119,10 +140,14 @@ pub async fn lookup_versions(names: &[String]) -> Result<Vec<PackageLookup>> {
     for handle in handles {
         match handle.await {
             Ok(Ok(lookup)) => {
-                new_cache.entries.insert(lookup.name.clone(), CachedPackage {
-                    version: lookup.version.clone(),
-                    description: lookup.description.clone(),
-                });
+                // Only cache successful lookups — don't cache unknowns
+                // so they get retried next time (might have been rate-limited)
+                if lookup.version.is_some() {
+                    new_cache.entries.insert(lookup.name.clone(), CachedPackage {
+                        version: lookup.version.clone(),
+                        description: lookup.description.clone(),
+                    });
+                }
                 results.push(lookup);
             }
             Ok(Err(e)) => {
@@ -139,13 +164,26 @@ pub async fn lookup_versions(names: &[String]) -> Result<Vec<PackageLookup>> {
     Ok(results)
 }
 
+/// Look up the Repology name for a Nix package.
+/// Returns the mapped name if one exists, otherwise the original.
+fn repology_name(nix_name: &str) -> &str {
+    for (nix, repology) in NAME_MAPPINGS {
+        if *nix == nix_name {
+            return repology;
+        }
+    }
+    nix_name
+}
+
 /// Query the Repology API for a single package.
 ///
+/// Uses name mapping to translate Nix names to Repology names.
 /// Retries once on 429 (rate limited) with a 3-second wait.
 /// Returns unknown version on persistent failure to avoid noisy errors.
 async fn query_one(client: &reqwest::Client, name: &str) -> Result<PackageLookup> {
-    let url = format!("{}/{}", API_URL, name);
-    trace!("HTTP GET {}", url);
+    let lookup_name = repology_name(name);
+    let url = format!("{}/{}", API_URL, lookup_name);
+    trace!("HTTP GET {} (nix: {})", url, name);
 
     let response = client
         .get(&url)
