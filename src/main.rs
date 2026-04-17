@@ -104,6 +104,9 @@ enum Commands {
     /// Apply pinned updates: refresh nixpkgs-latest and rebuild the system
     Update,
 
+    /// Build and switch with human-readable error parsing
+    Build,
+
     /// Remove obsolete pins whose nixpkgs version has caught up
     Clean,
 
@@ -190,6 +193,10 @@ async fn main() -> Result<()> {
 
         Commands::Update => {
             cmd::update::run()?;
+        }
+
+        Commands::Build => {
+            cmd::build::run()?;
         }
 
         Commands::Clean => {
