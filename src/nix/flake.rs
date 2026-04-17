@@ -31,6 +31,8 @@ pub struct FlakeInput {
     pub repo_name: Option<String>,
     /// Whether the remote has newer commits
     pub has_update: Option<bool>,
+    /// Human-readable age of the latest remote commit (e.g. "today", "3 days ago")
+    pub remote_age: Option<String>,
 }
 
 /// Inputs that are infrastructure, not user-facing packages.
@@ -167,7 +169,8 @@ pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
             repo_type,
             repo_owner,
             repo_name,
-            has_update: None, // Filled in later by check_flake_updates()
+            has_update: None,
+            remote_age: None,
         });
     }
 
@@ -230,6 +233,12 @@ fn scan_store_for_version(store_path: &str, store_prefix: &str) -> Option<String
     None
 }
 
+/// Info about the latest remote commit.
+struct RemoteCommitInfo {
+    rev: String,
+    date: Option<String>,
+}
+
 /// Check flake inputs for available updates by comparing the locked rev
 /// with the latest commit on the default branch via GitHub/GitLab API.
 pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
@@ -249,14 +258,22 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
             _ => continue,
         };
 
-        let latest_rev = match repo_type {
+        let info = match repo_type {
             "github" => {
                 let url = format!(
                     "https://api.github.com/repos/{}/{}/commits?per_page=1",
                     owner, repo
                 );
-                fetch_latest_rev(&client, &url, |json| {
-                    json.as_array()?.first()?.get("sha")?.as_str().map(|s| s[..12].to_string())
+                fetch_commit_info(&client, &url, |json| {
+                    let commit = json.as_array()?.first()?;
+                    let rev = commit.get("sha")?.as_str().map(|s| s[..12].to_string())?;
+                    // GitHub date is in commit.commit.committer.date
+                    let date = commit.get("commit")
+                        .and_then(|c| c.get("committer"))
+                        .and_then(|c| c.get("date"))
+                        .and_then(|d| d.as_str())
+                        .map(|s| s[..10].to_string()); // "2026-04-15T..."  → "2026-04-15"
+                    Some(RemoteCommitInfo { rev, date })
                 })
             }
             "gitlab" => {
@@ -264,27 +281,33 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
                     "https://gitlab.com/api/v4/projects/{}%2F{}/repository/commits?per_page=1",
                     owner, repo
                 );
-                fetch_latest_rev(&client, &url, |json| {
-                    json.as_array()?.first()?.get("id")?.as_str().map(|s| s[..12].to_string())
+                fetch_commit_info(&client, &url, |json| {
+                    let commit = json.as_array()?.first()?;
+                    let rev = commit.get("id")?.as_str().map(|s| s[..12].to_string())?;
+                    let date = commit.get("committed_date")
+                        .and_then(|d| d.as_str())
+                        .map(|s| s[..10].to_string());
+                    Some(RemoteCommitInfo { rev, date })
                 })
             }
             _ => None,
         };
 
-        if let Some(latest) = latest_rev {
-            let is_outdated = latest != input.rev[..latest.len().min(input.rev.len())];
+        if let Some(info) = info {
+            let is_outdated = info.rev != input.rev[..info.rev.len().min(input.rev.len())];
             input.has_update = Some(is_outdated);
             if is_outdated {
-                debug!("Flake input {} has update: {} → {}", input.name, input.rev, latest);
+                input.remote_age = info.date.map(|d| format!("latest: {}", d));
+                debug!("Flake input {} has update: {} → {}", input.name, input.rev, info.rev);
             }
         }
     }
 }
 
-/// Fetch the latest commit rev from a Git hosting API.
-fn fetch_latest_rev<F>(client: &reqwest::blocking::Client, url: &str, extract: F) -> Option<String>
+/// Fetch commit info from a Git hosting API.
+fn fetch_commit_info<F>(client: &reqwest::blocking::Client, url: &str, extract: F) -> Option<RemoteCommitInfo>
 where
-    F: Fn(&serde_json::Value) -> Option<String>,
+    F: Fn(&serde_json::Value) -> Option<RemoteCommitInfo>,
 {
     let response = client.get(url).send().ok()?;
     if !response.status().is_success() {

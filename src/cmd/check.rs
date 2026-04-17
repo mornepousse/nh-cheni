@@ -216,10 +216,13 @@ pub async fn run(category: Option<&str>) -> Result<()> {
                         .as_deref()
                         .unwrap_or("?");
 
-                    let status = match input.has_update {
-                        Some(true) => "UPDATE".yellow().to_string(),
-                        Some(false) => "ok".green().to_string(),
-                        None => "?".dimmed().to_string(),
+                    let status = match (&input.has_update, &input.remote_age) {
+                        (Some(true), Some(date)) => {
+                            format!("{} ({})", "UPDATE".yellow(), date.dimmed())
+                        }
+                        (Some(true), None) => "UPDATE".yellow().to_string(),
+                        (Some(false), _) => "ok".green().to_string(),
+                        (None, _) => "?".dimmed().to_string(),
                     };
 
                     println!(
