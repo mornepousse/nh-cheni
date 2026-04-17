@@ -24,7 +24,7 @@ pub fn run() -> Result<()> {
     println!("  Hostname: {}\n", nix_config.hostname);
 
     // Step 1: Create package-pins.json if missing
-    let pins_created = create_pins_file(flake_dir)?;
+    let _pins_created = create_pins_file(flake_dir)?;
 
     // Step 2: Add nixpkgs-latest input to flake.nix
     let flake_path = flake_dir.join("flake.nix");
@@ -187,7 +187,7 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
 ///
 /// Strategy: find the `nixpkgs.overlays = [` block for the matching hostname
 /// and add the nixup overlay.
-fn add_overlay(flake_path: &Path, content: &str, hostname: &str) -> Result<()> {
+fn add_overlay(flake_path: &Path, content: &str, _hostname: &str) -> Result<()> {
     // Look for the overlay block in the matching nixosConfiguration
     // We look for `nixpkgs.overlays = [` within the hostname's section
     let overlay_code = r#"              # nixup: per-package updates from nixpkgs-latest
@@ -242,7 +242,7 @@ fn print_manual_instructions(hostname: &str) {
 }
 
 /// Print overlay instructions.
-fn print_overlay_instructions(hostname: &str) {
+fn print_overlay_instructions(_hostname: &str) {
     println!("{}", "Add this overlay to your nixosSystem modules:".bold());
     println!();
     println!("{}", r#"  ({ config, pkgs, ... }:

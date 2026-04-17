@@ -15,15 +15,11 @@
         version = "0.1.0";
         src = ./.;
 
-        cargoHash = pkgs.lib.fakeHash;
+        cargoHash = "sha256-4h3huWQSobUTKaGW+22Kj+uEyLnchyRfufySYzvibtI=";
 
-        nativeBuildInputs = with pkgs; [
-          pkg-config
-        ];
-
-        buildInputs = with pkgs; [
-          openssl
-        ];
+        # reqwest utilise rustls-tls, pas besoin de pkg-config ni openssl
+        nativeBuildInputs = [];
+        buildInputs = [];
 
         meta = with pkgs.lib; {
           description = "TUI to check for NixOS package updates";

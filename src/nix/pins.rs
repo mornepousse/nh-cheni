@@ -92,7 +92,6 @@ pub fn clear(config_dir: &Path) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     fn setup_temp_dir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()

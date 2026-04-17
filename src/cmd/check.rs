@@ -20,7 +20,6 @@ struct CheckResult {
     name: String,
     installed: String,
     available: String,
-    diff: VersionDiff,
 }
 
 /// Run the `nixup check` command.
@@ -131,7 +130,6 @@ pub async fn run(category: Option<&str>) -> Result<()> {
             name: name.clone(),
             installed: installed_version.clone(),
             available: available.clone(),
-            diff: diff.clone(),
         };
 
         match diff {
@@ -183,7 +181,6 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     }
 
     // Summary line
-    let total = packages_to_check.len();
     println!(
         "{} {} | {} {} | {} {} | {} {} | {} {}",
         "Up to date:".dimmed(),

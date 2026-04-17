@@ -9,8 +9,6 @@ use std::io::{self, Write};
 
 use anyhow::Result;
 use colored::Colorize;
-use tracing::debug;
-
 use crate::api::repology;
 use crate::nix::{config, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
