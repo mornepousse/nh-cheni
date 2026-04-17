@@ -82,6 +82,9 @@ enum Commands {
     /// Apply pinned updates (update nixpkgs-latest + rebuild)
     Update,
 
+    /// First-time setup (add nixpkgs-latest to your flake)
+    Init,
+
     /// Show current status (config, active pins)
     Status,
 }
@@ -158,6 +161,10 @@ async fn main() -> Result<()> {
 
         Commands::Update => {
             cmd::update::run()?;
+        }
+
+        Commands::Init => {
+            cmd::init::run()?;
         }
 
         Commands::Status => {
