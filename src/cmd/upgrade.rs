@@ -53,8 +53,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
 
     // Step 1.5: Preview changes (build the new system without activating)
     if !opts.yes {
-        println!("\n{} Building new system (preview)...", "[preview]".dimmed());
-        println!("{}", "  This evaluates the config without switching.".dimmed());
+        println!("\n{} Evaluating changes (no download)...\n", "[preview]".dimmed());
 
         let hostname = &nix_config.hostname;
         let flake_ref = format!(
@@ -62,25 +61,55 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
             config_path, hostname
         );
 
-        // Build only, no switch — this shows what will change
-        let preview_status = Command::new("nh")
-            .args(["os", "build", config_path])
-            .status()
-            .context("Failed to run 'nh os build' for preview")?;
+        // --dry-run evaluates what would be built/fetched without doing it
+        let preview_output = Command::new("nix")
+            .args(["build", &flake_ref, "--dry-run", "--no-link", "--print-build-logs"])
+            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .output()
+            .context("Failed to run 'nix build --dry-run' for preview")?;
 
-        if !preview_status.success() {
-            anyhow::bail!("Preview build failed. Run 'cheni build' to see the error.");
+        if !preview_output.status.success() {
+            let stderr = String::from_utf8_lossy(&preview_output.stderr);
+            eprintln!("{}", stderr);
+            anyhow::bail!("Preview evaluation failed. Run 'cheni build' to see details.");
         }
 
-        // Explicitly mention flake_ref is unused (nh handles this internally)
-        let _ = flake_ref;
+        // nix --dry-run prints its summary to stderr
+        let stderr = String::from_utf8_lossy(&preview_output.stderr);
+        let (to_build, to_fetch) = parse_dry_run_summary(&stderr);
+
+        if to_build.is_empty() && to_fetch.is_empty() {
+            println!("  {}", "Nothing to build or download — already up to date.".green());
+            println!("\n{}", "No changes to apply.".dimmed());
+            return Ok(());
+        }
+
+        if !to_fetch.is_empty() {
+            println!("  {} {} package(s) to download:", "↓".cyan(), to_fetch.len());
+            for pkg in to_fetch.iter().take(20) {
+                println!("    {}", pkg.dimmed());
+            }
+            if to_fetch.len() > 20 {
+                println!("    {} and {} more...", "...".dimmed(), to_fetch.len() - 20);
+            }
+        }
+
+        if !to_build.is_empty() {
+            println!("\n  {} {} package(s) to build locally:", "⚒".yellow(), to_build.len());
+            for pkg in to_build.iter().take(10) {
+                println!("    {}", pkg.dimmed());
+            }
+            if to_build.len() > 10 {
+                println!("    {} and {} more...", "...".dimmed(), to_build.len() - 10);
+            }
+        }
 
         println!();
-        if !confirm("Apply these changes?")? {
+        if !confirm("Download and apply these changes?")? {
             println!("\n{}", "Upgrade cancelled. Flake is already updated.".yellow());
             println!(
-                "  Use '{}' to build without switching, or '{}' to rebuild later.",
-                "cheni build".bold(),
+                "  Use '{}' to rebuild later.",
                 "cheni upgrade --yes".bold()
             );
             return Ok(());
@@ -136,6 +165,70 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Parse the summary output of `nix build --dry-run`.
+///
+/// Returns (to_build, to_fetch) — lists of package names.
+/// Example output:
+///   these 3 derivations will be built:
+///     /nix/store/abc-foo-1.0.drv
+///     /nix/store/def-bar-2.0.drv
+///   these 5 paths will be fetched (12.3 MiB download, ...):
+///     /nix/store/xyz-baz-3.0
+fn parse_dry_run_summary(stderr: &str) -> (Vec<String>, Vec<String>) {
+    let mut to_build = Vec::new();
+    let mut to_fetch = Vec::new();
+
+    enum Section {
+        None,
+        Build,
+        Fetch,
+    }
+    let mut section = Section::None;
+
+    for line in stderr.lines() {
+        let trimmed = line.trim();
+
+        // Detect section headers
+        if trimmed.contains("derivations will be built") || trimmed.contains("derivation will be built") {
+            section = Section::Build;
+            continue;
+        }
+        if trimmed.contains("paths will be fetched") || trimmed.contains("path will be fetched") {
+            section = Section::Fetch;
+            continue;
+        }
+
+        // Parse store paths: /nix/store/<hash>-<name>
+        if trimmed.starts_with("/nix/store/") {
+            if let Some(name) = extract_store_name(trimmed) {
+                match section {
+                    Section::Build => to_build.push(name),
+                    Section::Fetch => to_fetch.push(name),
+                    Section::None => {}
+                }
+            }
+        } else if !trimmed.is_empty() && !trimmed.starts_with("/nix/store/") {
+            // Section ended
+            section = Section::None;
+        }
+    }
+
+    (to_build, to_fetch)
+}
+
+/// Extract package name + version from a store path.
+/// e.g. "/nix/store/abc123-vivaldi-7.9.drv" -> "vivaldi-7.9"
+fn extract_store_name(path: &str) -> Option<String> {
+    let after_prefix = path.strip_prefix("/nix/store/")?;
+    // Skip 32-char hash + hyphen
+    if after_prefix.len() < 34 {
+        return None;
+    }
+    let name = &after_prefix[33..];
+    // Strip trailing .drv
+    Some(name.trim_end_matches(".drv").to_string())
 }
 
 /// Ask a yes/no question. Default is yes.
