@@ -1,17 +1,16 @@
 [package]
 name = "nixup"
-version = "0.1.0"
+version = "0.1.0-alpha"
 edition = "2021"
 description = "Granular package updates for NixOS"
 license = "MIT"
 repository = "https://gitlab.com/harrael/nixup"
 
 [dependencies]
-# TUI
-ratatui = "0.29"
-crossterm = "0.28"
+# CLI
+clap = { version = "4", features = ["derive"] }
 
-# HTTP & sérialisation
+# HTTP
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -19,7 +18,14 @@ serde_json = "1"
 # Async
 tokio = { version = "1", features = ["full"] }
 
-# Utilitaires
+# Logging / Debug
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Output
+colored = "3"
+
+# Utilities
 regex = "1"
 anyhow = "1"
 dirs = "6"
