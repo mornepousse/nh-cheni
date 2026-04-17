@@ -83,12 +83,86 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+/// Strip ANSI escape codes from a string.
+fn strip_ansi(s: &str) -> String {
+    let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    re.replace_all(s, "").to_string()
+}
+
+/// Find file location near an error line (looks both before and after).
+fn find_location(lines: &[&str], idx: usize) -> Option<String> {
+    let start = idx.saturating_sub(5);
+    let end = (idx + 5).min(lines.len());
+
+    for line in &lines[start..end] {
+        let clean = strip_ansi(line);
+        // Match patterns like "at /path/to/file.nix:16:5"
+        if let Some(pos) = clean.find("at /") {
+            let path_part = &clean[pos + 3..];
+            // Extract just the path:line:col
+            let end_pos = path_part.find(|c: char| c.is_whitespace() || c == ':')
+                .and_then(|first_colon| {
+                    // Keep path + line + col (two colons after path)
+                    let after_first = &path_part[first_colon + 1..];
+                    after_first.find(':').map(|second_colon| {
+                        let after_second = &after_first[second_colon + 1..];
+                        let col_end = after_second.find(|c: char| !c.is_ascii_digit())
+                            .unwrap_or(after_second.len());
+                        first_colon + 1 + second_colon + 1 + col_end
+                    })
+                })
+                .unwrap_or(path_part.len());
+            return Some(path_part[..end_pos].trim().to_string());
+        }
+        // Match "from `/path/to/file.nix':" or similar
+        if clean.contains("definitions from") && clean.contains(".nix") {
+            if let Some(start) = clean.find('`') {
+                if let Some(end) = clean[start + 1..].find('\'') {
+                    let path = &clean[start + 1..start + 1 + end];
+                    if path.contains(".nix") {
+                        return Some(path.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find source context lines near an error (lines starting with line numbers).
+fn find_source_context(lines: &[&str], idx: usize) -> Option<String> {
+    let start = idx.saturating_sub(2);
+    let end = (idx + 8).min(lines.len());
+    let mut context_lines = Vec::new();
+
+    for line in &lines[start..end] {
+        let clean = strip_ansi(line);
+        let trimmed = clean.trim().trim_start_matches('┃').trim();
+        // Match source lines like "15|     libreoffice-fresh"
+        if trimmed.contains('|') {
+            let parts: Vec<&str> = trimmed.splitn(2, '|').collect();
+            if parts.len() == 2 && parts[0].trim().chars().all(|c| c.is_ascii_digit()) {
+                context_lines.push(format!("      {}", trimmed));
+            }
+        }
+    }
+
+    if context_lines.is_empty() {
+        None
+    } else {
+        Some(context_lines.join("\n"))
+    }
+}
+
 /// Parse Nix build errors from stderr output.
 fn parse_errors(stderr: &str) -> Vec<ParsedError> {
     let mut errors = Vec::new();
 
+    // Strip ANSI codes for pattern matching
+    let clean_stderr = strip_ansi(stderr);
+
     // Process line by line, looking for error patterns
-    let lines: Vec<&str> = stderr.lines().collect();
+    let lines: Vec<&str> = clean_stderr.lines().collect();
 
     for (i, line) in lines.iter().enumerate() {
         // Pattern 1: Hash mismatch
@@ -257,21 +331,17 @@ fn parse_undefined_var(lines: &[&str], idx: usize) -> Option<ParsedError> {
         .unwrap_or("?")
         .to_string();
 
-    // Look for file location
-    let mut location = String::new();
-    let start = idx.saturating_sub(3);
-    for line in &lines[start..=idx] {
-        if line.contains(".nix:") || line.contains("at /") {
-            location = line.trim().to_string();
-            break;
-        }
-    }
+    // Find file location and source context
+    let location = find_location(lines, idx);
+    let context = find_source_context(lines, idx);
 
-    let message = if location.is_empty() {
-        format!("Variable '{}' is not defined.", var_name)
-    } else {
-        format!("Variable '{}' is not defined.\n      Location: {}", var_name, location)
-    };
+    let mut message = format!("Variable '{}' is not defined.", var_name);
+    if let Some(loc) = &location {
+        message.push_str(&format!("\n      File: {}", humanize_path(loc)));
+    }
+    if let Some(ctx) = &context {
+        message.push_str(&format!("\n{}", ctx));
+    }
 
     Some(ParsedError {
         what: var_name,
@@ -358,6 +428,22 @@ fn parse_collision(lines: &[&str], idx: usize) -> Option<ParsedError> {
         message: "Two packages provide the same file and conflict.".to_string(),
         hint: Some("Remove one of the conflicting packages, or use 'environment.systemPackages' with priority.".to_string()),
     })
+}
+
+/// Simplify a nix store path to a human-readable relative path.
+///
+/// Converts `/nix/store/abc123-source/modules/dev/test.nix:5:3`
+/// to `modules/dev/test.nix:5:3`.
+fn humanize_path(path: &str) -> String {
+    // Strip /nix/store/<hash>-source/ prefix
+    if let Some(pos) = path.find("-source/") {
+        return path[pos + 8..].to_string();
+    }
+    // Strip /nix/store/<hash>-<name>/ prefix
+    if path.starts_with("/nix/store/") && path.len() > 44 {
+        return path[44..].to_string();
+    }
+    path.to_string()
 }
 
 /// Extract a hash value from a line containing "sha256-..." or "sha256:...".
