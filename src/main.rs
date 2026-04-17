@@ -113,6 +113,18 @@ enum Commands {
     /// Run health checks on your cheni setup
     Doctor,
 
+    /// Search nixpkgs for a package
+    Search {
+        /// Search query
+        query: String,
+    },
+
+    /// Find which .nix file declares a package
+    Why {
+        /// Package name to search for
+        package: String,
+    },
+
     /// First-time setup: add nixpkgs-latest input to your flake
     Init,
 
@@ -204,6 +216,14 @@ async fn main() -> Result<()> {
 
         Commands::Doctor => {
             cmd::doctor::run()?;
+        }
+
+        Commands::Search { query } => {
+            cmd::search::run(&query)?;
+        }
+
+        Commands::Why { package } => {
+            cmd::why::run(&package)?;
         }
 
         Commands::Clean => {

@@ -57,6 +57,15 @@ pub fn run() -> Result<()> {
     // Check 5: obsolete pins (nixpkgs caught up)
     checks.push(check_obsolete_pins(&nix_config.flake_dir));
 
+    // Check 6: nix store size
+    checks.push(check_store_size());
+
+    // Check 7: number of system generations
+    checks.push(check_generations());
+
+    // Check 8: nh is installed (required for cheni build / update)
+    checks.push(check_nh_installed());
+
     // Print results
     let mut ok_count = 0;
     let mut warn_count = 0;
@@ -268,5 +277,107 @@ fn check_obsolete_pins(flake_dir: &std::path::Path) -> CheckResult {
             message: format!("{} pin(s) obsolete — nixpkgs caught up", obsolete),
             hint: Some("Run 'cheni clean' to remove them.".to_string()),
         }
+    }
+}
+
+/// Check the total size of the nix store.
+fn check_store_size() -> CheckResult {
+    let output = std::process::Command::new("du")
+        .args(["-sh", "/nix/store"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let size = stdout.split_whitespace().next().unwrap_or("?").to_string();
+
+            // Parse size to check if > 50G
+            let is_large = size.ends_with('G') && size.trim_end_matches('G')
+                .parse::<f64>().map(|n| n > 50.0).unwrap_or(false);
+
+            if is_large {
+                CheckResult {
+                    severity: Severity::Warning,
+                    name: "Nix store size".to_string(),
+                    message: format!("{} (quite large)", size),
+                    hint: Some("Run 'nh clean all' or 'cheni clean' to free space.".to_string()),
+                }
+            } else {
+                CheckResult {
+                    severity: Severity::Ok,
+                    name: "Nix store size".to_string(),
+                    message: size,
+                    hint: None,
+                }
+            }
+        }
+        _ => CheckResult {
+            severity: Severity::Warning,
+            name: "Nix store size".to_string(),
+            message: "could not determine".to_string(),
+            hint: None,
+        },
+    }
+}
+
+/// Check the number of system generations.
+fn check_generations() -> CheckResult {
+    let output = std::process::Command::new("sudo")
+        .args(["-n", "nix-env", "-p", "/nix/var/nix/profiles/system", "--list-generations"])
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let count = stdout.lines().count();
+
+            if count > 20 {
+                CheckResult {
+                    severity: Severity::Warning,
+                    name: "System generations".to_string(),
+                    message: format!("{} generations (a lot)", count),
+                    hint: Some("Run 'sudo nix-collect-garbage --delete-older-than 30d'.".to_string()),
+                }
+            } else {
+                CheckResult {
+                    severity: Severity::Ok,
+                    name: "System generations".to_string(),
+                    message: format!("{} generation(s)", count),
+                    hint: None,
+                }
+            }
+        }
+        _ => CheckResult {
+            severity: Severity::Ok,
+            name: "System generations".to_string(),
+            message: "(skipped — requires sudo)".to_string(),
+            hint: None,
+        },
+    }
+}
+
+/// Check that `nh` is installed (required by cheni build / update).
+fn check_nh_installed() -> CheckResult {
+    let output = std::process::Command::new("nh")
+        .arg("--version")
+        .output();
+
+    match output {
+        Ok(o) if o.status.success() => {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            let version = stdout.trim().to_string();
+            CheckResult {
+                severity: Severity::Ok,
+                name: "nh".to_string(),
+                message: format!("installed ({})", version),
+                hint: None,
+            }
+        }
+        _ => CheckResult {
+            severity: Severity::Error,
+            name: "nh".to_string(),
+            message: "not installed".to_string(),
+            hint: Some("cheni build/update depend on nh. Install it in your NixOS config.".to_string()),
+        },
     }
 }

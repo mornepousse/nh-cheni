@@ -9,5 +9,7 @@ pub mod doctor;
 pub mod init;
 pub mod obsolete;
 pub mod pin;
+pub mod search;
 pub mod status;
 pub mod update;
+pub mod why;
