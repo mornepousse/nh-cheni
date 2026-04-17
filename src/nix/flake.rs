@@ -11,27 +11,29 @@ use tracing::debug;
 /// A flake input with its metadata from flake.lock.
 #[derive(Debug, Clone)]
 pub struct FlakeInput {
-    /// Input name (e.g. "zen-browser", "claude-code")
+    /// Input name (e.g. "zen-browser", "claude-code").
     pub name: String,
-    /// Last modified timestamp (unix seconds)
+    /// Last modified timestamp (unix seconds).
+    /// Stored for debug logging and potential future use by consumers.
     #[allow(dead_code)]
     pub last_modified: u64,
-    /// Short git revision hash (from flake.lock)
+    /// Short git revision hash (from flake.lock).
     pub rev: String,
-    /// How many days since last update
+    /// How many days since the last update.
+    /// Stored for debug logging and potential future use by consumers.
     #[allow(dead_code)]
     pub days_old: u64,
-    /// Installed version (from the nix store, if found)
+    /// Installed version (from the nix store, if found).
     pub installed_version: Option<String>,
-    /// Repository type ("github" or "gitlab")
+    /// Repository type ("github" or "gitlab").
     pub repo_type: Option<String>,
-    /// Repository owner
+    /// Repository owner.
     pub repo_owner: Option<String>,
-    /// Repository name
+    /// Repository name.
     pub repo_name: Option<String>,
-    /// Whether the remote has newer commits
+    /// Whether the remote has newer commits.
     pub has_update: Option<bool>,
-    /// Human-readable age of the latest remote commit (e.g. "today", "3 days ago")
+    /// Human-readable age of the latest remote commit (e.g. "today", "3 days ago").
     pub remote_age: Option<String>,
 }
 
@@ -181,7 +183,7 @@ pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
 /// Try to find the installed version of a flake input from the nix store.
 ///
 /// Uses the INPUT_STORE_MAPPINGS table to find the store package name,
-/// then looks it up in the store output.
+/// then scans the store output for a matching version.
 fn find_store_version(input_name: &str) -> Option<String> {
     // Find the store name for this input
     let store_prefix = INPUT_STORE_MAPPINGS.iter()
@@ -233,14 +235,14 @@ fn scan_store_for_version(store_path: &str, store_prefix: &str) -> Option<String
     None
 }
 
-/// Info about the latest remote commit.
+/// Metadata about the latest remote commit.
 struct RemoteCommitInfo {
     rev: String,
     date: Option<String>,
 }
 
-/// Check flake inputs for available updates by comparing the locked rev
-/// with the latest commit on the default branch via GitHub/GitLab API.
+/// Check flake inputs for available updates by comparing the locked
+/// revision with the latest commit on the default branch via GitHub/GitLab API.
 pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
     let client = reqwest::blocking::Client::builder()
         .user_agent("nixup/0.1")

@@ -1,7 +1,7 @@
 //! `nixup clean` command.
 //!
-//! Détecte les pins obsolètes (quand nixpkgs a rattrapé nixpkgs-latest
-//! après un `upgrade` classique) et les supprime automatiquement.
+//! Detects obsolete pins (when nixpkgs has caught up with nixpkgs-latest
+//! after a regular `upgrade`) and removes them automatically.
 
 use anyhow::Result;
 use colored::Colorize;
@@ -12,9 +12,9 @@ use super::obsolete::count_obsolete_pins;
 
 /// Run `nixup clean`.
 ///
-/// Vérifie si nixpkgs a rattrapé nixpkgs-latest.
-/// Si oui, supprime tous les pins (devenus inutiles).
-/// Si non, indique que les pins sont encore actifs.
+/// Checks whether nixpkgs has caught up with nixpkgs-latest.
+/// If so, removes all pins (they are no longer needed).
+/// If not, reports that pins are still active.
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     let current_pins = pins::read(&nix_config.flake_dir)?;
@@ -28,7 +28,7 @@ pub fn run() -> Result<()> {
     let obsolete_count = count_obsolete_pins(&lock_path, &current_pins);
 
     if obsolete_count > 0 {
-        // nixpkgs a rattrapé nixpkgs-latest : les pins sont obsolètes
+        // nixpkgs has caught up with nixpkgs-latest: pins are obsolete
         let count = pins::clear(&nix_config.flake_dir)?;
         println!(
             "{} Removed {} obsolete pin(s). nixpkgs has caught up with nixpkgs-latest.",
@@ -36,7 +36,7 @@ pub fn run() -> Result<()> {
             count.to_string().bold()
         );
     } else {
-        // nixpkgs-latest est encore devant, les pins sont toujours utiles
+        // nixpkgs-latest is still ahead, pins are still useful
         println!(
             "Pins are still active (nixpkgs-latest is ahead). {} pin(s) kept.",
             current_pins.len().to_string().bold()

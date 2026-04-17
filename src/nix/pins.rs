@@ -42,8 +42,9 @@ pub fn write(config_dir: &Path, pins: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Add packages to the pin list. Returns the names that were actually added
-/// (excludes duplicates).
+/// Add packages to the pin list.
+///
+/// Returns the names that were actually added (excludes duplicates).
 pub fn add(config_dir: &Path, names: &[String]) -> Result<Vec<String>> {
     let mut pins = read(config_dir)?;
     let mut added = Vec::new();
@@ -62,8 +63,9 @@ pub fn add(config_dir: &Path, names: &[String]) -> Result<Vec<String>> {
     Ok(added)
 }
 
-/// Remove packages from the pin list. Returns the names that were actually
-/// removed.
+/// Remove packages from the pin list.
+///
+/// Returns the names that were actually removed.
 pub fn remove(config_dir: &Path, names: &[String]) -> Result<Vec<String>> {
     let mut pins = read(config_dir)?;
     let mut removed = Vec::new();

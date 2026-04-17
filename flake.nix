@@ -1,5 +1,5 @@
 {
-  description = "nixup - TUI to check for NixOS package updates";
+  description = "nixup - Granular package updates for NixOS";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -17,13 +17,13 @@
 
         cargoHash = "sha256-IurfS7oZwA/cw5rP41Lr99H6GI0Rr1dqWxio2B+TO2s=";
 
-        # reqwest utilise rustls-tls, pas besoin de pkg-config ni openssl
+        # reqwest uses rustls-tls, no need for pkg-config or openssl
         nativeBuildInputs = [];
         buildInputs = [];
 
         meta = with pkgs.lib; {
-          description = "TUI to check for NixOS package updates";
-          homepage = "https://github.com/mae/nixup";
+          description = "Granular package updates for NixOS";
+          homepage = "https://gitlab.com/harrael/nixup";
           license = licenses.mit;
           mainProgram = "nixup";
         };

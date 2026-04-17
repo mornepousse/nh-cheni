@@ -185,8 +185,8 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
 
 /// Add the nixup overlay to the nixosSystem modules.
 ///
-/// Strategy: find the `nixpkgs.overlays = [` block for the matching hostname
-/// and add the nixup overlay.
+/// Strategy: find the `nixpkgs.overlays = [` block for the matching
+/// hostname and add the nixup overlay.
 fn add_overlay(flake_path: &Path, content: &str, _hostname: &str) -> Result<()> {
     // Look for the overlay block in the matching nixosConfiguration
     // We look for `nixpkgs.overlays = [` within the hostname's section

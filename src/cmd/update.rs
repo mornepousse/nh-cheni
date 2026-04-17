@@ -136,18 +136,18 @@ pub fn run() -> Result<()> {
 
 /// Result of comparing nixpkgs vs nixpkgs-latest revisions.
 enum InputOrder {
-    /// nixpkgs-latest is at a newer commit (safe to apply pins)
+    /// nixpkgs-latest is at a newer commit (safe to apply pins).
     LatestIsNewer,
-    /// Both are at the same commit (pins have no effect)
+    /// Both are at the same commit (pins have no effect).
     Same,
-    /// nixpkgs-latest is older (pins would cause downgrades)
+    /// nixpkgs-latest is older (pins would cause downgrades).
     LatestIsOlder,
-    /// Could not determine (e.g. can't read flake.lock)
+    /// Could not determine (e.g. can't read flake.lock).
     Unknown,
 }
 
-/// Check if nixpkgs-latest is ahead of nixpkgs by comparing
-/// their lastModified timestamps in flake.lock.
+/// Check if nixpkgs-latest is ahead of nixpkgs by comparing their
+/// `lastModified` timestamps in flake.lock.
 fn check_nixpkgs_order(flake_dir: &Path) -> InputOrder {
     let lock_path = flake_dir.join("flake.lock");
     let content = match std::fs::read_to_string(&lock_path) {

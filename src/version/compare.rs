@@ -9,13 +9,13 @@ use std::cmp::Ordering;
 /// Result of comparing two versions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionDiff {
-    /// Same version (e.g. 1.2.3 == 1.2.3)
+    /// Same version (e.g. 1.2.3 == 1.2.3).
     Equal,
-    /// Minor update available (e.g. 1.2.3 → 1.3.0)
+    /// Minor update available (e.g. 1.2.3 -> 1.3.0).
     /// The first version number (major) is unchanged.
     Minor,
-    /// Major update available (e.g. 9.0.2 → 10.0.1)
-    /// The first version number changed — breaking changes possible.
+    /// Major update available (e.g. 9.0.2 -> 10.0.1).
+    /// The first version number changed -- breaking changes possible.
     Major,
     /// Installed version is newer than available (ahead of nixpkgs).
     Newer,

@@ -12,9 +12,9 @@ use tracing::{debug, trace, warn};
 /// Detected NixOS configuration.
 #[derive(Debug, Clone)]
 pub struct NixConfig {
-    /// Path to the directory containing flake.nix
+    /// Path to the directory containing flake.nix.
     pub flake_dir: PathBuf,
-    /// System hostname (matched against nixosConfigurations)
+    /// System hostname (matched against nixosConfigurations).
     pub hostname: String,
 }
 
@@ -131,8 +131,8 @@ pub fn list_module_categories(flake_dir: &Path) -> Vec<String> {
 
 /// List all .nix files in a module category directory.
 ///
-/// For example, list_module_files(flake_dir, "dev") returns all .nix files
-/// under modules/dev/.
+/// For example, `list_module_files(flake_dir, "dev")` returns all .nix files
+/// under `modules/dev/`.
 pub fn list_module_files(flake_dir: &Path, category: &str) -> Vec<PathBuf> {
     let dir = flake_dir.join("modules").join(category);
     list_nix_files_recursive(&dir)
@@ -163,8 +163,8 @@ fn list_nix_files_recursive(dir: &Path) -> Vec<PathBuf> {
 /// Extract package names from .nix files.
 ///
 /// Looks for common patterns in NixOS module files:
-/// - Bare package names inside `with pkgs; [ ... ]` blocks
-/// - `pkgs.name` references
+/// - Bare package names inside `with pkgs; [ ... ]` blocks.
+/// - `pkgs.name` references.
 pub fn extract_package_names(nix_files: &[PathBuf]) -> Vec<String> {
     let mut names = Vec::new();
 

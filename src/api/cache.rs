@@ -44,8 +44,9 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
-/// Load the cache from disk. Returns an empty cache if the file
-/// doesn't exist, is corrupted, or has expired.
+/// Load the cache from disk.
+///
+/// Returns an empty cache if the file doesn't exist, is corrupted, or has expired.
 pub fn load() -> Cache {
     let path = cache_path();
 

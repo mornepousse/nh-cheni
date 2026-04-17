@@ -191,7 +191,7 @@ async fn query_one(client: &reqwest::Client, name: &str) -> Result<PackageLookup
         .await
         .context("API request failed")?;
 
-    // Gérer le rate limiting avec un seul retry
+    // Handle rate limiting with a single retry
     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
         debug!("Rate limited for '{}', retrying in {}s", name, RATE_LIMIT_RETRY_SECS);
         tokio::time::sleep(tokio::time::Duration::from_secs(RATE_LIMIT_RETRY_SECS)).await;
@@ -199,7 +199,7 @@ async fn query_one(client: &reqwest::Client, name: &str) -> Result<PackageLookup
         let retry_response = client.get(&url).send().await;
         match retry_response {
             Ok(resp) if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS => {
-                // Deuxième 429 — abandonner silencieusement et retourner "inconnu"
+                // Second 429 — give up silently and return unknown
                 debug!("Rate limited again for '{}', returning unknown", name);
                 return Ok(PackageLookup {
                     name: name.to_string(),
@@ -219,7 +219,7 @@ async fn query_one(client: &reqwest::Client, name: &str) -> Result<PackageLookup
         }
     }
 
-    // Gérer 404 (paquet introuvable)
+    // Handle 404 (package not found)
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         debug!("Package '{}' not found on Repology", name);
         return Ok(PackageLookup {
@@ -232,11 +232,11 @@ async fn query_one(client: &reqwest::Client, name: &str) -> Result<PackageLookup
     parse_response(response, name).await
 }
 
-/// Simple jitter basé sur l'index du paquet.
-/// Retourne une valeur en millisecondes entre 0 et JITTER_MAX_MS.
-/// Pas besoin de vrai aléa — on veut juste étaler les requêtes.
+/// Simple jitter based on the package index.
+/// Returns a value in milliseconds between 0 and JITTER_MAX_MS.
+/// No need for true randomness -- just spreading requests out.
 fn simple_jitter(index: u64) -> u64 {
-    // Utiliser un hash simple de l'index + timestamp pour du pseudo-aléatoire
+    // Use a simple hash of the index + timestamp for pseudo-randomness
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

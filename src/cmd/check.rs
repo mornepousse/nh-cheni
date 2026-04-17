@@ -31,7 +31,7 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     // 1. Detect the NixOS configuration
     let nix_config = config::detect()?;
 
-    // Avertissement automatique si des pins sont obsolètes
+    // Automatic warning if any pins are obsolete
     let current_pins = pins::read(&nix_config.flake_dir)?;
     if !current_pins.is_empty() {
         let lock_path = nix_config.flake_dir.join("flake.lock");
@@ -76,10 +76,9 @@ pub async fn run(category: Option<&str>) -> Result<()> {
             // Also scan home/ for home-manager packages
             let home_dir = nix_config.flake_dir.join("home");
             if home_dir.exists() {
-                files.extend(config::list_module_files(
-                    &nix_config.flake_dir.join("home").parent().unwrap_or(&nix_config.flake_dir),
-                    "home",
-                ));
+                let home_parent = nix_config.flake_dir.join("home");
+                let base_dir = home_parent.parent().unwrap_or(&nix_config.flake_dir);
+                files.extend(config::list_module_files(base_dir, "home"));
             }
             files
         }

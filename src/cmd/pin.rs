@@ -297,7 +297,7 @@ fn confirm(question: &str, default_yes: bool) -> Result<bool> {
 /// Pin a flake input by updating it directly.
 ///
 /// Instead of using the nixpkgs-latest overlay, this runs
-/// `nix flake update <input-name>` to get the latest version.
+/// `nix flake update <input-name>` to fetch the latest version.
 fn pin_flake_input(flake_dir: &std::path::Path, name: &str) -> Result<()> {
     println!(
         "{} is a flake input — updating directly.\n",
