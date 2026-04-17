@@ -41,17 +41,25 @@ pub fn compare_versions(installed: &[u64], available: &[u64]) -> VersionDiff {
         Ordering::Greater => VersionDiff::Newer,
         Ordering::Less => {
             // The update is available — check if it's major or minor.
-            // Major = first version number changed.
+            // Major = first version number changed, unless it's calver.
             let installed_major = installed.first().copied().unwrap_or(0);
             let available_major = available.first().copied().unwrap_or(0);
 
-            if available_major > installed_major {
+            if available_major > installed_major && !is_calver(installed_major) && !is_calver(available_major) {
                 VersionDiff::Major
             } else {
                 VersionDiff::Minor
             }
         }
     }
+}
+
+/// Check if a version number looks like a calendar year (calver).
+///
+/// Versions like 2026.04.01 use dates instead of semver.
+/// We don't treat these as major bumps (2.004 → 2026.04.01 is not "major").
+fn is_calver(major: u64) -> bool {
+    major >= 2000
 }
 
 /// Compare two version vectors element by element.
@@ -125,5 +133,33 @@ mod tests {
     #[test]
     fn empty_vs_zero() {
         assert_eq!(compare_versions(&[], &[0]), VersionDiff::Equal);
+    }
+
+    // Calendar versioning (calver) — should NOT be major
+    #[test]
+    fn calver_noto_fonts() {
+        // noto-fonts: 2026.03.01 → 2026.04.01 (same year, minor)
+        assert_eq!(compare_versions(&[2026, 3, 1], &[2026, 4, 1]), VersionDiff::Minor);
+    }
+
+    #[test]
+    fn calver_cross_year() {
+        // 2.004 → 2026.04.01 looks like major but it's calver
+        assert_eq!(compare_versions(&[2, 4], &[2026, 4, 1]), VersionDiff::Minor);
+    }
+
+    #[test]
+    fn calver_mesa() {
+        // mesa: 24.3.2 → 26.0.4 — major is < 2000, so it's a real major
+        assert_eq!(compare_versions(&[24, 3, 2], &[26, 0, 4]), VersionDiff::Major);
+    }
+
+    #[test]
+    fn calver_detection() {
+        assert!(is_calver(2026));
+        assert!(is_calver(2000));
+        assert!(!is_calver(1999));
+        assert!(!is_calver(26));
+        assert!(!is_calver(0));
     }
 }
