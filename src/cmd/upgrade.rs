@@ -1,8 +1,9 @@
 //! `cheni upgrade` command.
 //!
 //! Full system upgrade: update all flake inputs, rebuild, clean
-//! obsolete pins, and garbage-collect old generations.
+//! obsolete pins, and optionally garbage-collect old generations.
 
+use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -19,6 +20,8 @@ pub struct UpgradeOptions {
     pub gc: bool,
     /// Skip cleanup of obsolete pins.
     pub no_clean_pins: bool,
+    /// Skip the preview + confirmation step.
+    pub yes: bool,
 }
 
 /// Run `cheni upgrade`.
@@ -46,6 +49,42 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
 
     if !update_status.success() {
         anyhow::bail!("nix flake update failed");
+    }
+
+    // Step 1.5: Preview changes (build the new system without activating)
+    if !opts.yes {
+        println!("\n{} Building new system (preview)...", "[preview]".dimmed());
+        println!("{}", "  This evaluates the config without switching.".dimmed());
+
+        let hostname = &nix_config.hostname;
+        let flake_ref = format!(
+            "{}#nixosConfigurations.{}.config.system.build.toplevel",
+            config_path, hostname
+        );
+
+        // Build only, no switch — this shows what will change
+        let preview_status = Command::new("nh")
+            .args(["os", "build", config_path])
+            .status()
+            .context("Failed to run 'nh os build' for preview")?;
+
+        if !preview_status.success() {
+            anyhow::bail!("Preview build failed. Run 'cheni build' to see the error.");
+        }
+
+        // Explicitly mention flake_ref is unused (nh handles this internally)
+        let _ = flake_ref;
+
+        println!();
+        if !confirm("Apply these changes?")? {
+            println!("\n{}", "Upgrade cancelled. Flake is already updated.".yellow());
+            println!(
+                "  Use '{}' to build without switching, or '{}' to rebuild later.",
+                "cheni build".bold(),
+                "cheni upgrade --yes".bold()
+            );
+            return Ok(());
+        }
     }
 
     // Step 2: Rebuild the system
@@ -97,6 +136,18 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Ask a yes/no question. Default is yes.
+fn confirm(question: &str) -> Result<bool> {
+    print!("{} {} ", question, "[Y/n]".dimmed());
+    io::stdout().flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let answer = input.trim().to_lowercase();
+
+    Ok(answer.is_empty() || answer == "y" || answer == "yes")
 }
 
 /// Remove pins that are now obsolete (nixpkgs caught up with nixpkgs-latest).
