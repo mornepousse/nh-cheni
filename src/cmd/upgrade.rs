@@ -14,8 +14,9 @@ use crate::nix::{config, pins};
 
 /// Options for `cheni upgrade`.
 pub struct UpgradeOptions {
-    /// Skip garbage collection at the end.
-    pub no_gc: bool,
+    /// Run garbage collection after the rebuild (default: off).
+    /// This DELETES old generations — you won't be able to rollback!
+    pub gc: bool,
     /// Skip cleanup of obsolete pins.
     pub no_clean_pins: bool,
 }
@@ -26,7 +27,7 @@ pub struct UpgradeOptions {
 /// 1. Update all flake inputs (`nix flake update`)
 /// 2. Rebuild the system (`nh os switch`)
 /// 3. Clean obsolete pins (`cheni clean` logic)
-/// 4. Garbage-collect generations older than 30 days
+/// 4. (optional, with --gc) Garbage-collect old generations
 pub fn run(opts: UpgradeOptions) -> Result<()> {
     let nix_config = config::detect()?;
     let config_path = nix_config.flake_dir.to_str()
@@ -67,9 +68,17 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
         println!("\n{} {}", "[3/4]".dimmed(), "Skipping pin cleanup (--no-clean-pins)".dimmed());
     }
 
-    // Step 4: Garbage collect
-    if !opts.no_gc {
-        println!("\n{} Collecting garbage (generations > 30 days)...", "[4/4]".dimmed());
+    // Step 4: Garbage collect (only with --gc flag — keeps rollback safety)
+    if opts.gc {
+        println!(
+            "\n{} {}",
+            "[4/4]".dimmed(),
+            "Collecting garbage (generations > 30 days)...".yellow()
+        );
+        println!(
+            "  {} This will delete old generations — rollback won't work past this point!",
+            "!".yellow()
+        );
         let gc_status = Command::new("sudo")
             .args(["nix-collect-garbage", "--delete-older-than", "30d"])
             .status()
@@ -78,11 +87,15 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
         if !gc_status.success() {
             println!("{}", "  (garbage collection skipped or failed)".dimmed());
         }
-    } else {
-        println!("\n{} {}", "[4/4]".dimmed(), "Skipping garbage collection (--no-gc)".dimmed());
     }
 
     println!("\n{} Upgrade complete!", "✓".green());
+    if !opts.gc {
+        println!(
+            "{}",
+            "Old generations kept for rollback. Use --gc to reclaim disk space later.".dimmed()
+        );
+    }
     Ok(())
 }
 
