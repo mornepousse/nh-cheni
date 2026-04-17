@@ -16,13 +16,21 @@ pub struct FlakeInput {
     /// Last modified timestamp (unix seconds)
     #[allow(dead_code)]
     pub last_modified: u64,
-    /// Short git revision hash
-    #[allow(dead_code)]
+    /// Short git revision hash (from flake.lock)
     pub rev: String,
     /// How many days since last update
+    #[allow(dead_code)]
     pub days_old: u64,
     /// Installed version (from the nix store, if found)
     pub installed_version: Option<String>,
+    /// Repository type ("github" or "gitlab")
+    pub repo_type: Option<String>,
+    /// Repository owner
+    pub repo_owner: Option<String>,
+    /// Repository name
+    pub repo_name: Option<String>,
+    /// Whether the remote has newer commits
+    pub has_update: Option<bool>,
 }
 
 /// Inputs that are infrastructure, not user-facing packages.
@@ -134,12 +142,20 @@ pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
         // Try to find the installed version from the store
         let installed_version = find_store_version(input_name);
 
+        // Extract repo info from the "original" field
+        let original = node.get("original");
+        let repo_type = original.and_then(|o| o.get("type")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let repo_owner = original.and_then(|o| o.get("owner")).and_then(|v| v.as_str()).map(|s| s.to_string());
+        let repo_name = original.and_then(|o| o.get("repo")).and_then(|v| v.as_str()).map(|s| s.to_string());
+
         debug!(
-            "Flake input: {} v{} ({}d old, rev {})",
+            "Flake input: {} v{} ({}d old, rev {}, {}/{})",
             input_name,
             installed_version.as_deref().unwrap_or("?"),
             days_old,
-            rev
+            rev,
+            repo_owner.as_deref().unwrap_or("?"),
+            repo_name.as_deref().unwrap_or("?"),
         );
 
         result.push(FlakeInput {
@@ -148,6 +164,10 @@ pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
             rev,
             days_old,
             installed_version,
+            repo_type,
+            repo_owner,
+            repo_name,
+            has_update: None, // Filled in later by check_flake_updates()
         });
     }
 
@@ -208,6 +228,71 @@ fn scan_store_for_version(store_path: &str, store_prefix: &str) -> Option<String
     }
 
     None
+}
+
+/// Check flake inputs for available updates by comparing the locked rev
+/// with the latest commit on the default branch via GitHub/GitLab API.
+pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("nixup/0.1")
+        .timeout(std::time::Duration::from_secs(5))
+        .build();
+
+    let client = match client {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    for input in inputs.iter_mut() {
+        let (repo_type, owner, repo) = match (&input.repo_type, &input.repo_owner, &input.repo_name) {
+            (Some(t), Some(o), Some(r)) => (t.as_str(), o.as_str(), r.as_str()),
+            _ => continue,
+        };
+
+        let latest_rev = match repo_type {
+            "github" => {
+                let url = format!(
+                    "https://api.github.com/repos/{}/{}/commits?per_page=1",
+                    owner, repo
+                );
+                fetch_latest_rev(&client, &url, |json| {
+                    json.as_array()?.first()?.get("sha")?.as_str().map(|s| s[..12].to_string())
+                })
+            }
+            "gitlab" => {
+                let url = format!(
+                    "https://gitlab.com/api/v4/projects/{}%2F{}/repository/commits?per_page=1",
+                    owner, repo
+                );
+                fetch_latest_rev(&client, &url, |json| {
+                    json.as_array()?.first()?.get("id")?.as_str().map(|s| s[..12].to_string())
+                })
+            }
+            _ => None,
+        };
+
+        if let Some(latest) = latest_rev {
+            let is_outdated = latest != input.rev[..latest.len().min(input.rev.len())];
+            input.has_update = Some(is_outdated);
+            if is_outdated {
+                debug!("Flake input {} has update: {} → {}", input.name, input.rev, latest);
+            }
+        }
+    }
+}
+
+/// Fetch the latest commit rev from a Git hosting API.
+fn fetch_latest_rev<F>(client: &reqwest::blocking::Client, url: &str, extract: F) -> Option<String>
+where
+    F: Fn(&serde_json::Value) -> Option<String>,
+{
+    let response = client.get(url).send().ok()?;
+    if !response.status().is_success() {
+        debug!("API request failed: {} → {}", url, response.status());
+        return None;
+    }
+    let json: serde_json::Value = response.json().ok()?;
+    extract(&json)
 }
 
 /// Check if a name corresponds to a flake input (not a nixpkgs package).

@@ -199,32 +199,34 @@ pub async fn run(category: Option<&str>) -> Result<()> {
 
     // 8. Show flake inputs (if not filtering by category)
     if category.is_none() {
-        if let Ok(inputs) = flake::read_flake_inputs(&nix_config.flake_dir) {
+        if let Ok(mut inputs) = flake::read_flake_inputs(&nix_config.flake_dir) {
             if !inputs.is_empty() {
-                println!("{}:", "Flake inputs".bold());
-                for input in &inputs {
-                    let age_color = if input.days_old > 30 {
-                        input.days_old.to_string().yellow()
-                    } else {
-                        input.days_old.to_string().green()
-                    };
-                    let age_label = if input.days_old == 0 {
-                        "today".to_string()
-                    } else if input.days_old == 1 {
-                        "1 day ago".to_string()
-                    } else {
-                        format!("{} days ago", age_color)
-                    };
+                // Check for updates from remote repos
+                flake::check_flake_updates(&mut inputs);
 
+                let has_flake_updates = inputs.iter().any(|i| i.has_update == Some(true));
+                if has_flake_updates {
+                    println!("{}:", "Flake inputs (updates available)".yellow().bold());
+                } else {
+                    println!("{}:", "Flake inputs".bold());
+                }
+
+                for input in &inputs {
                     let version_str = input.installed_version
                         .as_deref()
                         .unwrap_or("?");
+
+                    let status = match input.has_update {
+                        Some(true) => "UPDATE".yellow().to_string(),
+                        Some(false) => "ok".green().to_string(),
+                        None => "?".dimmed().to_string(),
+                    };
 
                     println!(
                         "  {:<24} {:<14} {}",
                         input.name,
                         version_str.dimmed(),
-                        age_label,
+                        status,
                     );
                 }
                 println!();
