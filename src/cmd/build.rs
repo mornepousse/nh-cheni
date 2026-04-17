@@ -37,22 +37,46 @@ pub fn run() -> Result<()> {
         "=== nixup build ===".bold()
     );
 
-    // Run nh os switch and capture stderr
-    let output = Command::new("nh")
+    // nh sends everything (progress + errors) to stderr.
+    // We capture stderr while letting it pass through to the terminal via tee,
+    // so the user sees progress AND we can parse errors.
+    println!("{}", "Building...".dimmed());
+
+    use std::io::{BufRead, BufReader};
+
+    let mut child = Command::new("nh")
         .args(["os", "switch", config_path])
-        .stdout(Stdio::inherit()) // Pass stdout through for progress
-        .stderr(Stdio::piped())   // Capture stderr for error parsing
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("Failed to run 'nh os switch'. Is nh installed?")?;
 
-    if output.status.success() {
+    // Read stderr in real time: display to user AND capture for parsing
+    let stderr_pipe = child.stderr.take().unwrap();
+    let reader = BufReader::new(stderr_pipe);
+    let mut captured_stderr = String::new();
+
+    for line in reader.lines() {
+        match line {
+            Ok(line) => {
+                eprintln!("{}", line);
+                captured_stderr.push_str(&line);
+                captured_stderr.push('\n');
+            }
+            Err(_) => break,
+        }
+    }
+
+    let status = child.wait()
+        .context("Failed to wait for build process")?;
+
+    if status.success() {
         println!("\n{} Build successful!", "✓".green());
         return Ok(());
     }
 
-    // Build failed — parse the error output
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    debug!("Build failed, parsing {} bytes of stderr", stderr.len());
+    let stderr = &captured_stderr;
+    debug!("Parsing {} bytes of captured stderr", stderr.len());
 
     let errors = parse_errors(&stderr);
 
@@ -233,6 +257,50 @@ fn parse_errors(stderr: &str) -> Vec<ParsedError> {
                 hint: Some("Set cargoHash = \"\" in the derivation, rebuild to get the new hash, then update it.".to_string()),
             });
         }
+
+        // Pattern 10: "not supported for interpreter" (Python version mismatch)
+        if line.contains("not supported for interpreter") {
+            // Extract the actual error message (strip prefixes like "error:", "┃", etc.)
+            let clean_msg = line.trim()
+                .trim_start_matches("error:")
+                .trim_start_matches('┃')
+                .trim();
+            // Extract package name: "sphinx-9.1.0 not supported..." → "sphinx-9.1.0"
+            let pkg_name = clean_msg.split_whitespace().next().unwrap_or("?");
+            // Only add once (skip if we already have this exact package)
+            if !errors.iter().any(|e| e.category == "Incompatible package" && e.what == pkg_name) {
+                errors.push(ParsedError {
+                    what: pkg_name.to_string(),
+                    category: "Incompatible package",
+                    message: clean_msg.to_string(),
+                    hint: Some("Use a different Python version, or remove this package.".to_string()),
+                });
+            }
+        }
+
+        // Pattern 11: Generic "error:" line not caught by other patterns
+        // (fallback — only if no other errors were found yet for this line)
+        if line.trim().starts_with("error:") && errors.is_empty() {
+            let msg = line.trim().strip_prefix("error:").unwrap_or(line).trim();
+            // Skip if it's just "error:" with nothing useful
+            if !msg.is_empty() && msg.len() > 5 {
+                let location = find_location(&lines, i);
+                let context = find_source_context(&lines, i);
+                let mut full_msg = msg.to_string();
+                if let Some(loc) = &location {
+                    full_msg.push_str(&format!("\n      File: {}", humanize_path(loc)));
+                }
+                if let Some(ctx) = &context {
+                    full_msg.push_str(&format!("\n{}", ctx));
+                }
+                errors.push(ParsedError {
+                    what: "Nix evaluation".to_string(),
+                    category: "Eval error",
+                    message: full_msg,
+                    hint: None,
+                });
+            }
+        }
     }
 
     // Deduplicate by category + what
@@ -361,8 +429,10 @@ fn parse_path_not_found(lines: &[&str], idx: usize) -> Option<ParsedError> {
         .unwrap_or("unknown file")
         .to_string();
 
+    let display_path = humanize_path(&path);
+
     Some(ParsedError {
-        what: path,
+        what: display_path,
         category: "File not found",
         message: "A file referenced in the configuration does not exist.".to_string(),
         hint: Some("If this is a new file, stage it with 'git add <file>'. Flakes only see tracked files.".to_string()),
