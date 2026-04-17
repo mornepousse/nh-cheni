@@ -191,7 +191,6 @@ fn add_overlay(flake_path: &Path, content: &str, hostname: &str) -> Result<()> {
     // Look for the overlay block in the matching nixosConfiguration
     // We look for `nixpkgs.overlays = [` within the hostname's section
     let overlay_code = r#"              # nixup: per-package updates from nixpkgs-latest
-              # Only overrides if nixpkgs-latest has a NEWER version (prevents downgrades)
               (let
                 pkgs-latest = import inputs.nixpkgs-latest {
                   system = "x86_64-linux";
@@ -199,14 +198,7 @@ fn add_overlay(flake_path: &Path, content: &str, hostname: &str) -> Result<()> {
                 };
                 pins = builtins.fromJSON (builtins.readFile ./package-pins.json);
               in final: prev: builtins.listToAttrs (builtins.filter (x: x != null) (map (name:
-                let
-                  hasLatest = pkgs-latest ? ${name};
-                  hasPrev = prev ? ${name};
-                  latestVer = if hasLatest then (pkgs-latest.${name}.version or "0") else "0";
-                  prevVer = if hasPrev then (prev.${name}.version or "0") else "0";
-                  isNewer = builtins.compareVersions latestVer prevVer > 0;
-                in
-                if hasLatest && isNewer
+                if pkgs-latest ? ${name}
                 then { inherit name; value = pkgs-latest.${name}; }
                 else null
               ) pins)))"#;
@@ -262,16 +254,9 @@ fn print_overlay_instructions(hostname: &str) {
     pins = builtins.fromJSON (builtins.readFile ./package-pins.json);
   in {
     nixpkgs.overlays = [
-      # nixup: only override if nixpkgs-latest has a newer version
+      # nixup: pinned packages from nixpkgs-latest
       (final: prev: builtins.listToAttrs (builtins.filter (x: x != null) (map (name:
-        let
-          hasLatest = pkgs-latest ? ${name};
-          hasPrev = prev ? ${name};
-          latestVer = if hasLatest then (pkgs-latest.${name}.version or "0") else "0";
-          prevVer = if hasPrev then (prev.${name}.version or "0") else "0";
-          isNewer = builtins.compareVersions latestVer prevVer > 0;
-        in
-        if hasLatest && isNewer
+        if pkgs-latest ? ${name}
         then { inherit name; value = pkgs-latest.${name}; }
         else null
       ) pins)))
