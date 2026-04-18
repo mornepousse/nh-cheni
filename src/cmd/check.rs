@@ -61,9 +61,19 @@ struct JsonSummary {
 /// Run the `cheni check` command.
 ///
 /// If `category` is Some, only show packages from that module directory.
-pub async fn run(category: Option<&str>, details: bool, json: bool) -> Result<()> {
+pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: bool) -> Result<()> {
     if json {
         colored::control::set_override(false);
+    }
+
+    if refresh {
+        // Nuke the on-disk cache so every lookup hits the API.
+        // Useful after adjusting NAME_MAPPINGS, or when a package's
+        // Repology entry just changed upstream.
+        let _ = crate::api::cache::clear();
+        if !json {
+            println!("{}", "(cache cleared — re-fetching every lookup)".dimmed());
+        }
     }
 
     // 1. Detect the NixOS configuration

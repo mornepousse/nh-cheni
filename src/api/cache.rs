@@ -144,6 +144,17 @@ pub fn save(cache: &Cache) {
     }
 }
 
+/// Delete the on-disk cache file (best effort — silently ignores
+/// 'file does not exist'). Used by `cheni check --refresh`.
+pub fn clear() -> std::io::Result<()> {
+    let path = cache_path();
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Create a new cache with the current timestamp.
 pub fn new_with_timestamp() -> Cache {
     Cache {

@@ -397,7 +397,7 @@ fn check_cache() -> CheckResult {
                 s.null_entries, s.total_entries
             ),
             hint: Some(
-                "Wipe with 'rm ~/.cache/cheni/versions.json' — they'll be re-fetched."
+                "Wipe with 'cheni check --refresh' (or rm ~/.cache/cheni/versions.json)."
                     .to_string(),
             ),
         };

@@ -93,6 +93,10 @@ enum Commands {
         /// Machine-readable JSON output on stdout (disables spinners + colour)
         #[arg(long)]
         json: bool,
+
+        /// Ignore the on-disk Repology cache and re-fetch every lookup
+        #[arg(long)]
+        refresh: bool,
     },
 
     /// Pin a package or category for update via nixpkgs-latest
@@ -290,10 +294,10 @@ async fn main() -> Result<()> {
     // Dispatch to the right command
     match command {
         Commands::Check {
-            dev, apps, desktop, hardware, category, details, json,
+            dev, apps, desktop, hardware, category, details, json, refresh,
         } => {
             let cat = resolve_category(dev, apps, desktop, hardware, category);
-            cmd::check::run(cat.as_deref(), details, json).await?;
+            cmd::check::run(cat.as_deref(), details, json, refresh).await?;
         }
 
         Commands::Pin {
