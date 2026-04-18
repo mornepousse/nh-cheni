@@ -189,6 +189,12 @@ fn check_nixpkgs_order(flake_dir: &Path) -> InputOrder {
 }
 
 /// Check if flake.lock has uncommitted changes (flake inputs updated).
+///
+/// Returns `false` when `git` isn't available, the flake isn't a git
+/// repo, or the diff fails — with a debug log in each case so `-v`
+/// surfaces the real reason. A silent `false` here would mask a user
+/// who just ran `cheni pin --flakes` and expected their changes to be
+/// picked up.
 fn is_flake_lock_dirty(flake_dir: &Path) -> bool {
     let output = Command::new("git")
         .args(["diff", "--name-only", "flake.lock"])
@@ -196,8 +202,20 @@ fn is_flake_lock_dirty(flake_dir: &Path) -> bool {
         .output();
 
     match output {
-        Ok(o) => !o.stdout.is_empty(),
-        Err(_) => false,
+        Ok(o) if o.status.success() => !o.stdout.is_empty(),
+        Ok(o) => {
+            let stderr = String::from_utf8_lossy(&o.stderr);
+            tracing::debug!(
+                "git diff returned {:?}, stderr: {}",
+                o.status.code(),
+                stderr.lines().next().unwrap_or("<empty>")
+            );
+            false
+        }
+        Err(e) => {
+            tracing::debug!("git not available to check flake.lock dirtiness: {}", e);
+            false
+        }
     }
 }
 

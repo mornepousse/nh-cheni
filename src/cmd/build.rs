@@ -62,6 +62,11 @@ pub fn run() -> Result<()> {
     let reader = BufReader::new(stderr_pipe);
     let mut captured_stderr = String::new();
 
+    // Stream line-by-line so the user sees nh output as it happens
+    // (long rebuilds would otherwise print nothing until completion).
+    // On a read/UTF-8 error we log + skip the line instead of breaking,
+    // so a single bad byte in an embedded build log doesn't silently
+    // truncate the captured stderr and break the error parser below.
     for line in reader.lines() {
         match line {
             Ok(line) => {
@@ -69,7 +74,10 @@ pub fn run() -> Result<()> {
                 captured_stderr.push_str(&line);
                 captured_stderr.push('\n');
             }
-            Err(_) => break,
+            Err(e) => {
+                tracing::debug!("skipped unreadable stderr line: {}", e);
+                continue;
+            }
         }
     }
 
