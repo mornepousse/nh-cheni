@@ -51,8 +51,13 @@ pub fn run() -> Result<()> {
         .spawn()
         .context("Failed to run 'nh os switch'. Is nh installed?")?;
 
-    // Read stderr in real time: display to user AND capture for parsing
-    let stderr_pipe = child.stderr.take().unwrap();
+    // Read stderr in real time: display to user AND capture for parsing.
+    // stderr was piped above, so this is always Some — expect() makes the
+    // invariant explicit for any future reader.
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .expect("stderr was set to piped, must be Some");
     let reader = BufReader::new(stderr_pipe);
     let mut captured_stderr = String::new();
 
@@ -109,8 +114,11 @@ pub fn run() -> Result<()> {
 
 /// Strip ANSI escape codes from a string.
 fn strip_ansi(s: &str) -> String {
-    let re = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
-    re.replace_all(s, "").to_string()
+    // Compiled once at first use, reused for every line of build output
+    // on the hot path — recompiling per call showed up in profiles.
+    static ANSI_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\x1b\[[0-9;]*m").expect("valid regex"));
+    ANSI_RE.replace_all(s, "").to_string()
 }
 
 /// Find file location near an error line (looks both before and after).

@@ -32,15 +32,19 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
 
     // Check if the package exists in the store
     let store_packages = store::read_installed_packages()?;
-    let store_pkg = store_packages.iter().find(|p| p.name.to_lowercase() == name.to_lowercase());
-
-    if store_pkg.is_none() {
-        anyhow::bail!(
-            "Package '{}' not found in the nix store.\nIs it installed?",
-            name
-        );
-    }
-    let installed_version = &store_pkg.unwrap().version;
+    let store_pkg = match store_packages
+        .iter()
+        .find(|p| p.name.to_lowercase() == name.to_lowercase())
+    {
+        Some(p) => p,
+        None => {
+            anyhow::bail!(
+                "Package '{}' not found in the nix store.\nIs it installed?",
+                name
+            );
+        }
+    };
+    let installed_version = &store_pkg.version;
 
     // Check the available version on Repology
     let lookups = repology::lookup_versions(&[name.to_string()]).await?;

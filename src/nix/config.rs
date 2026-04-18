@@ -363,13 +363,24 @@ pub fn extract_package_names(nix_files: &[PathBuf]) -> Vec<String> {
 pub fn extract_package_names_with_files(
     nix_files: &[PathBuf],
 ) -> std::collections::HashMap<String, Vec<PathBuf>> {
+    // Regex patterns are hardcoded and unit-tested — compile once.
+    // Lazy static so a 'cheni check' loop running over ~100 files only
+    // pays the compile cost the first time the extractor is called.
+    static PKGS_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"pkgs\.([a-zA-Z][a-zA-Z0-9_-]*)").expect("valid regex")
+    });
+    static PKG_LINE_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"(?m)^\s+([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_-]*)*)\s*(?:#.*)?$",
+        )
+        .expect("valid regex")
+    });
+
     let mut by_name: std::collections::HashMap<String, Vec<PathBuf>> =
         std::collections::HashMap::new();
 
-    let pkgs_re = regex::Regex::new(r"pkgs\.([a-zA-Z][a-zA-Z0-9_-]*)").unwrap();
-    let pkg_line_re = regex::Regex::new(
-        r"(?m)^\s+([a-zA-Z][a-zA-Z0-9_-]*(?:\.[a-zA-Z][a-zA-Z0-9_-]*)*)\s*(?:#.*)?$"
-    ).unwrap();
+    let pkgs_re = &*PKGS_RE;
+    let pkg_line_re = &*PKG_LINE_RE;
 
     for file_path in nix_files {
         let content = match std::fs::read_to_string(file_path) {
