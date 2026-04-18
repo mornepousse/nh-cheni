@@ -430,7 +430,7 @@ fn pin_flake_input(flake_dir: &std::path::Path, name: &str) -> Result<()> {
         .args(["flake", "update", name])
         .current_dir(flake_dir)
         .status()
-        .context("Failed to run 'nix flake update'")?;
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
     if !status.success() {
         anyhow::bail!("nix flake update {} failed", name);
