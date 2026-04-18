@@ -28,6 +28,10 @@ colored = "3"
 # Interactive prompts (used by `cheni` with no subcommand)
 dialoguer = { version = "0.11", default-features = false }
 
+# Terminal size detection (re-exported from a transitive dep, used to wrap
+# the `cheni history` summary line cleanly)
+terminal_size = "0.4"
+
 # Utilities
 regex = "1"
 anyhow = "1"

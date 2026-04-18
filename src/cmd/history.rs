@@ -16,6 +16,8 @@ use tracing::debug;
 /// Options accepted by `cheni history`.
 pub struct HistoryOptions {
     pub diff: bool,
+    /// Show the full summary even if it doesn't fit on one line.
+    pub full: bool,
     pub limit: Option<usize>,
     /// Specific generation numbers or ranges to delete.
     pub delete: Vec<String>,
@@ -129,9 +131,15 @@ pub fn run(opts: HistoryOptions) -> Result<()> {
                     }
                 }
             } else {
-                // Compact summary: count changes
+                // Compact summary. Default truncates to terminal width;
+                // --full keeps the whole thing.
                 if let Some(summary) = get_diff_summary(&previous.store_path, &gen.store_path) {
-                    println!("      {}", summary.dimmed());
+                    let display = if opts.full {
+                        summary
+                    } else {
+                        truncate_to_terminal(&summary, 6) // 6 = "      " indent
+                    };
+                    println!("      {}", display.dimmed());
                 }
             }
         }
@@ -148,7 +156,47 @@ pub fn run(opts: HistoryOptions) -> Result<()> {
         println!("{}", format!("{} generation(s) total", total).dimmed());
     }
 
+    if !opts.full {
+        println!(
+            "{}",
+            "Tip: pass --full to see the complete summary, --diff for the per-package nvd output."
+                .dimmed()
+        );
+    }
+
     Ok(())
+}
+
+/// Truncate `s` so that, prefixed by `indent` spaces, it fits the terminal
+/// width. Adds a trailing " …" marker when truncation happens.
+///
+/// Width is taken from the TIOCGWINSZ ioctl when stdout is a TTY, otherwise
+/// from $COLUMNS (handy in pipes / scripts), otherwise no truncation occurs.
+fn truncate_to_terminal(s: &str, indent: usize) -> String {
+    let cols = terminal_size::terminal_size()
+        .map(|(terminal_size::Width(w), _)| w as usize)
+        .or_else(|| std::env::var("COLUMNS").ok().and_then(|v| v.parse().ok()));
+
+    let cols = match cols {
+        Some(c) => c,
+        None => return s.to_string(),
+    };
+
+    let budget = cols.saturating_sub(indent);
+    if s.chars().count() <= budget {
+        return s.to_string();
+    }
+    let suffix = " …";
+    let take = budget.saturating_sub(suffix.chars().count());
+    let mut out: String = s.chars().take(take).collect();
+    // Avoid cutting in the middle of a word if there's a recent space
+    if let Some(last_space) = out.rfind(' ') {
+        if out.len() - last_space < 12 {
+            out.truncate(last_space);
+        }
+    }
+    out.push_str(suffix);
+    out
 }
 
 /// Resolve which generations to delete from the user's flags, then run

@@ -20,6 +20,11 @@ use crate::version::parse::parse_version;
 pub async fn pin_one(name: &str, force: bool) -> Result<()> {
     let nix_config = config::detect()?;
 
+    if !config::is_initialized(&nix_config.flake_dir) {
+        super::check::print_first_run_hint();
+        return Ok(());
+    }
+
     // Check if this is a flake input (e.g. zen-browser, claude-code)
     if flake::is_flake_input(&nix_config.flake_dir, name) {
         return pin_flake_input(&nix_config.flake_dir, name);

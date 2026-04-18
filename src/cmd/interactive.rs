@@ -237,6 +237,7 @@ async fn dispatch(action: Action) -> Result<()> {
         Action::Build => super::build::run()?,
         Action::History => super::history::run(super::history::HistoryOptions {
             diff: false,
+            full: false,
             limit: None,
             delete: Vec::new(),
             prune: false,
@@ -247,6 +248,7 @@ async fn dispatch(action: Action) -> Result<()> {
         })?,
         Action::Prune => super::history::run(super::history::HistoryOptions {
             diff: false,
+            full: false,
             limit: None,
             delete: Vec::new(),
             prune: true,

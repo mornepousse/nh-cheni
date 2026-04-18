@@ -98,6 +98,20 @@ fn is_nixos_config_flake(dir: &Path) -> bool {
     }
 }
 
+/// Has `cheni init` been run? Looks for `nixpkgs-latest` in the flake
+/// (either the source flake.nix or the lock file). Used by gateway
+/// commands to surface a friendly message before failing in surprising
+/// ways further down the line.
+pub fn is_initialized(flake_dir: &Path) -> bool {
+    let flake_text = std::fs::read_to_string(flake_dir.join("flake.nix")).unwrap_or_default();
+    if flake_text.contains("nixpkgs-latest") {
+        return true;
+    }
+    // Fall back to the lock file in case the input is declared via include
+    let lock_text = std::fs::read_to_string(flake_dir.join("flake.lock")).unwrap_or_default();
+    lock_text.contains("\"nixpkgs-latest\"")
+}
+
 /// Detect the system hostname.
 fn detect_hostname() -> Result<String> {
     let output = Command::new("hostname")

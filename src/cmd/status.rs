@@ -1,7 +1,10 @@
 //! `cheni status` command.
 //!
-//! Shows the current state: config location, active pins,
-//! and input timestamps. Also warns if pins are obsolete.
+//! Shows the current state of the system at a glance: where the config
+//! lives, which generation is active, the age of every flake input,
+//! the active pins, and a "Suggestions" section listing the next safe
+//! actions to take. The goal is for a user who has lost track of where
+//! they are to read this output and know what to do.
 
 use std::path::Path;
 
@@ -16,99 +19,220 @@ use super::obsolete::count_obsolete_pins;
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     let current_pins = pins::read(&nix_config.flake_dir)?;
+    let lock_path = nix_config.flake_dir.join("flake.lock");
+    let obsolete_count = if current_pins.is_empty() {
+        0
+    } else {
+        count_obsolete_pins(&lock_path, &current_pins)
+    };
 
-    // Config info
     println!("{}", "=== cheni status ===\n".bold());
+
+    // ── Config ─────────────────────────────────────────────
     println!(
-        "  {:<16} {}",
+        "  {:<18} {}",
         "Config:".dimmed(),
         nix_config.flake_dir.display()
     );
-    println!(
-        "  {:<16} {}",
-        "Hostname:".dimmed(),
-        nix_config.hostname
-    );
+    println!("  {:<18} {}", "Hostname:".dimmed(), nix_config.hostname);
 
-    // Module categories
     let categories = config::list_module_categories(&nix_config.flake_dir);
     if !categories.is_empty() {
+        println!("  {:<18} {}", "Modules:".dimmed(), categories.join(", "));
+    }
+
+    // ── Active generation ──────────────────────────────────
+    let active = read_active_generation();
+    if let Some((num, age)) = &active {
         println!(
-            "  {:<16} {}",
-            "Modules:".dimmed(),
-            categories.join(", ")
+            "  {:<18} #{} ({})",
+            "Active generation:".dimmed(),
+            num.to_string().bold(),
+            age
         );
     }
 
-    // Input timestamps
-    let lock_path = nix_config.flake_dir.join("flake.lock");
-    if let Some((base_date, latest_date)) = read_input_dates(&lock_path) {
-        println!(
-            "  {:<16} {}",
-            "nixpkgs:".dimmed(),
-            base_date
-        );
-        println!(
-            "  {:<16} {}",
-            "nixpkgs-latest:".dimmed(),
-            latest_date
-        );
+    // ── Flake inputs (all root inputs, sorted) ─────────────
+    println!();
+    println!("  {}", "Flake inputs:".bold());
+    let inputs = read_all_root_inputs(&lock_path);
+    let lock_modified = lock_path.metadata().ok().and_then(|m| m.modified().ok());
+    let active_modified = active.as_ref().and_then(|(n, _)| {
+        std::fs::symlink_metadata(format!("/nix/var/nix/profiles/system-{}-link", n))
+            .ok()
+            .and_then(|m| m.modified().ok())
+    });
+
+    let lock_newer_than_active = match (lock_modified, active_modified) {
+        (Some(l), Some(a)) => l > a,
+        _ => false,
+    };
+
+    for (name, age, rev) in &inputs {
+        let rev_str = if rev.is_empty() { String::new() } else { format!(" ({})", rev) };
+        println!("    {:<22} {}{}", name, age.dimmed(), rev_str.dimmed());
     }
 
-    // Active pins
+    // ── Pins ───────────────────────────────────────────────
     println!();
     if current_pins.is_empty() {
-        println!("  {} No active pins.", "●".dimmed());
+        println!("  {:<18} {}", "Pins:".bold(), "no active pins".dimmed());
     } else {
-        // Check if pins are obsolete (nixpkgs caught up)
-        let pins_obsolete = count_obsolete_pins(&lock_path, &current_pins) > 0;
-
-        if pins_obsolete {
-            println!(
-                "  {} {} active pin(s) ({}):",
-                "●".red(),
+        let header = if obsolete_count > 0 {
+            format!(
+                "{} active ({} obsolete)",
                 current_pins.len(),
-                "obsolete — nixpkgs caught up".red()
-            );
+                obsolete_count
+            )
+            .red()
+            .to_string()
         } else {
-            println!(
-                "  {} {} active pin(s):",
-                "●".yellow(),
-                current_pins.len()
-            );
-        }
-
+            format!("{} active", current_pins.len()).yellow().to_string()
+        };
+        println!("  {:<18} {}", "Pins:".bold(), header);
         for name in &current_pins {
             println!("    {} {}", "→".yellow(), name);
         }
+    }
 
-        if pins_obsolete {
-            println!(
-                "\n  Run '{}' to clean up obsolete pins.",
-                "cheni clean".bold()
-            );
-        }
+    // ── Suggestions ────────────────────────────────────────
+    println!();
+    println!("  {}", "Suggestions:".bold());
+    let mut any_suggestion = false;
+
+    if !config::is_initialized(&nix_config.flake_dir) {
+        println!(
+            "    {} no nixpkgs-latest input detected — run '{}' to set up",
+            "⚠".yellow(),
+            "cheni init".bold()
+        );
+        any_suggestion = true;
+    }
+
+    if obsolete_count > 0 {
+        println!(
+            "    {} {} obsolete pin(s) — run '{}' to remove",
+            "⚠".yellow(),
+            obsolete_count,
+            "cheni clean".bold()
+        );
+        any_suggestion = true;
+    }
+
+    if lock_newer_than_active {
+        println!(
+            "    {} flake.lock is newer than the active generation — run '{}' to apply",
+            "⚠".yellow(),
+            "cheni build".bold()
+        );
+        any_suggestion = true;
+    }
+
+    if !current_pins.is_empty() && obsolete_count < current_pins.len() {
+        println!(
+            "    {} pinned packages waiting — run '{}' to refresh nixpkgs-latest + rebuild",
+            "→".cyan(),
+            "cheni update".bold()
+        );
+        any_suggestion = true;
+    }
+
+    if !any_suggestion {
+        println!(
+            "    {} everything looks clean — run '{}' to scan for new updates",
+            "✓".green(),
+            "cheni check".bold()
+        );
     }
 
     println!();
     Ok(())
 }
 
-/// Read human-readable dates from flake.lock for both nixpkgs inputs.
-fn read_input_dates(lock_path: &Path) -> Option<(String, String)> {
-    let content = std::fs::read_to_string(lock_path).ok()?;
-    let lock: serde_json::Value = serde_json::from_str(&content).ok()?;
+/// Look up the currently active generation number + a human-readable age.
+fn read_active_generation() -> Option<(u32, String)> {
+    let target = std::fs::read_link("/nix/var/nix/profiles/system").ok()?;
+    let name = target.file_name()?.to_str()?;
+    let num: u32 = name
+        .strip_prefix("system-")?
+        .strip_suffix("-link")?
+        .parse()
+        .ok()?;
 
-    let base_time = get_input_timestamp(&lock, "nixpkgs")?;
-    let latest_time = get_input_timestamp(&lock, "nixpkgs-latest")?;
+    let modified = std::fs::symlink_metadata(format!(
+        "/nix/var/nix/profiles/system-{}-link",
+        num
+    ))
+    .ok()?
+    .modified()
+    .ok()?;
+    let age = format_age(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs()
+            .saturating_sub(
+                modified
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .ok()?
+                    .as_secs(),
+            )
+            / 86400,
+    );
+    Some((num, age))
+}
 
-    let base_rev = get_input_rev(&lock, "nixpkgs").unwrap_or_default();
-    let latest_rev = get_input_rev(&lock, "nixpkgs-latest").unwrap_or_default();
+/// List every root-level flake input with its age and short rev.
+fn read_all_root_inputs(lock_path: &Path) -> Vec<(String, String, String)> {
+    let content = match std::fs::read_to_string(lock_path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+    let lock: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
 
-    let base_date = format_timestamp(base_time, &base_rev);
-    let latest_date = format_timestamp(latest_time, &latest_rev);
+    let root_inputs = lock
+        .get("nodes")
+        .and_then(|n| n.get("root"))
+        .and_then(|r| r.get("inputs"))
+        .and_then(|i| i.as_object());
 
-    Some((base_date, latest_date))
+    let names: Vec<String> = match root_inputs {
+        Some(m) => m.keys().cloned().collect(),
+        None => return Vec::new(),
+    };
+
+    let mut out = Vec::new();
+    for name in names {
+        let ts = get_input_timestamp(&lock, &name).unwrap_or(0);
+        let rev = get_input_rev(&lock, &name).unwrap_or_default();
+        let age = if ts == 0 {
+            "?".to_string()
+        } else {
+            format_age(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs()
+                    .saturating_sub(ts)
+                    / 86400,
+            )
+        };
+        out.push((name, age, rev));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// "today" / "1 day ago" / "N days ago".
+fn format_age(days: u64) -> String {
+    match days {
+        0 => "today".to_string(),
+        1 => "1 day ago".to_string(),
+        n => format!("{} days ago", n),
+    }
 }
 
 /// Resolve a root input name to its actual node.
@@ -139,28 +263,4 @@ fn get_input_rev(lock: &serde_json::Value, name: &str) -> Option<String> {
         .as_str()?;
 
     Some(rev[..12.min(rev.len())].to_string())
-}
-
-/// Format a unix timestamp + short rev into a human-readable string.
-fn format_timestamp(ts: u64, rev: &str) -> String {
-    // Simple date formatting without pulling in chrono
-    let days_ago = (std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-        .saturating_sub(ts)) / 86400;
-
-    let age = if days_ago == 0 {
-        "today".to_string()
-    } else if days_ago == 1 {
-        "1 day ago".to_string()
-    } else {
-        format!("{} days ago", days_ago)
-    };
-
-    if rev.is_empty() {
-        age
-    } else {
-        format!("{} ({})", age, rev)
-    }
 }

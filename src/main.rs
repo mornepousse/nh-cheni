@@ -163,6 +163,10 @@ enum Commands {
         #[arg(long)]
         diff: bool,
 
+        /// Show the full per-step package list, even when it overflows one line
+        #[arg(short, long)]
+        full: bool,
+
         /// Limit the number of generations shown (default: 10)
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
@@ -340,9 +344,10 @@ async fn main() -> Result<()> {
             cmd::self_update::run()?;
         }
 
-        Commands::History { diff, limit, delete, prune, keep, older_than, gc, yes } => {
+        Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes } => {
             cmd::history::run(cmd::history::HistoryOptions {
                 diff,
+                full,
                 limit,
                 delete,
                 prune,

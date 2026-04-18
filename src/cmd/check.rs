@@ -31,6 +31,11 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     // 1. Detect the NixOS configuration
     let nix_config = config::detect()?;
 
+    if !config::is_initialized(&nix_config.flake_dir) {
+        print_first_run_hint();
+        return Ok(());
+    }
+
     // Automatic warning if any pins are obsolete
     let current_pins = pins::read(&nix_config.flake_dir)?;
     if !current_pins.is_empty() {
@@ -285,4 +290,23 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Friendly explanation shown when `cheni init` has never been run.
+/// Centralised here and reused by other gateway commands (pin, update).
+pub fn print_first_run_hint() {
+    println!("{}\n", "=== cheni — first run ===".bold());
+    println!(
+        "  Your flake doesn't declare {} yet, so per-package",
+        "nixpkgs-latest".bold()
+    );
+    println!("  updates aren't available.");
+    println!();
+    println!("  Run '{}' to add the input + overlay automatically.", "cheni init".bold());
+    println!();
+    println!("  After that:");
+    println!("    {} {}    {}", "•".cyan(), "cheni check".bold(), "see what's outdated".dimmed());
+    println!("    {} {}      {}", "•".cyan(), "cheni pin <pkg>".bold(), "pin one package to update".dimmed());
+    println!("    {} {}        {}", "•".cyan(), "cheni update".bold(), "apply pinned updates".dimmed());
+    println!();
 }

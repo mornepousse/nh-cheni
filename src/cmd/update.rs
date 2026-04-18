@@ -23,6 +23,12 @@ use crate::nix::{config, pins};
 /// 4. Rebuild the system with nh os switch
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
+
+    if !config::is_initialized(&nix_config.flake_dir) {
+        super::check::print_first_run_hint();
+        return Ok(());
+    }
+
     let current_pins = pins::read(&nix_config.flake_dir)?;
 
     // Check if flake.lock is dirty (flake inputs were updated via cheni pin)
