@@ -12,6 +12,7 @@ use tracing::debug;
 use crate::nix::config;
 
 /// A parsed build error with a human-readable explanation.
+#[derive(Debug)]
 struct ParsedError {
     /// What failed (package name or eval path).
     what: String,
@@ -616,6 +617,75 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].category, "Undefined variable");
         assert_eq!(errors[0].what, "pkgss");
+    }
+
+    #[test]
+    fn test_parse_cargohash_out_of_date() {
+        // Real nh output when a Cargo dep is added without bumping cargoHash.
+        // This one was the reason cheni itself failed to self-update once.
+        let stderr = "\
+cheni> ERROR: cargoHash or cargoSha256 is out of date
+cheni> Cargo.lock is not the same in /build/cheni-0.1.0-vendor";
+        let errors = parse_errors(stderr);
+        assert!(
+            errors.iter().any(|e| e.category == "Hash mismatch"),
+            "expected Hash mismatch, got {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_parse_python_interpreter_mismatch() {
+        let stderr = "error: sphinx-9.1.0 not supported for interpreter python3.13";
+        let errors = parse_errors(stderr);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].category, "Incompatible package");
+        assert_eq!(errors[0].what, "sphinx-9.1.0");
+    }
+
+    #[test]
+    fn test_parse_python_mismatch_deduplicates() {
+        // nh can repeat the same error across several builder retries —
+        // the parser should only emit one entry.
+        let stderr = "\
+error: sphinx-9.1.0 not supported for interpreter python3.13
+... some noise ...
+error: sphinx-9.1.0 not supported for interpreter python3.13";
+        let errors = parse_errors(stderr);
+        let dups = errors
+            .iter()
+            .filter(|e| e.category == "Incompatible package" && e.what == "sphinx-9.1.0")
+            .count();
+        assert_eq!(dups, 1, "expected dedup, got {:?}", errors);
+    }
+
+    #[test]
+    fn test_parse_multiple_errors() {
+        // A rebuild can surface several independent errors — we should
+        // collect them all, not just the first.
+        let stderr = "\
+error: undefined variable 'pkgss'
+at /file.nix:1:1
+error: Package 'mesa' is marked as broken.";
+        let errors = parse_errors(stderr);
+        assert!(errors.len() >= 2, "expected >=2, got {:?}", errors);
+    }
+
+    #[test]
+    fn test_parse_empty_stderr() {
+        // Truly empty stderr → no errors. Must not panic or return bogus
+        // "error: " entries from the generic fallback.
+        let errors = parse_errors("");
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_parse_generic_error_fallback() {
+        // An error pattern we don't specifically recognise still shows up
+        // as a generic entry so the user sees *something*, not silence.
+        let errors = parse_errors("error: some novel upstream message we don't know yet");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].message.contains("some novel"));
     }
 
     #[test]
