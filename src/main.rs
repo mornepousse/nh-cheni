@@ -84,6 +84,10 @@ enum Commands {
         /// Custom category name
         #[arg(long, value_name = "CATEGORY")]
         category: Option<String>,
+        /// Also list packages classified as "Newer" or "Unknown" so you
+        /// can inspect why
+        #[arg(long)]
+        details: bool,
     },
 
     /// Pin a package or category for update via nixpkgs-latest
@@ -274,10 +278,10 @@ async fn main() -> Result<()> {
     // Dispatch to the right command
     match command {
         Commands::Check {
-            dev, apps, desktop, hardware, category,
+            dev, apps, desktop, hardware, category, details,
         } => {
             let cat = resolve_category(dev, apps, desktop, hardware, category);
-            cmd::check::run(cat.as_deref()).await?;
+            cmd::check::run(cat.as_deref(), details).await?;
         }
 
         Commands::Pin {

@@ -30,7 +30,7 @@ struct CheckResult {
 /// Run the `cheni check` command.
 ///
 /// If `category` is Some, only show packages from that module directory.
-pub async fn run(category: Option<&str>) -> Result<()> {
+pub async fn run(category: Option<&str>, details: bool) -> Result<()> {
     // 1. Detect the NixOS configuration
     let nix_config = config::detect()?;
 
@@ -194,15 +194,15 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     // 6. Compare versions and build results
     let mut minor_updates = Vec::new();
     let mut major_updates = Vec::new();
+    let mut newer_results: Vec<CheckResult> = Vec::new();
+    let mut unknown_names: Vec<String> = Vec::new();
     let mut up_to_date = 0;
-    let mut newer = 0;
-    let mut unknown = 0;
 
     for (name, installed_version) in &packages_to_check {
         let lookup = match lookup_map.get(name) {
             Some(l) => l,
             None => {
-                unknown += 1;
+                unknown_names.push(name.clone());
                 continue;
             }
         };
@@ -210,7 +210,7 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         let available = match &lookup.version {
             Some(v) => v,
             None => {
-                unknown += 1;
+                unknown_names.push(name.clone());
                 continue;
             }
         };
@@ -239,9 +239,11 @@ pub async fn run(category: Option<&str>) -> Result<()> {
             VersionDiff::Equal => up_to_date += 1,
             VersionDiff::Minor => minor_updates.push(result),
             VersionDiff::Major => major_updates.push(result),
-            VersionDiff::Newer => newer += 1,
+            VersionDiff::Newer => newer_results.push(result),
         }
     }
+    let newer = newer_results.len();
+    let unknown = unknown_names.len();
 
     // 7. Display results — flake inputs FIRST (most actionable), then packages.
     // Skip inputs that aren't referenced anywhere in the active modules
@@ -327,6 +329,47 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     if minor_updates.is_empty() && major_updates.is_empty() {
         println!("{}", "Everything is up to date!".green().bold());
         println!();
+    }
+
+    // --details: list packages in the Newer/Unknown buckets so the user
+    // can spot mis-mappings, calver/semver clashes, or genuine pinned
+    // ahead-of-nixpkgs cases.
+    if details && !newer_results.is_empty() {
+        println!(
+            "{} {}",
+            "Newer than nixpkgs".cyan().bold(),
+            "(installed > available — usually fine, often a pinned package):".dimmed()
+        );
+        for r in &newer_results {
+            println!(
+                "  {:<24} {:<14} {} {:<14} {}",
+                r.name,
+                r.installed.cyan(),
+                ">".dimmed(),
+                r.available.dimmed(),
+                format_origin(r).dimmed(),
+            );
+        }
+        println!();
+    }
+
+    if details && !unknown_names.is_empty() {
+        println!(
+            "{} {}",
+            "Unknown to Repology".dimmed().bold(),
+            "(no version data — may need a name mapping):".dimmed()
+        );
+        for name in &unknown_names {
+            println!("  {}", name);
+        }
+        println!();
+    }
+
+    if !details && (newer + unknown) > 0 {
+        println!(
+            "{}",
+            "Tip: pass --details to list 'Newer' and 'Unknown' packages.".dimmed()
+        );
     }
 
     // Summary line
