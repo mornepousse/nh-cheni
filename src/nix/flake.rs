@@ -247,9 +247,12 @@ struct RemoteCommitInfo {
 /// Each input is queried in its own thread (concurrently) so the wall-clock
 /// time is roughly that of the slowest single API call.
 pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
+    // Use the same configurable timeout as the Repology client — on a
+    // slow link the GitHub/GitLab API commits call can be just as slow
+    // as Repology, and a 5s hard cap frequently tripped in practice.
     let client = reqwest::blocking::Client::builder()
         .user_agent("cheni/0.1")
-        .timeout(std::time::Duration::from_secs(5))
+        .timeout(crate::api::net::http_timeout())
         .build();
 
     let client = match client {

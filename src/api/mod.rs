@@ -4,4 +4,5 @@
 //! of results to avoid unnecessary network requests.
 
 pub mod cache;
+pub mod net;
 pub mod repology;

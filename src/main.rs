@@ -53,7 +53,12 @@ Discovery:\n  \
 Maintenance:\n  \
   cheni clean                  Remove obsolete pins (caught up by nixpkgs)\n  \
   cheni doctor                 Health checks on the cheni setup\n  \
-  cheni self-update            Update cheni itself"
+  cheni self-update            Update cheni itself\n\
+\n\
+Environment:\n  \
+  CHENI_CONFIG=<path>          Override the NixOS flake directory\n  \
+  CHENI_HTTP_TIMEOUT=<secs>    Per-request HTTP timeout (default 30, min 5)\n  \
+  NO_COLOR=1                   Disable coloured output"
 )]
 struct Cli {
     /// Increase verbosity (-v for debug, -vv for trace)

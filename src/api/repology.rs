@@ -121,10 +121,11 @@ pub async fn lookup_versions(names: &[String]) -> Result<Vec<PackageLookup>> {
 
     debug!("Cache: {} hits, {} misses", results.len(), to_fetch.len());
 
-    // Query the API for cache misses
+    // Query the API for cache misses. Timeout is generous by default
+    // (30s) and overridable via $CHENI_HTTP_TIMEOUT for slow links.
     let client = reqwest::Client::builder()
         .user_agent("cheni/0.1")
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(super::net::http_timeout())
         .build()
         .context("Failed to create HTTP client")?;
 

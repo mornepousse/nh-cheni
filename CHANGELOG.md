@@ -63,6 +63,10 @@ semver.
   `$HOSTNAME` when the `hostname` binary isn't in PATH.
 - **Concurrent flake checks** — one thread per input for the GitHub/
   GitLab API call, run in parallel with Repology lookups.
+- **Adaptive HTTP timeouts** — default 30s per request (was 10s for
+  Repology, 5s for GitHub/GitLab) to tolerate slow connections and
+  weak machines. Overridable via `CHENI_HTTP_TIMEOUT=<secs>` (min 5).
+  Reported in `cheni bug-report` when set.
 
 ### Changed
 - **`cheni check` layout** — flake inputs section moved to the top

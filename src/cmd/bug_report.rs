@@ -56,6 +56,15 @@ pub fn run() -> Result<()> {
     if let Some(nix) = program_version("nix", &["--version"]) {
         println!("- **nix**: `{}`", nix);
     }
+    // Environment overrides worth knowing when debugging a report
+    let env_vars = ["CHENI_CONFIG", "CHENI_HTTP_TIMEOUT", "NO_COLOR"];
+    let set_vars: Vec<String> = env_vars
+        .iter()
+        .filter_map(|v| std::env::var(v).ok().map(|val| format!("`{}={}`", v, val)))
+        .collect();
+    if !set_vars.is_empty() {
+        println!("- **Env overrides**: {}", set_vars.join(", "));
+    }
     println!();
 
     // ── Config overview ─────────────────────────────────
