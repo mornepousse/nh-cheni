@@ -100,31 +100,50 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    // 5. Query Repology for latest versions
+    // 5. Query Repology for package versions AND flake updates concurrently.
     let names: Vec<String> = packages_to_check.iter().map(|(n, _)| n.clone()).collect();
     let header = match category {
-        Some(cat) => format!("Checking {} packages (modules/{}/)", names.len(), cat),
-        None => format!("Checking {} packages...", names.len()),
+        Some(cat) => format!("Checking {} packages (modules/{}/) + flake inputs", names.len(), cat),
+        None => format!("Checking {} packages + flake inputs...", names.len()),
     };
     println!("{}", header.dimmed());
 
-    // Spinner in background while API calls are running
+    // Spinner in background while API calls are running. Skip if stderr is
+    // not a TTY (piped/redirected) — \r artifacts would clutter the output.
+    use std::io::IsTerminal;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     let done = Arc::new(AtomicBool::new(false));
     let done_clone = done.clone();
+    let is_tty = std::io::stderr().is_terminal();
     let spinner = std::thread::spawn(move || {
+        if !is_tty {
+            return;
+        }
         let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let mut i = 0;
         while !done_clone.load(Ordering::Relaxed) {
-            eprint!("\r  {} Querying Repology...", frames[i % frames.len()]);
+            eprint!("\r  {} Querying remote APIs...", frames[i % frames.len()]);
             std::thread::sleep(std::time::Duration::from_millis(100));
             i += 1;
         }
-        eprint!("\r                              \r"); // Clear spinner line
+        eprint!("\r                              \r");
+    });
+
+    // Spawn flake check in a blocking thread (uses sync reqwest + std::thread::scope).
+    // It runs in parallel with the async Repology lookups below.
+    let flake_dir = nix_config.flake_dir.clone();
+    let flake_handle = tokio::task::spawn_blocking(move || {
+        let mut inputs = match flake::read_flake_inputs(&flake_dir) {
+            Ok(i) => i,
+            Err(_) => return Vec::new(),
+        };
+        flake::check_flake_updates(&mut inputs);
+        inputs
     });
 
     let lookups = repology::lookup_versions(&names).await?;
+    let flake_inputs = flake_handle.await.unwrap_or_default();
 
     // Stop spinner
     done.store(true, Ordering::Relaxed);
@@ -178,7 +197,39 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         }
     }
 
-    // 7. Display results
+    // 7. Display results — flake inputs FIRST (most actionable), then packages.
+    if category.is_none() && !flake_inputs.is_empty() {
+        let has_flake_updates = flake_inputs.iter().any(|i| i.has_update == Some(true));
+        if has_flake_updates {
+            println!("{}:", "Flake inputs (updates available)".yellow().bold());
+        } else {
+            println!("{}:", "Flake inputs".bold());
+        }
+
+        for input in &flake_inputs {
+            let version_str = input.installed_version
+                .as_deref()
+                .unwrap_or("?");
+
+            let status = match (&input.has_update, &input.remote_age) {
+                (Some(true), Some(date)) => {
+                    format!("{} ({})", "UPDATE".yellow(), date.dimmed())
+                }
+                (Some(true), None) => "UPDATE".yellow().to_string(),
+                (Some(false), _) => "ok".green().to_string(),
+                (None, _) => "?".dimmed().to_string(),
+            };
+
+            println!(
+                "  {:<24} {:<14} {}",
+                input.name,
+                version_str.dimmed(),
+                status,
+            );
+        }
+        println!();
+    }
+
     if !minor_updates.is_empty() {
         println!("{}:", "Updates available".yellow().bold());
         for r in &minor_updates {
@@ -216,46 +267,6 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     if minor_updates.is_empty() && major_updates.is_empty() {
         println!("{}", "Everything is up to date!".green().bold());
         println!();
-    }
-
-    // 8. Show flake inputs (if not filtering by category)
-    if category.is_none() {
-        if let Ok(mut inputs) = flake::read_flake_inputs(&nix_config.flake_dir) {
-            if !inputs.is_empty() {
-                // Check for updates from remote repos
-                flake::check_flake_updates(&mut inputs);
-
-                let has_flake_updates = inputs.iter().any(|i| i.has_update == Some(true));
-                if has_flake_updates {
-                    println!("{}:", "Flake inputs (updates available)".yellow().bold());
-                } else {
-                    println!("{}:", "Flake inputs".bold());
-                }
-
-                for input in &inputs {
-                    let version_str = input.installed_version
-                        .as_deref()
-                        .unwrap_or("?");
-
-                    let status = match (&input.has_update, &input.remote_age) {
-                        (Some(true), Some(date)) => {
-                            format!("{} ({})", "UPDATE".yellow(), date.dimmed())
-                        }
-                        (Some(true), None) => "UPDATE".yellow().to_string(),
-                        (Some(false), _) => "ok".green().to_string(),
-                        (None, _) => "?".dimmed().to_string(),
-                    };
-
-                    println!(
-                        "  {:<24} {:<14} {}",
-                        input.name,
-                        version_str.dimmed(),
-                        status,
-                    );
-                }
-                println!();
-            }
-        }
     }
 
     // Summary line

@@ -243,6 +243,9 @@ struct RemoteCommitInfo {
 
 /// Check flake inputs for available updates by comparing the locked
 /// revision with the latest commit on the default branch via GitHub/GitLab API.
+///
+/// Each input is queried in its own thread (concurrently) so the wall-clock
+/// time is roughly that of the slowest single API call.
 pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
     let client = reqwest::blocking::Client::builder()
         .user_agent("cheni/0.1")
@@ -254,56 +257,83 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
         Err(_) => return,
     };
 
-    for input in inputs.iter_mut() {
-        let (repo_type, owner, repo) = match (&input.repo_type, &input.repo_owner, &input.repo_name) {
-            (Some(t), Some(o), Some(r)) => (t.as_str(), o.as_str(), r.as_str()),
-            _ => continue,
-        };
+    // Spawn one thread per input — APIs are independent, so we can fan out.
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = inputs
+            .iter()
+            .map(|input| {
+                let client = client.clone();
+                let repo_type = input.repo_type.clone();
+                let repo_owner = input.repo_owner.clone();
+                let repo_name = input.repo_name.clone();
+                let local_rev = input.rev.clone();
 
-        let info = match repo_type {
-            "github" => {
-                let url = format!(
-                    "https://api.github.com/repos/{}/{}/commits?per_page=1",
-                    owner, repo
-                );
-                fetch_commit_info(&client, &url, |json| {
-                    let commit = json.as_array()?.first()?;
-                    let rev = commit.get("sha")?.as_str().map(|s| s[..12].to_string())?;
-                    // GitHub date is in commit.commit.committer.date
-                    let date = commit.get("commit")
-                        .and_then(|c| c.get("committer"))
-                        .and_then(|c| c.get("date"))
-                        .and_then(|d| d.as_str())
-                        .map(|s| s[..10].to_string()); // "2026-04-15T..."  → "2026-04-15"
-                    Some(RemoteCommitInfo { rev, date })
-                })
-            }
-            "gitlab" => {
-                let url = format!(
-                    "https://gitlab.com/api/v4/projects/{}%2F{}/repository/commits?per_page=1",
-                    owner, repo
-                );
-                fetch_commit_info(&client, &url, |json| {
-                    let commit = json.as_array()?.first()?;
-                    let rev = commit.get("id")?.as_str().map(|s| s[..12].to_string())?;
-                    let date = commit.get("committed_date")
-                        .and_then(|d| d.as_str())
-                        .map(|s| s[..10].to_string());
-                    Some(RemoteCommitInfo { rev, date })
-                })
-            }
-            _ => None,
-        };
+                scope.spawn(move || -> (Option<bool>, Option<String>) {
+                    let (repo_type, owner, repo) = match (repo_type, repo_owner, repo_name) {
+                        (Some(t), Some(o), Some(r)) => (t, o, r),
+                        _ => return (None, None),
+                    };
 
-        if let Some(info) = info {
-            let is_outdated = info.rev != input.rev[..info.rev.len().min(input.rev.len())];
-            input.has_update = Some(is_outdated);
-            if is_outdated {
-                input.remote_age = info.date.map(|d| format!("latest: {}", d));
-                debug!("Flake input {} has update: {} → {}", input.name, input.rev, info.rev);
+                    let info = match repo_type.as_str() {
+                        "github" => {
+                            let url = format!(
+                                "https://api.github.com/repos/{}/{}/commits?per_page=1",
+                                owner, repo
+                            );
+                            fetch_commit_info(&client, &url, |json| {
+                                let commit = json.as_array()?.first()?;
+                                let rev = commit.get("sha")?.as_str().map(|s| s[..12].to_string())?;
+                                let date = commit.get("commit")
+                                    .and_then(|c| c.get("committer"))
+                                    .and_then(|c| c.get("date"))
+                                    .and_then(|d| d.as_str())
+                                    .map(|s| s[..10].to_string());
+                                Some(RemoteCommitInfo { rev, date })
+                            })
+                        }
+                        "gitlab" => {
+                            let url = format!(
+                                "https://gitlab.com/api/v4/projects/{}%2F{}/repository/commits?per_page=1",
+                                owner, repo
+                            );
+                            fetch_commit_info(&client, &url, |json| {
+                                let commit = json.as_array()?.first()?;
+                                let rev = commit.get("id")?.as_str().map(|s| s[..12].to_string())?;
+                                let date = commit.get("committed_date")
+                                    .and_then(|d| d.as_str())
+                                    .map(|s| s[..10].to_string());
+                                Some(RemoteCommitInfo { rev, date })
+                            })
+                        }
+                        _ => None,
+                    };
+
+                    match info {
+                        Some(info) => {
+                            let is_outdated = info.rev != local_rev[..info.rev.len().min(local_rev.len())];
+                            let age = if is_outdated {
+                                info.date.map(|d| format!("latest: {}", d))
+                            } else {
+                                None
+                            };
+                            (Some(is_outdated), age)
+                        }
+                        None => (None, None),
+                    }
+                })
+            })
+            .collect();
+
+        for (input, handle) in inputs.iter_mut().zip(handles) {
+            if let Ok((has_update, remote_age)) = handle.join() {
+                input.has_update = has_update;
+                input.remote_age = remote_age;
+                if has_update == Some(true) {
+                    debug!("Flake input {} has update", input.name);
+                }
             }
         }
-    }
+    });
 }
 
 /// Fetch commit info from a Git hosting API.
