@@ -196,7 +196,22 @@ fn list_nix_files_recursive(dir: &Path) -> Vec<PathBuf> {
 /// - Bare package names inside `with pkgs; [ ... ]` blocks.
 /// - `pkgs.name` references.
 pub fn extract_package_names(nix_files: &[PathBuf]) -> Vec<String> {
-    let mut names = Vec::new();
+    let mut names: Vec<String> = extract_package_names_with_files(nix_files)
+        .into_keys()
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Same as [`extract_package_names`] but also tracks which file(s) declared
+/// each package. Used by `cheni check` to point users at the right .nix
+/// file for an outdated package without a separate `cheni why` round-trip.
+pub fn extract_package_names_with_files(
+    nix_files: &[PathBuf],
+) -> std::collections::HashMap<String, Vec<PathBuf>> {
+    let mut by_name: std::collections::HashMap<String, Vec<PathBuf>> =
+        std::collections::HashMap::new();
 
     let pkgs_re = regex::Regex::new(r"pkgs\.([a-zA-Z][a-zA-Z0-9_-]*)").unwrap();
     let pkg_line_re = regex::Regex::new(
@@ -213,12 +228,19 @@ pub fn extract_package_names(nix_files: &[PathBuf]) -> Vec<String> {
             || content.contains("home.packages")
             || content.contains("plugins");
 
+        let mut record = |name: String| {
+            let entry = by_name.entry(name).or_default();
+            if !entry.contains(file_path) {
+                entry.push(file_path.clone());
+            }
+        };
+
         // Extract pkgs.name references
         for cap in pkgs_re.captures_iter(&content) {
             let name = &cap[1];
             if !is_nix_keyword(name) {
                 trace!("Found pkgs.{} in {}", name, file_path.display());
-                names.push(name.to_string());
+                record(name.to_string());
             }
         }
 
@@ -238,16 +260,13 @@ pub fn extract_package_names(nix_files: &[PathBuf]) -> Vec<String> {
 
                 if !final_name.is_empty() && !is_nix_keyword(final_name) {
                     trace!("Found {} in {}", final_name, file_path.display());
-                    names.push(final_name.to_string());
+                    record(final_name.to_string());
                 }
             }
         }
     }
 
-    // Deduplicate
-    names.sort();
-    names.dedup();
-    names
+    by_name
 }
 
 /// Check if a word is a Nix keyword or builtin (not a package name).

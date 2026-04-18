@@ -22,6 +22,9 @@ struct CheckResult {
     name: String,
     installed: String,
     available: String,
+    /// Short relative path to the .nix file that declares this package
+    /// (e.g. "modules/dev/esp-idf.nix"). None if we couldn't trace it back.
+    declared_in: Option<String>,
 }
 
 /// Run the `cheni check` command.
@@ -89,14 +92,17 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         }
     };
 
-    let config_names = config::extract_package_names(&nix_files);
-    debug!("Config declares {} package names", config_names.len());
+    // Track which file declares which package — used to annotate the output.
+    let names_with_files = config::extract_package_names_with_files(&nix_files);
+    debug!("Config declares {} package names", names_with_files.len());
 
     // 4. Cross-reference: keep only packages that are both in config AND store
     let mut packages_to_check: Vec<(String, String)> = Vec::new();
-    for name in &config_names {
+    let mut sorted_names: Vec<&String> = names_with_files.keys().collect();
+    sorted_names.sort();
+    for name in &sorted_names {
         if let Some(version) = store_map.get(&name.to_lowercase()) {
-            packages_to_check.push((name.clone(), version.clone()));
+            packages_to_check.push(((*name).clone(), version.clone()));
         }
     }
 
@@ -188,10 +194,20 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         let available_parts = parse_version(available);
         let diff = compare_versions(&installed_parts, &available_parts);
 
+        let declared_in = names_with_files
+            .get(name)
+            .and_then(|files| files.first())
+            .and_then(|p| {
+                p.strip_prefix(&nix_config.flake_dir)
+                    .ok()
+                    .map(|r| r.display().to_string())
+            });
+
         let result = CheckResult {
             name: name.clone(),
             installed: installed_version.clone(),
             available: available.clone(),
+            declared_in,
         };
 
         match diff {
@@ -239,12 +255,13 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         println!("{}:", "Updates available".yellow().bold());
         for r in &minor_updates {
             println!(
-                "  {:<24} {:<14} {} {:<14} {}",
+                "  {:<24} {:<14} {} {:<14} {} {}",
                 r.name,
                 r.installed.dimmed(),
                 "→".dimmed(),
                 r.available.green(),
                 "(minor)".dimmed(),
+                format_origin(r).dimmed(),
             );
         }
         println!();
@@ -258,12 +275,13 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         );
         for r in &major_updates {
             println!(
-                "  {:<24} {:<14} {} {:<14} {}",
+                "  {:<24} {:<14} {} {:<14} {} {}",
                 r.name,
                 r.installed.dimmed(),
                 "→".dimmed(),
                 r.available.red(),
                 "(major)".red(),
+                format_origin(r).dimmed(),
             );
         }
         println!();
@@ -290,6 +308,15 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     );
 
     Ok(())
+}
+
+/// Format the "in:" origin column for a check result. Returns either
+/// "in modules/dev/foo.nix" or an empty string when we couldn't trace it.
+fn format_origin(r: &CheckResult) -> String {
+    match &r.declared_in {
+        Some(path) => format!("in {}", path),
+        None => String::new(),
+    }
 }
 
 /// Friendly explanation shown when `cheni init` has never been run.
