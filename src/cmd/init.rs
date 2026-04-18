@@ -103,7 +103,7 @@ fn create_pins_file(flake_dir: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    std::fs::write(&path, "[]\n")
+    crate::util::atomic_write(&path, "[]\n")
         .context("Failed to create package-pins.json")?;
 
     debug!("Created package-pins.json");
@@ -177,7 +177,10 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
     }
 
     let new_content = new_lines.join("\n") + "\n";
-    std::fs::write(flake_path, new_content)
+    // Atomic write: a crash mid-write on flake.nix would break *all*
+    // future rebuilds. rename-on-top ensures the file is either the
+    // original or the new content, never truncated.
+    crate::util::atomic_write(flake_path, &new_content)
         .context("Failed to write modified flake.nix")?;
 
     Ok(())
@@ -234,7 +237,7 @@ fn add_overlay(flake_path: &Path, content: &str, _hostname: &str) -> Result<()> 
     }
 
     let new_content = new_lines.join("\n") + "\n";
-    std::fs::write(flake_path, new_content)
+    crate::util::atomic_write(flake_path, &new_content)
         .context("Failed to write modified flake.nix")?;
 
     Ok(())

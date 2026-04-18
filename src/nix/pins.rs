@@ -35,7 +35,11 @@ pub fn write(config_dir: &Path, pins: &[String]) -> Result<()> {
     let content = serde_json::to_string_pretty(pins)
         .context("Failed to serialize pins")?;
 
-    std::fs::write(&path, format!("{}\n", content))
+    // Atomic write: package-pins.json is read by the Nix overlay at
+    // every eval, so a truncated / half-JSON file would break
+    // 'nixos-rebuild' system-wide. The tmp-file-then-rename pattern
+    // guarantees readers see the old or new content, never a mix.
+    crate::util::atomic_write(&path, &format!("{}\n", content))
         .context("Failed to write package-pins.json")?;
 
     debug!("Wrote {} pins to package-pins.json", pins.len());

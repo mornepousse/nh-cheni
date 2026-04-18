@@ -132,7 +132,9 @@ pub fn save(cache: &Cache) {
 
     match serde_json::to_string(cache) {
         Ok(content) => {
-            if let Err(e) = std::fs::write(&path, content) {
+            // Atomic write so a concurrent `cheni check` or a SIGKILL
+            // mid-write can't leave the cache truncated / half-JSON.
+            if let Err(e) = crate::util::atomic_write(&path, &content) {
                 debug!("Failed to write cache: {}", e);
             } else {
                 debug!("Cache saved: {} entries", cache.entries.len());

@@ -6,6 +6,7 @@
 mod api;
 mod cmd;
 mod nix;
+mod util;
 mod version;
 
 use anyhow::Result;
