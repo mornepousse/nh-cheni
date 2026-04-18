@@ -57,7 +57,7 @@ pub fn read_installed_packages() -> Result<Vec<StorePackage>> {
     let output = Command::new("nix-store")
         .args(["-qR", "/run/current-system/sw"])
         .output()
-        .context("Failed to run nix-store. Is this a NixOS system?")?;
+        .map_err(|e| crate::nix::tools::tool_error("nix-store", e))?;
 
     if !output.status.success() {
         anyhow::bail!("nix-store exited with status {}", output.status);

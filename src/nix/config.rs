@@ -265,22 +265,38 @@ pub fn is_initialized(flake_dir: &Path) -> bool {
     lock_text.contains("\"nixpkgs-latest\"")
 }
 
-/// Detect the system hostname.
+/// Detect the system hostname. Falls back to reading /etc/hostname
+/// if the `hostname` binary isn't in PATH, so cheni keeps working on
+/// a minimal environment (rescue shell, container, etc.).
 fn detect_hostname() -> Result<String> {
-    let output = Command::new("hostname")
-        .output()
-        .context("Failed to run 'hostname' command")?;
-
-    let hostname = String::from_utf8(output.stdout)
-        .context("Hostname is not valid UTF-8")?
-        .trim()
-        .to_string();
-
-    if hostname.is_empty() {
-        anyhow::bail!("Hostname is empty");
+    if let Ok(output) = Command::new("hostname").output() {
+        if let Ok(s) = String::from_utf8(output.stdout) {
+            let trimmed = s.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
+        }
     }
 
-    Ok(hostname)
+    // Fallback: read /etc/hostname directly
+    if let Ok(content) = std::fs::read_to_string("/etc/hostname") {
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Last resort: $HOSTNAME env var
+    if let Ok(env_host) = std::env::var("HOSTNAME") {
+        if !env_host.is_empty() {
+            return Ok(env_host);
+        }
+    }
+
+    anyhow::bail!(
+        "Could not determine hostname: 'hostname' binary not found, \
+         /etc/hostname empty or missing, and $HOSTNAME not set."
+    )
 }
 
 /// List the module directories under modules/.

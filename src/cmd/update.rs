@@ -66,7 +66,7 @@ pub fn run() -> Result<()> {
             .args(["flake", "update", "nixpkgs-latest"])
             .current_dir(&nix_config.flake_dir)
             .status()
-            .context("Failed to run 'nix flake update'")?;
+            .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
         if !update_status.success() {
             anyhow::bail!(
@@ -121,7 +121,7 @@ pub fn run() -> Result<()> {
     let rebuild_status = Command::new("nh")
         .args(["os", "switch", config_path])
         .status()
-        .context("Failed to run 'nh os switch'. Is nh installed?")?;
+        .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
 
     if !rebuild_status.success() {
         anyhow::bail!(

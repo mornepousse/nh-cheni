@@ -25,7 +25,7 @@ pub fn run(query: &str) -> Result<()> {
     let output = Command::new("nix")
         .args(["search", "nixpkgs", query, "--json"])
         .output()
-        .context("Failed to run 'nix search'. Is nix installed?")?;
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

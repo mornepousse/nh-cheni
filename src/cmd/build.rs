@@ -49,7 +49,7 @@ pub fn run() -> Result<()> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .context("Failed to run 'nh os switch'. Is nh installed?")?;
+        .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
 
     // Read stderr in real time: display to user AND capture for parsing.
     // stderr was piped above, so this is always Some — expect() makes the

@@ -4,7 +4,7 @@
 
 use std::process::Command;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use colored::Colorize;
 
 /// Run `cheni diff <gen1> <gen2>`.
@@ -51,7 +51,7 @@ pub fn run(from: u32, to: u32) -> Result<()> {
     let status = Command::new("nix")
         .args(["store", "diff-closures", &from_path, &to_path])
         .status()
-        .context("Failed to run nix store diff-closures")?;
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
     if !status.success() {
         anyhow::bail!("Diff command failed");

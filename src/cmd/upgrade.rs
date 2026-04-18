@@ -45,7 +45,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
         .args(["flake", "update"])
         .current_dir(&nix_config.flake_dir)
         .status()
-        .context("Failed to run 'nix flake update'")?;
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
     if !update_status.success() {
         anyhow::bail!("nix flake update failed");
@@ -67,7 +67,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
             .stderr(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .output()
-            .context("Failed to run 'nix build --dry-run' for preview")?;
+            .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
         if !preview_output.status.success() {
             let stderr = String::from_utf8_lossy(&preview_output.stderr);
@@ -122,7 +122,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
     let rebuild_status = Command::new("nh")
         .args(["os", "switch", config_path])
         .status()
-        .context("Failed to run 'nh os switch'")?;
+        .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
 
     if !rebuild_status.success() {
         anyhow::bail!("System rebuild failed. Fix the issue and run 'cheni build' again.");
