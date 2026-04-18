@@ -103,7 +103,7 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
         println!("\n{} Pinned {}.", "✓".green(), name.bold());
     }
 
-    println!("Run '{}' to apply.", "cheni update".bold());
+    println!("Run '{}' to apply.", "cheni build".bold());
     Ok(())
 }
 
@@ -240,7 +240,7 @@ pub async fn pin_category(category: &str, force: bool) -> Result<()> {
         "✓".green(),
         added.len().to_string().bold()
     );
-    println!("Run '{}' to apply.", "cheni update".bold());
+    println!("Run '{}' to apply.", "cheni build".bold());
 
     Ok(())
 }
@@ -255,7 +255,7 @@ pub fn unpin_one(name: &str) -> Result<()> {
         println!("'{}' was not pinned.", name);
     } else {
         println!("{} Unpinned {}.", "✓".green(), name.bold());
-        println!("Run '{}' to apply.", "cheni update".bold());
+        println!("Run '{}' to apply.", "cheni build".bold());
     }
 
     Ok(())
@@ -271,7 +271,7 @@ pub fn unpin_all() -> Result<()> {
         println!("No pins to remove.");
     } else {
         println!("{} Removed {} pin(s).", "✓".green(), count.to_string().bold());
-        println!("Run '{}' to apply.", "cheni update".bold());
+        println!("Run '{}' to apply.", "cheni build".bold());
     }
 
     Ok(())
@@ -402,7 +402,7 @@ pub async fn pin_flake_inputs() -> Result<()> {
         "✓".green(),
         updated.to_string().bold(),
     );
-    println!("Run '{}' to rebuild.", "update".bold());
+    println!("Run '{}' to rebuild.", "cheni build".bold());
 
     Ok(())
 }
@@ -428,7 +428,7 @@ fn pin_flake_input(flake_dir: &std::path::Path, name: &str) -> Result<()> {
     }
 
     println!("\n{} Updated flake input {}.", "✓".green(), name.bold());
-    println!("Run '{}' to rebuild.", "update".bold());
+    println!("Run '{}' to rebuild.", "cheni build".bold());
     Ok(())
 }
 
