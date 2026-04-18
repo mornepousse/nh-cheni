@@ -247,10 +247,47 @@ enum Commands {
     /// Show config path, active pins, and flake input ages
     #[command(alias = "st")]
     Status,
+
+    /// Print a diagnostic report to paste into a GitLab issue
+    #[command(name = "bug-report")]
+    BugReport,
+}
+
+/// Install a panic hook that converts unexpected crashes into a friendly
+/// message pointing at `cheni bug-report`. The full backtrace is still
+/// available via RUST_BACKTRACE for anyone who sets it.
+fn install_panic_hook() {
+    let version = env!("CARGO_PKG_VERSION");
+    let git = env!("GIT_SHORT_HASH");
+    std::panic::set_hook(Box::new(move |info| {
+        let location = info
+            .location()
+            .map(|l| format!(" at {}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("<no message>");
+
+        eprintln!();
+        eprintln!("\x1b[31;1m✗ cheni crashed unexpectedly\x1b[0m");
+        eprintln!();
+        eprintln!("  Version: {} ({})", version, git);
+        eprintln!("  Error:   {}{}", payload, location);
+        eprintln!();
+        eprintln!("This is a bug. Please report it:");
+        eprintln!("  1. Gather diagnostic info:  \x1b[1mcheni bug-report > report.md\x1b[0m");
+        eprintln!("  2. Open an issue:            https://gitlab.com/harrael/cheni/-/issues/new");
+        eprintln!();
+        eprintln!("  (Set RUST_BACKTRACE=1 for a full backtrace.)");
+    }));
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    install_panic_hook();
     let cli = Cli::parse();
 
     // Respect NO_COLOR environment variable (https://no-color.org/)
@@ -404,6 +441,10 @@ async fn main() -> Result<()> {
 
         Commands::Status => {
             cmd::status::run()?;
+        }
+
+        Commands::BugReport => {
+            cmd::bug_report::run()?;
         }
     }
 
