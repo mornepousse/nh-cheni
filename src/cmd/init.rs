@@ -203,19 +203,23 @@ fn add_overlay(flake_path: &Path, content: &str, _hostname: &str) -> Result<()> 
     let overlay_code = r#"              # cheni: per-package updates from nixpkgs-latest.
               # Safe to leave in place if cheni is uninstalled — an absent
               # or empty package-pins.json degrades to the identity overlay.
-              (let
-                pkgs-latest = import inputs.nixpkgs-latest {
-                  system = "x86_64-linux";
-                  config.allowUnfree = true;
-                };
-                pins = if builtins.pathExists ./package-pins.json
-                       then builtins.fromJSON (builtins.readFile ./package-pins.json)
-                       else [];
-              in final: prev: builtins.listToAttrs (builtins.filter (x: x != null) (map (name:
-                if pkgs-latest ? ${name}
-                then { inherit name; value = pkgs-latest.${name}; }
-                else null
-              ) pins)))"#;
+              # `inherit (prev) system` picks up the current architecture
+              # automatically (x86_64-linux / aarch64-linux / aarch64-darwin).
+              (final: prev:
+                let
+                  pkgs-latest = import inputs.nixpkgs-latest {
+                    inherit (prev) system;
+                    config.allowUnfree = true;
+                  };
+                  pins = if builtins.pathExists ./package-pins.json
+                         then builtins.fromJSON (builtins.readFile ./package-pins.json)
+                         else [];
+                in
+                builtins.listToAttrs (builtins.filter (x: x != null) (map (name:
+                  if pkgs-latest ? ${name}
+                  then { inherit name; value = pkgs-latest.${name}; }
+                  else null
+                ) pins)))"#;
 
     // Find `nixpkgs.overlays = [` and insert the overlay after the opening bracket
     let mut found = false;
@@ -259,26 +263,27 @@ fn print_manual_instructions(hostname: &str) {
 fn print_overlay_instructions(_hostname: &str) {
     println!("{}", "Add this overlay to your nixosSystem modules:".bold());
     println!();
-    println!("{}", r#"  ({ config, pkgs, ... }:
-  let
-    pkgs-latest = import inputs.nixpkgs-latest {
-      system = "x86_64-linux";
-      config.allowUnfree = true;
-    };
+    println!("{}", r#"  ({ config, pkgs, ... }: {
     # Missing / empty file degrades to the identity overlay — remove cheni
     # safely at any time by deleting this block, the nixpkgs-latest input,
     # and (optionally) package-pins.json.
-    pins = if builtins.pathExists ./package-pins.json
-           then builtins.fromJSON (builtins.readFile ./package-pins.json)
-           else [];
-  in {
     nixpkgs.overlays = [
       # cheni: pinned packages from nixpkgs-latest
-      (final: prev: builtins.listToAttrs (builtins.filter (x: x != null) (map (name:
-        if pkgs-latest ? ${name}
-        then { inherit name; value = pkgs-latest.${name}; }
-        else null
-      ) pins)))
+      (final: prev:
+        let
+          pkgs-latest = import inputs.nixpkgs-latest {
+            inherit (prev) system;
+            config.allowUnfree = true;
+          };
+          pins = if builtins.pathExists ./package-pins.json
+                 then builtins.fromJSON (builtins.readFile ./package-pins.json)
+                 else [];
+        in
+        builtins.listToAttrs (builtins.filter (x: x != null) (map (name:
+          if pkgs-latest ? ${name}
+          then { inherit name; value = pkgs-latest.${name}; }
+          else null
+        ) pins)))
     ];
   })"#.cyan());
     println!();

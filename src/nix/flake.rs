@@ -58,11 +58,28 @@ const INPUT_STORE_MAPPINGS: &[(&str, &str)] = &[
     ("kesp-controller", "kesp-controller"),
 ];
 
-/// Store paths to scan for installed versions.
-const STORE_PATHS: &[&str] = &[
-    "/run/current-system/sw",
-    "/etc/profiles/per-user/mae",  // TODO: detect username dynamically
-];
+/// Build the list of store paths to scan for installed versions.
+///
+/// Always includes the system profile. The user profile path depends on
+/// the current user — $USER (set by most login shells) or $LOGNAME, then
+/// $HOME as a last resort. Without a known username we fall back to the
+/// glob-less `~` and rely on the system profile alone.
+fn store_paths() -> Vec<String> {
+    let mut paths = vec!["/run/current-system/sw".to_string()];
+
+    if let Some(user) = std::env::var("USER")
+        .ok()
+        .or_else(|| std::env::var("LOGNAME").ok())
+    {
+        paths.push(format!("/etc/profiles/per-user/{}", user));
+    } else if let Some(home) = dirs::home_dir() {
+        if let Some(name) = home.file_name().and_then(|n| n.to_str()) {
+            paths.push(format!("/etc/profiles/per-user/{}", name));
+        }
+    }
+
+    paths
+}
 
 /// Read all non-infrastructure flake inputs from flake.lock.
 ///
@@ -191,8 +208,8 @@ fn find_store_version(input_name: &str) -> Option<String> {
         .map(|(_, store)| *store)?;
 
     // Scan all store paths (system + user profile)
-    for store_path in STORE_PATHS {
-        if let Some(version) = scan_store_for_version(store_path, store_prefix) {
+    for store_path in store_paths() {
+        if let Some(version) = scan_store_for_version(&store_path, store_prefix) {
             return Some(version);
         }
     }
