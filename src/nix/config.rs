@@ -36,8 +36,10 @@ pub fn detect() -> Result<NixConfig> {
 /// Search for flake.nix in standard locations.
 ///
 /// Priority order:
-/// 1. $CHENI_CONFIG environment variable
-/// 2. Current directory
+/// 1. $CHENI_CONFIG environment variable (any flake.nix accepted, user chose it)
+/// 2. Current directory — only if it looks like a NixOS-config flake
+///    (must declare `nixosConfigurations`). This avoids picking up unrelated
+///    flakes such as cheni's own source tree when the user happens to be in it.
 /// 3. ~/nixos-config
 /// 4. /etc/nixos
 fn find_flake_dir() -> Option<PathBuf> {
@@ -51,9 +53,9 @@ fn find_flake_dir() -> Option<PathBuf> {
         warn!("$CHENI_CONFIG is set to '{}' but no flake.nix found there", env_path);
     }
 
-    // 2. Current directory
+    // 2. Current directory — but only if it's a NixOS-config flake.
     let cwd = std::env::current_dir().ok()?;
-    if has_flake(&cwd) {
+    if is_nixos_config_flake(&cwd) {
         debug!("Using current directory: {}", cwd.display());
         return Some(cwd);
     }
@@ -80,6 +82,20 @@ fn find_flake_dir() -> Option<PathBuf> {
 /// Check if a directory contains a flake.nix.
 fn has_flake(dir: &Path) -> bool {
     dir.join("flake.nix").exists()
+}
+
+/// Check whether a directory contains a flake.nix that defines a NixOS
+/// configuration (looks for the `nixosConfigurations` attribute).
+///
+/// This is a textual check — it reads the file but doesn't evaluate it.
+/// Good enough to distinguish "the user's NixOS config flake" from
+/// random package/library flakes (like cheni's own).
+fn is_nixos_config_flake(dir: &Path) -> bool {
+    let flake_path = dir.join("flake.nix");
+    match std::fs::read_to_string(&flake_path) {
+        Ok(content) => content.contains("nixosConfigurations"),
+        Err(_) => false,
+    }
 }
 
 /// Detect the system hostname.
