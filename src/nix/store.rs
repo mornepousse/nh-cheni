@@ -66,7 +66,14 @@ pub fn read_installed_packages() -> Result<Vec<StorePackage>> {
     let stdout = String::from_utf8(output.stdout)
         .context("nix-store output is not valid UTF-8")?;
 
-    let mut packages: HashMap<String, StorePackage> = HashMap::new();
+    // Same package name may appear in the store under several derivations
+    // (e.g. mesa shows up as `mesa-24.3.2-osmesa` AND `mesa-26.0.4` when
+    // an older variant is still pulled by another closure). We collect
+    // every version we see and pick the highest below — otherwise the
+    // first one encountered (driven by store iteration order) could be
+    // a stale or sub-variant entry, leading to bogus "update available"
+    // reports against the wrong installed version.
+    let mut versions: HashMap<String, (String, Vec<String>)> = HashMap::new();
 
     for line in stdout.lines() {
         let path = line.trim();
@@ -74,7 +81,6 @@ pub fn read_installed_packages() -> Result<Vec<StorePackage>> {
             continue;
         }
 
-        // Extract the part after the hash: /nix/store/<hash>-<rest>
         let store_name = match extract_store_name(path) {
             Some(name) => name,
             None => {
@@ -83,32 +89,60 @@ pub fn read_installed_packages() -> Result<Vec<StorePackage>> {
             }
         };
 
-        // Split into name + version
         let (name, version) = match split_name_version(store_name) {
             Some(pair) => pair,
             None => continue,
         };
 
-        // Filter out internal packages
         if is_ignored(&name) {
             trace!("Filtered out: {}", name);
             continue;
         }
 
-        // Deduplicate: keep the first version seen for each name
         let lower_name = name.to_lowercase();
-        packages.entry(lower_name).or_insert_with(|| {
-            debug!("Found package: {} {}", name, version);
-            StorePackage { name, version }
+        let entry = versions
+            .entry(lower_name)
+            .or_insert_with(|| (name.clone(), Vec::new()));
+        entry.1.push(version);
+    }
+
+    let mut result: Vec<StorePackage> = Vec::with_capacity(versions.len());
+    for (_, (display_name, vers)) in versions {
+        let chosen = pick_highest_version(&vers);
+        debug!("Resolved {}: {:?} → {}", display_name, vers, chosen);
+        result.push(StorePackage {
+            name: display_name,
+            version: chosen,
         });
     }
 
-    let count = packages.len();
+    let count = result.len();
     debug!("Found {} packages in store", count);
-
-    let mut result: Vec<StorePackage> = packages.into_values().collect();
     result.sort_by_key(|a| a.name.to_lowercase());
     Ok(result)
+}
+
+/// Pick the "highest" version from a list of candidates for the same
+/// package name. Uses the same parser/comparator as the rest of cheni
+/// so semantic versions sort the way users expect (26.0.4 > 24.3.2,
+/// even when one ends with a "-osmesa" sub-output suffix).
+fn pick_highest_version(versions: &[String]) -> String {
+    use crate::version::compare::compare_versions;
+    use crate::version::compare::VersionDiff;
+    use crate::version::parse::parse_version;
+
+    let mut best = versions[0].clone();
+    for v in &versions[1..] {
+        // compare_versions(installed, available) returns:
+        //   Newer       -> installed (best) is ahead of v   -> keep best
+        //   Minor/Major -> v is ahead of best               -> switch to v
+        //   Equal       -> tie                              -> keep best
+        let cmp = compare_versions(&parse_version(&best), &parse_version(v));
+        if matches!(cmp, VersionDiff::Minor | VersionDiff::Major) {
+            best = v.clone();
+        }
+    }
+    best
 }
 
 /// Extract the name part from a store path.
@@ -249,5 +283,27 @@ mod tests {
         assert!(!is_ignored("legcord"));
         assert!(!is_ignored("kicad"));
         assert!(!is_ignored("alacritty"));
+    }
+
+    #[test]
+    fn pick_highest_version_picks_max() {
+        // The mesa case that motivated the fix: a sub-output ("24.3.2-osmesa")
+        // shouldn't shadow the real package version that's also in the store.
+        assert_eq!(
+            pick_highest_version(&["24.3.2-osmesa".into(), "26.0.4".into()]),
+            "26.0.4"
+        );
+        assert_eq!(
+            pick_highest_version(&["26.0.4".into(), "24.3.2-osmesa".into()]),
+            "26.0.4"
+        );
+        assert_eq!(
+            pick_highest_version(&["1.2.3".into(), "1.2.3".into()]),
+            "1.2.3"
+        );
+        assert_eq!(
+            pick_highest_version(&["3.12.8".into(), "3.13.12".into()]),
+            "3.13.12"
+        );
     }
 }
