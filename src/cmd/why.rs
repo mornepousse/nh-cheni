@@ -67,38 +67,103 @@ pub fn run(package: &str) -> Result<()> {
         return Ok(());
     }
 
-    // Group by file
-    let mut by_file: std::collections::BTreeMap<PathBuf, Vec<&Match>> = std::collections::BTreeMap::new();
+    // Group by (category, file) — categories come from the top-level
+    // directory under the flake (modules/<cat>, home/, hosts/, ...).
+    let mut by_category: std::collections::BTreeMap<String, std::collections::BTreeMap<PathBuf, Vec<&Match>>> =
+        std::collections::BTreeMap::new();
     for m in &matches {
-        by_file.entry(m.file.clone()).or_default().push(m);
+        let relative = m.file.strip_prefix(&nix_config.flake_dir)
+            .unwrap_or(m.file.as_path());
+        let category = categorize(relative);
+        by_category
+            .entry(category)
+            .or_default()
+            .entry(m.file.clone())
+            .or_default()
+            .push(m);
     }
 
-    for (file, file_matches) in &by_file {
-        let relative = file.strip_prefix(&nix_config.flake_dir)
-            .unwrap_or(file.as_path());
-
-        println!("  {}", relative.display().to_string().bold());
-        for m in file_matches {
-            println!(
-                "    {} {}",
-                format!("{}:", m.line_num).dimmed(),
-                m.line,
-            );
+    for (category, files) in &by_category {
+        println!("  {}", category.bold().cyan());
+        for (file, file_matches) in files {
+            let relative = file.strip_prefix(&nix_config.flake_dir)
+                .unwrap_or(file.as_path());
+            println!("    {}", relative.display().to_string().bold());
+            for m in file_matches {
+                println!(
+                    "      {} {}",
+                    format!("{:>3}:", m.line_num).dimmed(),
+                    highlight(&m.line, package),
+                );
+            }
         }
         println!();
     }
 
-    let file_count = by_file.len();
+    let file_count: usize = by_category.values().map(|f| f.len()).sum();
     let match_count = matches.len();
     println!(
         "{}",
         format!(
-            "{} match(es) in {} file(s)",
-            match_count, file_count
-        ).dimmed()
+            "{} match(es) in {} file(s) across {} categor{}",
+            match_count,
+            file_count,
+            by_category.len(),
+            if by_category.len() == 1 { "y" } else { "ies" }
+        )
+        .dimmed()
     );
 
     Ok(())
+}
+
+/// Map a path (relative to the flake root) to a human-readable category.
+/// `modules/apps/foo.nix` → "apps", `home/zsh.nix` → "home (user-level)", etc.
+/// Files sitting at the flake root (e.g. flake.nix) are grouped as "root".
+fn categorize(rel: &Path) -> String {
+    // A file at the root has exactly one component (the filename itself).
+    if rel.components().count() <= 1 {
+        return "root".to_string();
+    }
+    let mut comps = rel.components();
+    let first = comps.next().and_then(|c| c.as_os_str().to_str()).unwrap_or("");
+    match first {
+        "modules" => {
+            let cat = comps
+                .next()
+                .and_then(|c| c.as_os_str().to_str())
+                .unwrap_or("modules");
+            format!("modules/{}", cat)
+        }
+        "home" => "home (user-level)".to_string(),
+        "hosts" => {
+            let host = comps
+                .next()
+                .and_then(|c| c.as_os_str().to_str())
+                .unwrap_or("hosts");
+            format!("hosts/{}", host)
+        }
+        other => other.to_string(),
+    }
+}
+
+/// Render `line` with all occurrences of `needle` painted green+bold.
+fn highlight(line: &str, needle: &str) -> String {
+    if needle.is_empty() {
+        return line.to_string();
+    }
+    let mut out = String::with_capacity(line.len());
+    let lower_line = line.to_lowercase();
+    let lower_needle = needle.to_lowercase();
+    let mut start = 0;
+    while let Some(pos) = lower_line[start..].find(&lower_needle) {
+        let abs = start + pos;
+        out.push_str(&line[start..abs]);
+        out.push_str(&line[abs..abs + needle.len()].green().bold().to_string());
+        start = abs + needle.len();
+    }
+    out.push_str(&line[start..]);
+    out
 }
 
 /// A single match in a .nix file.
