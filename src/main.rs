@@ -26,8 +26,9 @@ use tracing_subscriber::EnvFilter;
     after_help = "\
 Common workflows:\n  \
   cheni check                  See what's outdated (packages + flake inputs)\n  \
+  cheni check -c dev           Restrict to modules/dev/\n  \
   cheni pin vivaldi            Pin a single package to nixpkgs-latest\n  \
-  cheni pin --dev              Pin all minor updates in modules/dev/\n  \
+  cheni pin -c dev             Pin all minor updates in modules/dev/\n  \
   cheni pin --flakes           Update flake inputs (zen-browser, claude-code, ...)\n  \
   cheni build                  Just rebuild the current flake state (old 'update' alias)\n  \
   cheni update                 Refresh nixpkgs-latest + apply pinned updates\n  \
@@ -84,18 +85,11 @@ enum Commands {
     /// Show available package updates (nixpkgs + flake inputs)
     #[command(alias = "ck")]
     Check {
-        /// Filter by module category (e.g. --dev, --apps)
-        #[arg(long)]
-        dev: bool,
-        #[arg(long)]
-        apps: bool,
-        #[arg(long)]
-        desktop: bool,
-        #[arg(long)]
-        hardware: bool,
-        /// Custom category name
-        #[arg(long, value_name = "CATEGORY")]
+        /// Restrict the scan to a single module category (auto-detected
+        /// from modules/ — e.g. "dev", "apps", or any subdirectory name).
+        #[arg(short = 'c', long, value_name = "CATEGORY")]
         category: Option<String>,
+
         /// Also list packages classified as "Newer" or "Unknown" so you
         /// can inspect why
         #[arg(long)]
@@ -115,20 +109,8 @@ enum Commands {
         /// Package name to pin (e.g. "vivaldi", "zen-browser")
         package: Option<String>,
 
-        /// Pin all minor updates in modules/dev/
-        #[arg(long)]
-        dev: bool,
-        /// Pin all minor updates in modules/apps/
-        #[arg(long)]
-        apps: bool,
-        /// Pin all minor updates in modules/desktop/
-        #[arg(long)]
-        desktop: bool,
-        /// Pin all minor updates in modules/hardware/
-        #[arg(long)]
-        hardware: bool,
-        /// Custom category name
-        #[arg(long, value_name = "CATEGORY")]
+        /// Pin all minor updates in a module category (e.g. "dev" → modules/dev/)
+        #[arg(short = 'c', long, value_name = "CATEGORY")]
         category: Option<String>,
 
         /// Check and update flake inputs (zen-browser, claude-code, ...)
@@ -341,36 +323,24 @@ async fn main() -> Result<()> {
 
     // Dispatch to the right command
     match command {
-        Commands::Check {
-            dev, apps, desktop, hardware, category, details, json, refresh,
-        } => {
-            let cat = resolve_category(dev, apps, desktop, hardware, category);
-            cmd::check::run(cat.as_deref(), details, json, refresh).await?;
+        Commands::Check { category, details, json, refresh } => {
+            cmd::check::run(category.as_deref(), details, json, refresh).await?;
         }
 
-        Commands::Pin {
-            package, dev, apps, desktop, hardware, category, flakes, force,
-        } => {
+        Commands::Pin { package, category, flakes, force } => {
             if flakes {
-                // Mettre à jour les flake inputs
                 cmd::pin::pin_flake_inputs().await?;
             } else if let Some(name) = package {
-                // Pin a single package
                 cmd::pin::pin_one(&name, force).await?;
+            } else if let Some(cat) = category {
+                cmd::pin::pin_category(&cat, force).await?;
             } else {
-                // Pin by category
-                let cat = resolve_category(dev, apps, desktop, hardware, category);
-                match cat {
-                    Some(c) => cmd::pin::pin_category(&c, force).await?,
-                    None => {
-                        anyhow::bail!(
-                            "Specify a package name or a category.\n\
-                             Usage: cheni pin <package>\n\
-                             Usage: cheni pin --dev\n\
-                             Usage: cheni pin --flakes"
-                        );
-                    }
-                }
+                anyhow::bail!(
+                    "Specify a package name, a category, or --flakes.\n\
+                     Usage: cheni pin <package>\n\
+                     Usage: cheni pin --category <name>     (e.g. dev, apps)\n\
+                     Usage: cheni pin --flakes"
+                );
             }
         }
 
@@ -460,25 +430,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Resolve category flags into a single Option<String>.
-fn resolve_category(
-    dev: bool,
-    apps: bool,
-    desktop: bool,
-    hardware: bool,
-    custom: Option<String>,
-) -> Option<String> {
-    if dev {
-        Some("dev".to_string())
-    } else if apps {
-        Some("apps".to_string())
-    } else if desktop {
-        Some("desktop".to_string())
-    } else if hardware {
-        Some("hardware".to_string())
-    } else {
-        custom
-    }
 }

@@ -69,12 +69,13 @@ Up to date: 41 | Minor: 2 | Major: 1 | Unknown: 2
 
 Supports filtering by module directory:
 ```
-$ cheni check --dev       # only packages from modules/dev/
-$ cheni check --apps      # only packages from modules/apps/
+$ cheni check -c dev      # only packages from modules/dev/
+$ cheni check -c apps     # only packages from modules/apps/
 ```
 
-The `--dev`, `--apps`, etc. flags are auto-detected from the `modules/`
-directory structure. If a user has `modules/gaming/`, then `--gaming` works.
+The `--category <NAME>` argument takes any subdirectory name under
+`modules/` — so `cheni check -c gaming` works without any code change
+if the user has `modules/gaming/`.
 
 ### `cheni pin <pkg>`
 Pin a package to nixpkgs-latest (or update its flake input).
@@ -91,7 +92,7 @@ Run 'cheni update' to apply.
 
 Pin by module directory with grouped confirmation:
 ```
-$ cheni pin --dev
+$ cheni pin -c dev
 
 Minor updates (safe):
   gcc-arm-embedded   14.2.0  →  14.2.1
@@ -333,7 +334,7 @@ Today cheni assumes one hostname per flake. Could grow to handle several
 or scoped per host.
 
 ### Module-aware pin grouping
-`cheni pin --dev` already groups by `modules/dev/`. A natural extension is
+`cheni pin -c dev` already groups by `modules/dev/`. A natural extension is
 named pin groups ("dev-toolchain", "design-apps") that can be applied or
 unpinned together.
 

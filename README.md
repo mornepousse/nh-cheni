@@ -66,7 +66,7 @@ keys; cheni prompts for any extra input it needs.
 | Command                     | What it does                                           |
 |-----------------------------|--------------------------------------------------------|
 | `cheni check`               | Show available updates (nixpkgs + flake inputs)        |
-| `cheni check --dev`         | Filter to packages declared in `modules/dev/`          |
+| `cheni check -c dev`        | Filter to packages declared in `modules/dev/`          |
 | `cheni check --details`     | Expand the "Newer" and "Unknown" buckets               |
 | `cheni check --refresh`     | Ignore the on-disk cache, re-fetch every lookup        |
 | `cheni check --json`        | Machine-readable output for scripts / CI               |
@@ -77,8 +77,8 @@ keys; cheni prompts for any extra input it needs.
 | Command                   | What it does                                |
 |---------------------------|---------------------------------------------|
 | `cheni pin <pkg>`         | Pin a single nixpkgs package                |
-| `cheni pin --dev`         | Pin all minor updates in `modules/dev/`     |
-| `cheni pin --dev --force` | Include major updates (breaking changes)    |
+| `cheni pin -c dev`          | Pin all minor updates in `modules/dev/`   |
+| `cheni pin -c dev --force`  | Include major updates (breaking changes)  |
 | `cheni pin --flakes`      | Update all flake inputs (zen-browser, etc.) |
 | `cheni unpin <pkg>`       | Remove a specific pin                       |
 | `cheni unpin --all`       | Remove all pins                             |
