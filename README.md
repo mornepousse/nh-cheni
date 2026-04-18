@@ -269,6 +269,20 @@ Recognised error patterns:
   for `cheni diff` and `cheni history --diff`; cheni falls back to
   `nix store diff-closures` if absent
 
+## Environment variables
+
+| Variable             | Default    | Purpose                                      |
+|----------------------|------------|----------------------------------------------|
+| `CHENI_CONFIG`       | _(auto)_   | Override the NixOS flake directory           |
+| `CHENI_HTTP_TIMEOUT` | `30` (sec) | Per-request HTTP timeout (min 5)             |
+| `NO_COLOR`           | unset      | Disable coloured output                      |
+| `RUST_BACKTRACE`     | unset      | Full panic backtrace (for bug reports)       |
+
+Raise `CHENI_HTTP_TIMEOUT` on slow connections:
+```bash
+CHENI_HTTP_TIMEOUT=60 cheni check
+```
+
 ---
 
 ## Install

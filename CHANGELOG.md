@@ -82,6 +82,20 @@ semver.
 - **`cheni check` sort** — results ordered by relevance (exact match,
   prefix match, substring, other) instead of alphabetical.
 
+### Changed (cont.)
+- **`-c, --category <NAME>`** replaces the per-category bool flags
+  on `cheni check` and `cheni pin`. The old `--dev` / `--apps` /
+  `--desktop` / `--hardware` were hardcoded to one user's modules
+  layout; `-c <name>` accepts any subdirectory of `modules/` so a
+  user with `modules/gaming/` now gets `cheni pin -c gaming`
+  without a code change.
+- **Error messages surface the real reason inline** — e.g. "could
+  not determine — 'du' binary not in PATH" instead of swallowing
+  the cause behind a DEBUG log.
+- **Help text** disambiguates `build` / `update` / `upgrade` with
+  cross-references and a one-line comparison block (answered
+  "what replaced my old `update` shell alias").
+
 ### Fixed
 - **Store version resolution** — when the store contains several
   derivations for the same package (e.g. `mesa-26.0.4` alongside
@@ -95,15 +109,64 @@ semver.
   up the cheni source flake when running from `~/cheni`.
 - **flake.lock indirection** — resolves `root.inputs[name]` before
   reading `locked` info (handles transitive `nixpkgs_4`-style nodes).
+- **Atomic writes** for `~/.cache/cheni/versions.json`,
+  `package-pins.json` and `flake.nix` — tmp-file-then-rename means a
+  SIGKILL or two parallel runs can never leave a half-JSON file
+  behind. Critical for `package-pins.json` since the Nix overlay
+  reads it at every eval.
+- **Resilient overlay** — the generated overlay guards the pins
+  read with `builtins.pathExists`, so deleting `package-pins.json`
+  (or stopping to use cheni entirely) doesn't break the flake.
+  A corresponding `cheni doctor` check flags the legacy form.
+- **Graceful pins file handling** — empty or whitespace-only file
+  treated as "no pins"; corrupt JSON produces a reset command the
+  user can copy-paste instead of a raw serde error.
+- **Byte-slicing hardened** — `description[..67]` in `cheni search`,
+  Git-hash / ISO-date slicing in `flake.rs`, rev truncation in
+  `status.rs` all moved to `chars().take()` so non-ASCII input can
+  never panic at a codepoint boundary.
+- **stderr UTF-8 errors don't truncate** — `cheni build` no longer
+  stops capturing nh's stderr on a single non-UTF-8 byte; the bad
+  line is logged at DEBUG and skipped.
+- **`is_flake_lock_dirty` surfaces why** — `git` not found vs.
+  non-zero exit vs. genuinely clean are all distinguishable in
+  `-v` output instead of all returning `false`.
+
+### Refactor (portability + cleanup)
+- **Dropped hardcoded `mae` username** — `store_paths()` resolves
+  the current user via `$USER` → `$LOGNAME` → `dirs::home_dir()`.
+- **Dropped hardcoded `x86_64-linux`** in the init overlay
+  snippet — now uses `inherit (prev) system` so aarch64-linux
+  (Raspberry Pi) and aarch64-darwin (Mac M1/M2) work out of the box.
+- **Shrunk `INFRASTRUCTURE_INPUTS`** to the genuinely universal set
+  (`nixpkgs`, `nixpkgs-latest`, `home-manager`, `cheni`). Optional
+  toolchain flakes like `rust-overlay` and `nixpkgs-esp-dev` are no
+  longer silently excluded from visibility.
+- **Removed `INPUT_STORE_MAPPINGS`** per-user table. Now
+  `find_store_version` tries the input name directly, falling back
+  to `?` when no match (still surfacing the UPDATE indicator).
+- **Zero `unwrap()` in prod paths** — remaining `.expect()` calls
+  assert true-by-construction invariants with a diagnostic message.
+- **Regexes in `LazyLock`** — compiled once per program run, not
+  per call (measurable on the `cheni build` stderr hot path).
+- **`nix::tools::tool_error`** — centralised ENOENT → actionable
+  install-hint mapping for `nh`, `nix`, `nvd`, `git`, `sudo`.
+- **Tests extracted** — every module's `#[cfg(test)] mod tests`
+  block moved to a sibling `tests/<name>.rs` file via `#[path]`.
+  Source files stay short, test fixtures easy to browse. Zero
+  behavioural change.
 
 ### Build
 - `flake.nix` switched from `cargoHash` to `cargoLock.lockFile` — no
   more manual hash bumps after `cargo add`.
-- Clippy clean (0 warnings); 58 unit tests + 2 doc tests.
+- Clippy clean (0 warnings); 95 unit tests + 2 doc tests.
 
 ### Documentation
 - README: new Scripting section with `--json` examples, History &
-  rollback table, Discovery + Maintenance tables, short aliases table.
+  rollback table, Discovery + Maintenance tables, short aliases
+  table, and an **Uninstalling** section documenting the graceful
+  removal contract.
 - DESIGN.md: refreshed architecture tree, replaced misleading roadmap
-  with a feature-themed shipped list, updated Future Ideas.
+  with a feature-themed shipped list, updated Future Ideas, added
+  a Packaging note for the `cargoLock.lockFile` switch.
 - Memory / agent notes updated with the above.

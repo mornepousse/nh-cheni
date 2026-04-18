@@ -208,9 +208,13 @@ Cleaned 3 obsolete pins (nixpkgs caught up)
 cheni/
 ├── src/
 │   ├── main.rs              # CLI entry (clap), subcommand routing
+│   ├── lib.rs               # Library facade for tests and reuse
+│   ├── util.rs              # atomic_write and other small utilities
+│   ├── tests/               # unit tests for root modules (util.rs)
 │   ├── cmd/                 # One file per command
 │   │   ├── mod.rs
 │   │   ├── check.rs         # cheni check
+│   │   ├── bug_report.rs    # cheni bug-report
 │   │   ├── pin.rs           # cheni pin / unpin
 │   │   ├── update.rs        # cheni update
 │   │   ├── upgrade.rs       # cheni upgrade (full system upgrade)
@@ -226,17 +230,22 @@ cheni/
 │   │   ├── rollback.rs      # cheni rollback
 │   │   ├── diff.rs          # cheni diff <from> <to>
 │   │   ├── interactive.rs   # menu when run with no subcommand
-│   │   └── obsolete.rs      # shared helpers for pin obsolescence
+│   │   ├── obsolete.rs      # shared helpers for pin obsolescence
+│   │   └── tests/           # unit tests per cmd module
 │   ├── nix/                 # NixOS system interaction
 │   │   ├── mod.rs
 │   │   ├── store.rs         # Read installed packages from store
 │   │   ├── config.rs        # Detect flake, hostname, modules
 │   │   ├── flake.rs         # Parse flake.lock, check remote inputs
-│   │   └── pins.rs          # Read/write package-pins.json
+│   │   ├── pins.rs          # Read/write package-pins.json
+│   │   ├── tools.rs         # Friendly ENOENT → install-hint mapper
+│   │   └── tests/           # unit tests per nix module
 │   ├── api/                 # External data sources
 │   │   ├── mod.rs
+│   │   ├── net.rs           # HTTP timeout resolution (env-overridable)
 │   │   ├── repology.rs      # Repology API client (rate-limited)
-│   │   └── cache.rs         # On-disk cache (~/.cache/cheni)
+│   │   ├── cache.rs         # On-disk cache (~/.cache/cheni)
+│   │   └── tests/           # unit tests per api module
 │   └── version/             # Version logic
 │       ├── mod.rs
 │       ├── parse.rs         # Parse version strings (semver + calver)
@@ -260,17 +269,30 @@ Code must be accessible for review by anyone. This means:
 - Modules have a top-level `//!` doc comment explaining their purpose
 
 ### Testing
-Unit tests from day one. Every module has tests:
+Unit tests live in sibling `tests/` directories, one file per source
+module:
+
+```
+src/cmd/history.rs       ←→ src/cmd/tests/history.rs
+src/nix/store.rs         ←→ src/nix/tests/store.rs
+src/api/cache.rs         ←→ src/api/tests/cache.rs
+src/util.rs              ←→ src/tests/util.rs
+```
+
+The source file ends with a three-line include:
+
 ```rust
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_version_simple() { ... }
-}
+#[path = "tests/<name>.rs"]
+mod tests;
 ```
-Integration tests in `tests/` for CLI commands.
+
+This keeps them as unit tests (same compile flags, access to private
+items via `use super::*;`) while letting each source file stay short
+and focused on production code. Format-fragile parsers — the nix
+store diff-closures reader and the nh build-error matcher — have
+dedicated regression fixtures so a change in upstream output fails
+a test before it silently breaks cheni in the wild.
 
 ### Debugging
 Three verbosity levels via `tracing` crate:
