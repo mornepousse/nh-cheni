@@ -210,7 +210,7 @@ fn build_menu() -> Vec<MenuEntry> {
 async fn dispatch(action: Action) -> Result<()> {
     let theme = ColorfulTheme::default();
     match action {
-        Action::Check => super::check::run(None, false).await?,
+        Action::Check => super::check::run(None, false, false).await?,
         Action::Update => super::update::run()?,
         Action::Upgrade => super::upgrade::run(super::upgrade::UpgradeOptions {
             gc: false,

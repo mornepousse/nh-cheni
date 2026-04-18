@@ -89,6 +89,10 @@ enum Commands {
         /// can inspect why
         #[arg(long)]
         details: bool,
+
+        /// Machine-readable JSON output on stdout (disables spinners + colour)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Pin a package or category for update via nixpkgs-latest
@@ -286,10 +290,10 @@ async fn main() -> Result<()> {
     // Dispatch to the right command
     match command {
         Commands::Check {
-            dev, apps, desktop, hardware, category, details,
+            dev, apps, desktop, hardware, category, details, json,
         } => {
             let cat = resolve_category(dev, apps, desktop, hardware, category);
-            cmd::check::run(cat.as_deref(), details).await?;
+            cmd::check::run(cat.as_deref(), details, json).await?;
         }
 
         Commands::Pin {

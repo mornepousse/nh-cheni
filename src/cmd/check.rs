@@ -10,6 +10,8 @@ use anyhow::Result;
 use colored::Colorize;
 use tracing::debug;
 
+use serde::Serialize;
+
 use crate::api::repology;
 use crate::nix::{config, flake, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
@@ -18,6 +20,7 @@ use crate::version::parse::parse_version;
 use super::obsolete::count_obsolete_pins;
 
 /// A package with its update status, ready for display.
+#[derive(Serialize)]
 struct CheckResult {
     name: String,
     installed: String,
@@ -27,14 +30,50 @@ struct CheckResult {
     declared_in: Option<String>,
 }
 
+/// JSON output schema — stable across versions so scripts can rely on it.
+#[derive(Serialize)]
+struct JsonOutput<'a> {
+    flake_inputs: Vec<JsonFlakeInput<'a>>,
+    minor_updates: &'a [CheckResult],
+    major_updates: &'a [CheckResult],
+    newer: &'a [CheckResult],
+    unknown: &'a [String],
+    summary: JsonSummary,
+}
+
+#[derive(Serialize)]
+struct JsonFlakeInput<'a> {
+    name: &'a str,
+    installed: Option<&'a str>,
+    has_update: Option<bool>,
+    latest_remote_date: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct JsonSummary {
+    up_to_date: usize,
+    minor: usize,
+    major: usize,
+    newer: usize,
+    unknown: usize,
+}
+
 /// Run the `cheni check` command.
 ///
 /// If `category` is Some, only show packages from that module directory.
-pub async fn run(category: Option<&str>, details: bool) -> Result<()> {
+pub async fn run(category: Option<&str>, details: bool, json: bool) -> Result<()> {
+    if json {
+        colored::control::set_override(false);
+    }
+
     // 1. Detect the NixOS configuration
     let nix_config = config::detect()?;
 
     if !config::is_initialized(&nix_config.flake_dir) {
+        if json {
+            println!("{}", serde_json::json!({"error": "not initialized"}));
+            return Ok(());
+        }
         print_first_run_hint();
         return Ok(());
     }
@@ -142,18 +181,21 @@ pub async fn run(category: Option<&str>, details: bool) -> Result<()> {
         Some(cat) => format!("Checking {} packages (modules/{}/) + flake inputs", names.len(), cat),
         None => format!("Checking {} packages + flake inputs...", names.len()),
     };
-    println!("{}", header.dimmed());
+    if !json {
+        println!("{}", header.dimmed());
+    }
 
     // Spinner in background while API calls are running. Skip if stderr is
-    // not a TTY (piped/redirected) — \r artifacts would clutter the output.
+    // not a TTY (piped/redirected), or in JSON mode — \r artifacts would
+    // clutter the output either way.
     use std::io::IsTerminal;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     let done = Arc::new(AtomicBool::new(false));
     let done_clone = done.clone();
-    let is_tty = std::io::stderr().is_terminal();
+    let spinner_enabled = !json && std::io::stderr().is_terminal();
     let spinner = std::thread::spawn(move || {
-        if !is_tty {
+        if !spinner_enabled {
             return;
         }
         let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -257,6 +299,35 @@ pub async fn run(category: Option<&str>, details: bool) -> Result<()> {
         .iter()
         .filter(|i| used_inputs.contains(&i.name))
         .collect();
+
+    // ── JSON short-circuit ────────────────────────────────────────
+    // Emit a single stable JSON document and return; no pretty print.
+    if json {
+        let out = JsonOutput {
+            flake_inputs: visible_flake_inputs
+                .iter()
+                .map(|i| JsonFlakeInput {
+                    name: &i.name,
+                    installed: i.installed_version.as_deref(),
+                    has_update: i.has_update,
+                    latest_remote_date: i.remote_age.as_deref(),
+                })
+                .collect(),
+            minor_updates: &minor_updates,
+            major_updates: &major_updates,
+            newer: &newer_results,
+            unknown: &unknown_names,
+            summary: JsonSummary {
+                up_to_date,
+                minor: minor_updates.len(),
+                major: major_updates.len(),
+                newer,
+                unknown,
+            },
+        };
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
 
     if category.is_none() && !visible_flake_inputs.is_empty() {
         let has_flake_updates = visible_flake_inputs.iter().any(|i| i.has_update == Some(true));
