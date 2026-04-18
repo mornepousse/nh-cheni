@@ -82,8 +82,12 @@ pub fn run(query: &str) -> Result<()> {
     // Display (cap at 30 results)
     let max_display = 30;
     for (name, version, description) in results.iter().take(max_display) {
-        let truncated = if description.len() > 70 {
-            format!("{}...", &description[..67])
+        // Truncate at char boundary, not byte — a byte slice would panic
+        // on any description whose 67th byte falls inside a multi-byte
+        // codepoint (e.g. an emoji or accented letter).
+        let truncated = if description.chars().count() > 70 {
+            let head: String = description.chars().take(67).collect();
+            format!("{}...", head)
         } else {
             description.clone()
         };

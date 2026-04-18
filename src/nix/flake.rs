@@ -285,12 +285,12 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
                             );
                             fetch_commit_info(&client, &url, |json| {
                                 let commit = json.as_array()?.first()?;
-                                let rev = commit.get("sha")?.as_str().map(|s| s[..12].to_string())?;
+                                let rev = commit.get("sha")?.as_str().map(short_hash)?;
                                 let date = commit.get("commit")
                                     .and_then(|c| c.get("committer"))
                                     .and_then(|c| c.get("date"))
                                     .and_then(|d| d.as_str())
-                                    .map(|s| s[..10].to_string());
+                                    .map(short_date);
                                 Some(RemoteCommitInfo { rev, date })
                             })
                         }
@@ -301,10 +301,10 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
                             );
                             fetch_commit_info(&client, &url, |json| {
                                 let commit = json.as_array()?.first()?;
-                                let rev = commit.get("id")?.as_str().map(|s| s[..12].to_string())?;
+                                let rev = commit.get("id")?.as_str().map(short_hash)?;
                                 let date = commit.get("committed_date")
                                     .and_then(|d| d.as_str())
-                                    .map(|s| s[..10].to_string());
+                                    .map(short_date);
                                 Some(RemoteCommitInfo { rev, date })
                             })
                         }
@@ -313,7 +313,14 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
 
                     match info {
                         Some(info) => {
-                            let is_outdated = info.rev != local_rev[..info.rev.len().min(local_rev.len())];
+                            // Compare the two truncated revs by char count, not
+                            // by byte. Git hashes are hex so this is equivalent
+                            // in practice but the explicit form avoids a
+                            // mid-codepoint slice if the API ever returns
+                            // something unexpected.
+                            let prefix_len = info.rev.chars().count().min(local_rev.chars().count());
+                            let local_prefix: String = local_rev.chars().take(prefix_len).collect();
+                            let is_outdated = info.rev != local_prefix;
                             let age = if is_outdated {
                                 info.date.map(|d| format!("latest: {}", d))
                             } else {
@@ -353,6 +360,18 @@ where
     extract(&json)
 }
 
+/// Take up to the first 12 characters of a Git hash — char-based rather
+/// than byte-based so a malformed response can't trigger a panic.
+fn short_hash(s: &str) -> String {
+    s.chars().take(12).collect()
+}
+
+/// Keep only the `YYYY-MM-DD` prefix of an ISO-8601 timestamp. Char-based
+/// for the same reason as `short_hash`.
+fn short_date(s: &str) -> String {
+    s.chars().take(10).collect()
+}
+
 /// Check if a name corresponds to a flake input (not a nixpkgs package).
 pub fn is_flake_input(flake_dir: &Path, name: &str) -> bool {
     match read_flake_inputs(flake_dir) {
@@ -370,5 +389,35 @@ mod tests {
         assert!(INFRASTRUCTURE_INPUTS.contains(&"nixpkgs"));
         assert!(INFRASTRUCTURE_INPUTS.contains(&"home-manager"));
         assert!(!INFRASTRUCTURE_INPUTS.contains(&"zen-browser"));
+    }
+
+    #[test]
+    fn short_hash_handles_short_input() {
+        // The API may return a hash shorter than 12 chars (rare, but a
+        // byte-slice would panic). Char-based truncation returns as many
+        // chars as exist without panicking.
+        assert_eq!(short_hash("abc"), "abc");
+        assert_eq!(short_hash(""), "");
+    }
+
+    #[test]
+    fn short_hash_truncates_to_twelve() {
+        assert_eq!(
+            short_hash("abcdef1234567890"),
+            "abcdef123456"
+        );
+    }
+
+    #[test]
+    fn short_hash_survives_non_ascii() {
+        // Not expected in real Git output, but we parse external JSON
+        // so we can't assume it. Must not panic at a multi-byte boundary.
+        assert_eq!(short_hash("é🦀x"), "é🦀x");
+    }
+
+    #[test]
+    fn short_date_handles_short_input() {
+        assert_eq!(short_date("2026"), "2026");
+        assert_eq!(short_date(""), "");
     }
 }

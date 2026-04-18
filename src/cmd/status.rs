@@ -262,5 +262,9 @@ fn get_input_rev(lock: &serde_json::Value, name: &str) -> Option<String> {
         .get("rev")?
         .as_str()?;
 
-    Some(rev[..12.min(rev.len())].to_string())
+    // Char-based truncation so a malformed / non-ASCII rev can't panic.
+    // Git SHAs are hex so this is equivalent to byte-slicing in practice,
+    // but the explicit form matches flake.rs::short_hash and stays safe
+    // if a locked input ever lands with a non-standard 'rev' field.
+    Some(rev.chars().take(12).collect())
 }

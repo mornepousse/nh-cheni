@@ -126,12 +126,20 @@ pub fn read_installed_packages() -> Result<Vec<StorePackage>> {
 /// package name. Uses the same parser/comparator as the rest of cheni
 /// so semantic versions sort the way users expect (26.0.4 > 24.3.2,
 /// even when one ends with a "-osmesa" sub-output suffix).
+///
+/// Returns an empty string on an empty input rather than panicking —
+/// every current caller guarantees at least one element, but a defensive
+/// guard keeps this function safely reusable.
 fn pick_highest_version(versions: &[String]) -> String {
     use crate::version::compare::compare_versions;
     use crate::version::compare::VersionDiff;
     use crate::version::parse::parse_version;
 
-    let mut best = versions[0].clone();
+    let Some(first) = versions.first() else {
+        debug_assert!(false, "pick_highest_version called with empty slice");
+        return String::new();
+    };
+    let mut best = first.clone();
     for v in &versions[1..] {
         // compare_versions(installed, available) returns:
         //   Newer       -> installed (best) is ahead of v   -> keep best
@@ -283,6 +291,12 @@ mod tests {
         assert!(!is_ignored("legcord"));
         assert!(!is_ignored("kicad"));
         assert!(!is_ignored("alacritty"));
+    }
+
+    #[test]
+    fn pick_highest_version_empty_slice_returns_empty() {
+        // Defensive guard — callers should never do this, but it mustn't panic.
+        assert_eq!(pick_highest_version(&[]), "");
     }
 
     #[test]
