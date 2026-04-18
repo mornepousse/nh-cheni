@@ -19,6 +19,8 @@ struct Generation {
     is_current: bool,
     /// Path to the generation in the store.
     store_path: String,
+    /// NixOS version label (e.g. "26.05.20260414.4bd9165").
+    nixos_label: Option<String>,
 }
 
 /// Run `cheni history`.
@@ -57,32 +59,54 @@ pub fn run(diff: bool, limit: Option<usize>) -> Result<()> {
             format!("Generation {}", gen.number).bold().to_string()
         };
 
-        println!("  {} {}", marker, label);
-        println!("    {} {}", "Date:".dimmed(), gen.date);
+        // Compact NixOS label: extract just date + commit
+        // e.g. "26.05.20260414.4bd9165" → "20260414.4bd9165"
+        let label_short = gen.nixos_label.as_deref().map(|l| {
+            let parts: Vec<&str> = l.splitn(3, '.').collect();
+            if parts.len() == 3 {
+                parts[2].to_string()
+            } else {
+                l.to_string()
+            }
+        }).unwrap_or_else(|| "?".to_string());
 
-        // If diff requested AND there's a previous generation, show changes
-        if diff && i + 1 < displayed.len() {
+        println!(
+            "  {} {}  {}  {}",
+            marker,
+            label,
+            gen.date.dimmed(),
+            label_short.cyan(),
+        );
+
+        // Show summary diff vs previous generation (always, not just with --diff)
+        if i + 1 < displayed.len() {
             let previous = displayed[i + 1];
-            println!("    {} computing...", "Diff:".dimmed());
 
-            match get_diff(&previous.store_path, &gen.store_path) {
-                Ok(diff_text) if !diff_text.is_empty() => {
-                    // Print diff indented
-                    for line in diff_text.lines() {
-                        println!("      {}", line);
+            if diff {
+                // Full diff requested
+                match get_diff(&previous.store_path, &gen.store_path) {
+                    Ok(diff_text) if !diff_text.is_empty() => {
+                        for line in diff_text.lines() {
+                            println!("      {}", line.dimmed());
+                        }
+                    }
+                    Ok(_) => {
+                        println!("      {}", "(no version changes)".dimmed());
+                    }
+                    Err(_) => {
+                        println!("      {}", "(diff unavailable)".dimmed());
                     }
                 }
-                Ok(_) => {
-                    println!("      {}", "(no version changes)".dimmed());
-                }
-                Err(_) => {
-                    println!("      {}", "(diff unavailable)".dimmed());
+            } else {
+                // Compact summary: count changes
+                if let Some(summary) = get_diff_summary(&previous.store_path, &gen.store_path) {
+                    println!("      {}", summary.dimmed());
                 }
             }
         }
-
-        println!();
     }
+
+    println!();
 
     if total > to_show {
         println!(
@@ -153,11 +177,30 @@ fn read_generations() -> Result<Vec<Generation>> {
 
         let store_path = entry.path().to_string_lossy().to_string();
 
+        // Read the symlink target to extract the NixOS label
+        // Target looks like: /nix/store/abc-nixos-system-morthinkpad-26.05.20260414.4bd9165
+        let nixos_label = std::fs::read_link(entry.path())
+            .ok()
+            .and_then(|target| {
+                let target_str = target.to_string_lossy().to_string();
+                // Extract the version part after "nixos-system-<hostname>-"
+                target_str
+                    .rsplit('/')
+                    .next()
+                    .and_then(|name| name.split_once("nixos-system-"))
+                    .and_then(|(_, rest)| {
+                        // rest = "morthinkpad-26.05.20260414.4bd9165"
+                        rest.split_once('-')
+                            .map(|(_, version)| version.to_string())
+                    })
+            });
+
         generations.push(Generation {
             number,
             date,
             is_current: current_num == Some(number),
             store_path,
+            nixos_label,
         });
     }
 
@@ -189,6 +232,56 @@ fn format_unix_date(secs: u64) -> String {
     let y = if m <= 2 { y + 1 } else { y };
 
     format!("{:04}-{:02}-{:02} {:02}:{:02}", y, m, d, hours, minutes)
+}
+
+/// Get a compact one-line summary of changes between two generations.
+/// Returns something like "↑ 5 updated, + 2 added, - 1 removed".
+fn get_diff_summary(from: &str, to: &str) -> Option<String> {
+    let output = Command::new("nix")
+        .args(["store", "diff-closures", from, to])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    let mut updated = 0;
+    let mut added = 0;
+    let mut removed = 0;
+
+    for line in stdout.lines() {
+        let trimmed = line.trim();
+        // nix store diff-closures format:
+        // "package: 1.0 -> 2.0"     (update)
+        // "package: ∅ -> 1.0"        (added)
+        // "package: 1.0 -> ∅"        (removed)
+        if trimmed.contains("∅ →") || trimmed.contains("∅ ->") {
+            added += 1;
+        } else if trimmed.contains("→ ∅") || trimmed.contains("-> ∅") {
+            removed += 1;
+        } else if trimmed.contains(" → ") || trimmed.contains(" -> ") {
+            updated += 1;
+        }
+    }
+
+    if updated == 0 && added == 0 && removed == 0 {
+        return Some("(no changes)".to_string());
+    }
+
+    let mut parts = Vec::new();
+    if updated > 0 {
+        parts.push(format!("↑ {} updated", updated));
+    }
+    if added > 0 {
+        parts.push(format!("+ {} added", added));
+    }
+    if removed > 0 {
+        parts.push(format!("- {} removed", removed));
+    }
+    Some(parts.join(", "))
 }
 
 /// Compute a diff between two generations using nvd if available.
