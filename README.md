@@ -14,21 +14,21 @@ with your flake configuration.
 ```
 $ cheni check
 
+Flake inputs (updates available):
+  affinity-nix             2.6.5-         UPDATE (latest: 2026-04-18)
+  claude-code              2.1.114        ok
+  kesp-controller          2.0.7          ok
+  zen-browser              ?              UPDATE (latest: 2026-04-18)
+
 Updates available:
   flatpak                  1.16.4         → 1.16.6         (minor)
-  github-copilot-cli       1.0.19         → 1.0.21         (minor)
   htop                     3.4.1          → 3.5.0          (minor)
   vivaldi                  7.9.3970.47    → 7.9.3970.50    (minor)
 
 Major updates (use 'cheni pin --force' to apply):
-  mesa                     24.3.2         → 25.1.0         (major)
+  mesa                     24.3.2         → 26.0.4         (major)
 
-Flake inputs:
-  claude-code              2.1.112        UPDATE (latest: 2026-04-17)
-  zen-browser              ?              UPDATE (latest: 2026-04-17)
-  kesp-controller          2.0.7          ok
-
-Up to date: 112 | Minor: 4 | Major: 1 | Newer: 6 | Unknown: 11
+Up to date: 116 | Minor: 3 | Major: 1 | Newer: 6 | Unknown: 11
 ```
 
 Then pin what you want, and apply:
@@ -47,10 +47,15 @@ current `nixpkgs`.
 
 ```bash
 cheni init              # one-time flake setup
+cheni                   # interactive menu (no subcommand → picker)
 cheni check             # see what's outdated
 cheni pin <package>     # pin a package for update
 cheni update            # apply all pins (rebuild system)
 ```
+
+Run `cheni` with no arguments for an interactive menu showing the
+current state and a list of every command. Pick one with the arrow
+keys; cheni prompts for any extra input it needs.
 
 ---
 
@@ -77,17 +82,47 @@ cheni update            # apply all pins (rebuild system)
 
 ### Apply
 
-| Command         | What it does                                     |
-|-----------------|--------------------------------------------------|
-| `cheni update`  | Apply pins: refresh `nixpkgs-latest` + rebuild   |
-| `cheni build`   | Rebuild with human-readable error parsing        |
-| `cheni clean`   | Auto-remove obsolete pins (nixpkgs caught up)    |
+| Command         | What it does                                          |
+|-----------------|-------------------------------------------------------|
+| `cheni update`  | Apply pins: refresh `nixpkgs-latest` + rebuild        |
+| `cheni build`   | Rebuild current state with human-readable errors      |
+| `cheni upgrade` | Full upgrade: update all inputs, preview, build       |
+| `cheni clean`   | Auto-remove obsolete pins (nixpkgs caught up)         |
 
-### Setup
+### History & rollback
 
-| Command       | What it does                              |
-|---------------|-------------------------------------------|
-| `cheni init`  | Add `nixpkgs-latest` input to your flake  |
+| Command                              | What it does                                         |
+|--------------------------------------|------------------------------------------------------|
+| `cheni history`                      | List recent generations + per-step package summary   |
+| `cheni history --diff`               | Show full per-package diff between generations       |
+| `cheni history --limit 30`           | Show more than the default 10 generations            |
+| `cheni rollback`                     | Roll back to the previous generation                 |
+| `cheni rollback 405`                 | Roll back to a specific generation                   |
+| `cheni diff 405 409`                 | Compare two generations (uses `nvd` if available)    |
+| `cheni history --prune`              | Pick generations to delete from a multi-select list  |
+| `cheni history --delete 405 406`     | Delete specific generations                          |
+| `cheni history --delete 400..410`    | Delete a range (inclusive)                           |
+| `cheni history --keep 20`            | Keep only the 20 most recent                         |
+| `cheni history --older-than 30d`     | Delete generations older than 30 days (d/w/m/y)      |
+| `cheni history --keep 20 --gc`       | Also reclaim disk space after deletion               |
+
+The active generation is always protected — cheni refuses to delete
+the currently-booted system to keep rollback safe.
+
+### Discovery
+
+| Command              | What it does                                    |
+|----------------------|-------------------------------------------------|
+| `cheni search <q>`   | Search nixpkgs                                  |
+| `cheni why <pkg>`    | Find which `.nix` file in your config declares it |
+
+### Maintenance
+
+| Command              | What it does                                      |
+|----------------------|---------------------------------------------------|
+| `cheni doctor`       | Health checks (paths, pins, flake, store access)  |
+| `cheni self-update`  | Refresh the cheni flake input + rebuild           |
+| `cheni init`         | One-time setup: add `nixpkgs-latest` to your flake |
 
 ---
 
