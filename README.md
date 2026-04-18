@@ -63,11 +63,14 @@ keys; cheni prompts for any extra input it needs.
 
 ### Inspection
 
-| Command              | What it does                                     |
-|----------------------|--------------------------------------------------|
-| `cheni check`        | Show available updates (nixpkgs + flake inputs)  |
-| `cheni check --dev`  | Show updates for packages in `modules/dev/` only |
-| `cheni status`       | Show config path, active pins, input timestamps  |
+| Command                     | What it does                                           |
+|-----------------------------|--------------------------------------------------------|
+| `cheni check`               | Show available updates (nixpkgs + flake inputs)        |
+| `cheni check --dev`         | Filter to packages declared in `modules/dev/`          |
+| `cheni check --details`     | Expand the "Newer" and "Unknown" buckets               |
+| `cheni check --refresh`     | Ignore the on-disk cache, re-fetch every lookup        |
+| `cheni check --json`        | Machine-readable output for scripts / CI               |
+| `cheni status`              | Config, active gen, flake input ages, suggestions      |
 
 ### Pinning
 
@@ -94,6 +97,7 @@ keys; cheni prompts for any extra input it needs.
 | Command                              | What it does                                         |
 |--------------------------------------|------------------------------------------------------|
 | `cheni history`                      | List recent generations + per-step package summary   |
+| `cheni history --full`               | Don't truncate the per-step summary to terminal width |
 | `cheni history --diff`               | Show full per-package diff between generations       |
 | `cheni history --limit 30`           | Show more than the default 10 generations            |
 | `cheni rollback`                     | Roll back to the previous generation                 |
@@ -118,11 +122,62 @@ the currently-booted system to keep rollback safe.
 
 ### Maintenance
 
-| Command              | What it does                                      |
-|----------------------|---------------------------------------------------|
-| `cheni doctor`       | Health checks (paths, pins, flake, store access)  |
-| `cheni self-update`  | Refresh the cheni flake input + rebuild           |
-| `cheni init`         | One-time setup: add `nixpkgs-latest` to your flake |
+| Command              | What it does                                              |
+|----------------------|-----------------------------------------------------------|
+| `cheni doctor`       | Health checks (paths, pins, flake, store, cache, tools)   |
+| `cheni self-update`  | Refresh the cheni flake input + rebuild                   |
+| `cheni init`         | One-time setup: add `nixpkgs-latest` to your flake        |
+| `cheni bug-report`   | Print a diagnostic report ready to paste into an issue    |
+
+### Short aliases
+
+Every frequently-used command has a two-letter alias:
+
+| Alias        | Command        |
+|--------------|----------------|
+| `cheni ck`   | `check`        |
+| `cheni st`   | `status`       |
+| `cheni up`   | `update`       |
+| `cheni ug`   | `upgrade`      |
+| `cheni b`    | `build`        |
+| `cheni h`    | `history`      |
+| `cheni rb`   | `rollback`     |
+| `cheni s`    | `search`       |
+
+---
+
+## Scripting
+
+`cheni check --json` emits a stable JSON document suitable for piping
+into `jq`, Prometheus textfile exporters, or any CI gate:
+
+```bash
+# Fail a pre-commit hook if any major update is pending
+cheni check --json | jq -e '.summary.major == 0' >/dev/null \
+  || { echo "Major update pending, review first"; exit 1; }
+
+# Desktop notification on new updates
+count=$(cheni check --json | jq '.summary.minor + .summary.major')
+[ "$count" -gt 0 ] && notify-send "$count updates available"
+
+# Compare two machines over SSH
+ssh x230t cheni check --json > x230t.json
+cheni check --json > laptop.json
+jq -s '.[0].minor_updates - .[1].minor_updates' laptop.json x230t.json
+```
+
+Schema:
+
+```
+{
+  "flake_inputs":  [{name, installed, has_update, latest_remote_date}],
+  "minor_updates": [{name, installed, available, declared_in}],
+  "major_updates": [...],
+  "newer":         [...],
+  "unknown":       ["pkg1", "pkg2"],
+  "summary":       {up_to_date, minor, major, newer, unknown}
+}
+```
 
 ---
 
@@ -245,7 +300,8 @@ your flake.
 
 Early alpha — expect rough edges. Feedback and PRs welcome.
 
-See [DESIGN.md](DESIGN.md) for architecture and roadmap.
+See [DESIGN.md](DESIGN.md) for architecture and [CHANGELOG.md](CHANGELOG.md)
+for the history of changes.
 
 ## License
 

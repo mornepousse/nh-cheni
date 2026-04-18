@@ -284,7 +284,13 @@ tracing::debug!("Package '{}': store={}  repology={} → minor update", name, in
 
 ### Error Handling
 - `anyhow` for application errors with context
-- Never panic in production paths
+- Zero `unwrap()` in prod paths — remaining `.expect()` calls assert
+  true-by-construction invariants and include a diagnostic message
+- Missing external tools (`nh`, `nix`, `nvd`, ...) go through
+  `nix::tools::tool_error()` which turns the generic ENOENT into a
+  targeted install hint with a copy-paste Nix config snippet
+- Panic hook installed at `main()` entry: on any unexpected crash,
+  prints the error + location and points the user at `cheni bug-report`
 - User-facing errors are clear and actionable:
   ```
   Error: could not find flake.nix
@@ -295,6 +301,11 @@ tracing::debug!("Package '{}': store={}  repology={} → minor update", name, in
 - Colored output by default (via `colored` crate)
 - `--no-color` flag and `NO_COLOR` env var support
 - Accessible: don't rely on color alone (use symbols too: ✓ ↑ ⚠ ?)
+
+### Packaging
+- `flake.nix` uses `cargoLock = { lockFile = ./Cargo.lock; }` rather than
+  a manual `cargoHash`, so adding a Rust dep never requires a manual
+  hash bump. Git or path sources would need `outputHashes` — none today.
 
 ## Versioning
 
