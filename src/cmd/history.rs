@@ -248,40 +248,156 @@ fn get_diff_summary(from: &str, to: &str) -> Option<String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let mut updated = 0;
-    let mut added = 0;
-    let mut removed = 0;
+    // Per-package details: (name, "old → new" or None for rebuilt/added/removed)
+    let mut updated: Vec<(String, String)> = Vec::new(); // (name, "old → new")
+    let mut added: Vec<String> = Vec::new();
+    let mut removed: Vec<String> = Vec::new();
+    let mut rebuilt: Vec<String> = Vec::new();
+    let mut size_delta_kib: f64 = 0.0;
 
     for line in stdout.lines() {
-        let trimmed = line.trim();
-        // nix store diff-closures format:
-        // "package: 1.0 -> 2.0"     (update)
-        // "package: ∅ -> 1.0"        (added)
-        // "package: 1.0 -> ∅"        (removed)
-        if trimmed.contains("∅ →") || trimmed.contains("∅ ->") {
-            added += 1;
-        } else if trimmed.contains("→ ∅") || trimmed.contains("-> ∅") {
-            removed += 1;
-        } else if trimmed.contains(" → ") || trimmed.contains(" -> ") {
-            updated += 1;
+        let clean = strip_ansi(line);
+        let trimmed = clean.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if let Some(delta) = parse_size_delta(trimmed) {
+            size_delta_kib += delta;
+        }
+
+        // Each line starts with "name: " followed by the change description.
+        let (name, rest) = match trimmed.split_once(": ") {
+            Some(p) => p,
+            None => continue,
+        };
+        let name = name.trim().to_string();
+
+        // `nix store diff-closures` per-line formats:
+        //   "1.0 → 2.0[, +size]"   version change
+        //   "∅ → ε" / "∅ → 1.0"     added
+        //   "ε → ∅" / "1.0 → ∅"     removed
+        //   "38.6 KiB"             same version, closure rebuilt
+        if rest.contains("∅ →") || rest.contains("∅ ->") {
+            added.push(name);
+        } else if rest.contains("→ ∅") || rest.contains("-> ∅") {
+            removed.push(name);
+        } else if rest.contains(" → ") || rest.contains(" -> ") {
+            // Extract the version transition (everything up to first comma if any).
+            let versions = rest.split(',').next().unwrap_or(rest).trim().to_string();
+            updated.push((name, versions));
+        } else {
+            rebuilt.push(name);
         }
     }
 
-    if updated == 0 && added == 0 && removed == 0 {
-        return Some("(no changes)".to_string());
+    if updated.is_empty() && added.is_empty() && removed.is_empty() && rebuilt.is_empty() {
+        return Some("(identical closures)".to_string());
     }
 
     let mut parts = Vec::new();
-    if updated > 0 {
-        parts.push(format!("↑ {} updated", updated));
+    if !updated.is_empty() {
+        parts.push(format_update_list(&updated));
     }
-    if added > 0 {
-        parts.push(format!("+ {} added", added));
+    if !added.is_empty() {
+        parts.push(format!("+ {}", format_name_list(&added)));
     }
-    if removed > 0 {
-        parts.push(format!("- {} removed", removed));
+    if !removed.is_empty() {
+        parts.push(format!("- {}", format_name_list(&removed)));
+    }
+    if !rebuilt.is_empty() {
+        parts.push(format!("⟳ {}", format_name_list(&rebuilt)));
+    }
+    if size_delta_kib.abs() >= 0.1 {
+        parts.push(format_size_delta(size_delta_kib));
     }
     Some(parts.join(", "))
+}
+
+/// Format an update list with versions if there's a single one,
+/// otherwise list names compactly: "↑ claude-code (2.1.113 → 2.1.114)"
+/// or "↑ foo, bar (+2 more)".
+fn format_update_list(updates: &[(String, String)]) -> String {
+    if updates.len() == 1 {
+        format!("↑ {} ({})", updates[0].0, updates[0].1)
+    } else {
+        let names: Vec<&str> = updates.iter().map(|(n, _)| n.as_str()).collect();
+        format!("↑ {}", join_with_overflow(&names, 3))
+    }
+}
+
+/// Join package names: first N then "(+K more)" if longer.
+fn format_name_list(names: &[String]) -> String {
+    let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+    join_with_overflow(&refs, 3)
+}
+
+fn join_with_overflow(items: &[&str], max: usize) -> String {
+    if items.len() <= max {
+        items.join(", ")
+    } else {
+        let head = items[..max].join(", ");
+        format!("{} (+{} more)", head, items.len() - max)
+    }
+}
+
+/// Strip ANSI escape sequences (CSI codes) from a line.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next(); // consume '['
+            // Skip until a letter (final byte of CSI sequence)
+            while let Some(&n) = chars.peek() {
+                chars.next();
+                if n.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Parse a "+/-N.N KiB" or "N.N MiB" size delta from a diff-closures line.
+/// Returns the value normalised to KiB (positive = added, negative = removed).
+fn parse_size_delta(line: &str) -> Option<f64> {
+    // Find the last token that looks like "<number> <unit>"
+    // e.g. "cheni: 38.6 KiB", "pkg: 2.0 → 3.0, 1.2 MiB", "pkg: -512.0 KiB"
+    for unit in &["KiB", "MiB", "GiB"] {
+        if let Some(idx) = line.rfind(unit) {
+            let before = &line[..idx].trim_end();
+            // Walk back to find the number
+            let num_start = before.rfind(|c: char| c == ' ' || c == ',').map(|i| i + 1).unwrap_or(0);
+            let num_str = before[num_start..].trim();
+            if let Ok(n) = num_str.parse::<f64>() {
+                let kib = match *unit {
+                    "KiB" => n,
+                    "MiB" => n * 1024.0,
+                    "GiB" => n * 1024.0 * 1024.0,
+                    _ => n,
+                };
+                return Some(kib);
+            }
+        }
+    }
+    None
+}
+
+/// Format a size delta in KiB to a short human-readable string ("+38 KiB", "-1.2 MiB").
+fn format_size_delta(kib: f64) -> String {
+    let sign = if kib >= 0.0 { "+" } else { "-" };
+    let abs = kib.abs();
+    if abs < 1024.0 {
+        format!("{}{:.0} KiB", sign, abs)
+    } else if abs < 1024.0 * 1024.0 {
+        format!("{}{:.1} MiB", sign, abs / 1024.0)
+    } else {
+        format!("{}{:.1} GiB", sign, abs / (1024.0 * 1024.0))
+    }
 }
 
 /// Compute a diff between two generations using nvd if available.
