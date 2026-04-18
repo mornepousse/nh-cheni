@@ -63,7 +63,7 @@ pub fn load() -> Cache {
         }
     };
 
-    let cache: Cache = match serde_json::from_str(&content) {
+    let mut cache: Cache = match serde_json::from_str(&content) {
         Ok(c) => c,
         Err(e) => {
             debug!("Failed to parse cache: {}", e);
@@ -77,8 +77,49 @@ pub fn load() -> Cache {
         return Cache::default();
     }
 
+    // Drop entries whose version is None — these were either failed lookups
+    // (now retryable) or stale "unknown" markers from older cheni versions
+    // that used to persist them. Either way they masquerade as legitimate
+    // hits and end up classified as "Unknown" forever.
+    let before = cache.entries.len();
+    cache.entries.retain(|_, entry| entry.version.is_some());
+    let dropped = before - cache.entries.len();
+    if dropped > 0 {
+        debug!("Cache: dropped {} stale null entries", dropped);
+    }
+
     debug!("Cache loaded: {} entries, {}s old", cache.entries.len(), age);
     cache
+}
+
+/// Read-only stats about the on-disk cache. Used by `cheni doctor` to
+/// report freshness and surface stale-null cleanups.
+pub struct CacheStats {
+    pub age_secs: u64,
+    pub total_entries: usize,
+    pub null_entries: usize,
+    pub exists: bool,
+}
+
+pub fn stats() -> CacheStats {
+    let path = cache_path();
+    if !path.exists() {
+        return CacheStats {
+            age_secs: 0,
+            total_entries: 0,
+            null_entries: 0,
+            exists: false,
+        };
+    }
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
+    let cache: Cache = serde_json::from_str(&content).unwrap_or_default();
+    let null_entries = cache.entries.values().filter(|e| e.version.is_none()).count();
+    CacheStats {
+        age_secs: now_secs().saturating_sub(cache.timestamp),
+        total_entries: cache.entries.len(),
+        null_entries,
+        exists: true,
+    }
 }
 
 /// Save the cache to disk.

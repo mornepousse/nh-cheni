@@ -71,6 +71,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Show available package updates (nixpkgs + flake inputs)
+    #[command(alias = "ck")]
     Check {
         /// Filter by module category (e.g. --dev, --apps)
         #[arg(long)]
@@ -131,9 +132,11 @@ enum Commands {
     },
 
     /// Refresh nixpkgs-latest and rebuild the system (applies pending pins)
+    #[command(alias = "up")]
     Update,
 
     /// Full system upgrade: update all flake inputs, preview, build, clean pins
+    #[command(alias = "ug")]
     Upgrade {
         /// Also run garbage collection (DELETES old generations — no rollback!)
         #[arg(long)]
@@ -149,6 +152,7 @@ enum Commands {
     },
 
     /// Build and switch the current configuration (no input refresh, parses nix errors)
+    #[command(alias = "b")]
     Build,
 
     /// Remove obsolete pins whose nixpkgs version has caught up
@@ -162,6 +166,7 @@ enum Commands {
     SelfUpdate,
 
     /// List system generations (or selectively delete them with --prune/--delete/--keep)
+    #[command(alias = "h")]
     History {
         /// Show full per-package diff between generations (uses nvd if available)
         #[arg(long)]
@@ -201,6 +206,7 @@ enum Commands {
     },
 
     /// Roll back to the previous generation (or a specific one)
+    #[command(alias = "rb")]
     Rollback {
         /// Generation number to roll back to (omit for the previous generation)
         target: Option<u32>,
@@ -215,6 +221,7 @@ enum Commands {
     },
 
     /// Search nixpkgs for a package
+    #[command(alias = "s")]
     Search {
         /// Search query (e.g. "firefox", "rust analyzer")
         query: String,
@@ -230,6 +237,7 @@ enum Commands {
     Init,
 
     /// Show config path, active pins, and flake input ages
+    #[command(alias = "st")]
     Status,
 }
 

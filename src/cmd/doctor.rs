@@ -9,6 +9,7 @@
 use anyhow::Result;
 use colored::Colorize;
 
+use crate::api::cache;
 use crate::nix::{config, flake, pins, store};
 
 /// Severity of a check result.
@@ -65,6 +66,9 @@ pub fn run() -> Result<()> {
 
     // Check 8: nh is installed (required for cheni build / update)
     checks.push(check_nh_installed());
+
+    // Check 9: Repology cache health
+    checks.push(check_cache());
 
     // Print results
     let mut ok_count = 0;
@@ -364,6 +368,50 @@ fn check_generations() -> CheckResult {
             message: format!("{} generation(s)", count),
             hint: None,
         }
+    }
+}
+
+/// Inspect the Repology cache file and warn about potential gotchas.
+///
+/// The two failure modes worth surfacing here:
+/// - The cache contains entries with `version: null`. Older cheni versions
+///   used to persist these; they masquerade as "Unknown" forever.
+/// - The cache is hours old but hasn't been refreshed (rare since the TTL
+///   is 1h, but still a useful signal when versions look weirdly out of date).
+fn check_cache() -> CheckResult {
+    let s = cache::stats();
+    if !s.exists {
+        return CheckResult {
+            severity: Severity::Ok,
+            name: "Repology cache".to_string(),
+            message: "no cache yet (will be created on first 'cheni check')".to_string(),
+            hint: None,
+        };
+    }
+    if s.null_entries > 0 {
+        return CheckResult {
+            severity: Severity::Warning,
+            name: "Repology cache".to_string(),
+            message: format!(
+                "{} stale 'unknown' entries out of {}",
+                s.null_entries, s.total_entries
+            ),
+            hint: Some(
+                "Wipe with 'rm ~/.cache/cheni/versions.json' — they'll be re-fetched."
+                    .to_string(),
+            ),
+        };
+    }
+    let age_human = match s.age_secs {
+        n if n < 60 => format!("{}s old", n),
+        n if n < 3600 => format!("{}m old", n / 60),
+        n => format!("{}h old", n / 3600),
+    };
+    CheckResult {
+        severity: Severity::Ok,
+        name: "Repology cache".to_string(),
+        message: format!("{} entries, {}", s.total_entries, age_human),
+        hint: None,
     }
 }
 
