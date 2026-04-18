@@ -19,10 +19,27 @@ pub fn read(config_dir: &Path) -> Result<Vec<String>> {
     }
 
     let content = std::fs::read_to_string(&path)
-        .context("Failed to read package-pins.json")?;
+        .with_context(|| format!("Failed to read {}", path.display()))?;
 
-    let pins: Vec<String> = serde_json::from_str(&content)
-        .context("Failed to parse package-pins.json")?;
+    // Empty file is a valid "no pins" state — friendlier than failing
+    // to parse `""` as JSON. Users running `cheni unpin --all` followed
+    // by an editor that empties the file would otherwise get a cryptic
+    // serde error.
+    if content.trim().is_empty() {
+        debug!("package-pins.json is empty, treating as no pins");
+        return Ok(Vec::new());
+    }
+
+    let pins: Vec<String> = serde_json::from_str(&content).with_context(|| {
+        format!(
+            "package-pins.json is not valid JSON.\n  \
+             Path: {}\n  \
+             Expected: a JSON array of package names, e.g. [\"vivaldi\", \"mesa\"]\n  \
+             Fix: edit the file, or reset with: echo '[]' > {}",
+            path.display(),
+            path.display()
+        )
+    })?;
 
     debug!("Loaded {} pins", pins.len());
     Ok(pins)
@@ -162,5 +179,40 @@ mod tests {
 
         let pins = read(dir.path()).unwrap();
         assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn empty_file_is_treated_as_no_pins() {
+        // An editor that saves an empty file, or a `> package-pins.json`
+        // shell redirect, shouldn't break cheni.
+        let dir = setup_temp_dir();
+        std::fs::write(dir.path().join("package-pins.json"), "").unwrap();
+        let pins = read(dir.path()).unwrap();
+        assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn whitespace_only_file_is_treated_as_no_pins() {
+        let dir = setup_temp_dir();
+        std::fs::write(dir.path().join("package-pins.json"), "\n\n   \n").unwrap();
+        let pins = read(dir.path()).unwrap();
+        assert!(pins.is_empty());
+    }
+
+    #[test]
+    fn corrupt_file_gives_actionable_error() {
+        // Garbage-in-file produces an error whose message contains the
+        // path and the reset command — not just a raw serde error.
+        let dir = setup_temp_dir();
+        std::fs::write(
+            dir.path().join("package-pins.json"),
+            "not valid json at all {",
+        )
+        .unwrap();
+        let err = read(dir.path()).unwrap_err();
+        let chain = format!("{:#}", err);
+        assert!(chain.contains("not valid JSON"), "message was: {}", chain);
+        assert!(chain.contains("package-pins.json"), "message was: {}", chain);
+        assert!(chain.contains("echo '[]'"), "message was: {}", chain);
     }
 }
