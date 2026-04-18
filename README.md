@@ -294,6 +294,33 @@ environment.systemPackages = [
 Run `cheni init` once to set up `nixpkgs-latest` and the overlay in
 your flake.
 
+### Uninstalling
+
+cheni is designed so that your NixOS config keeps working even if you
+stop using it entirely. The overlay added by `cheni init` does:
+
+```nix
+pins = if builtins.pathExists ./package-pins.json
+       then builtins.fromJSON (builtins.readFile ./package-pins.json)
+       else [];
+```
+
+So an **empty or missing** `package-pins.json` is a no-op — the overlay
+degrades gracefully to identity.
+
+To fully remove cheni:
+
+1. `cheni unpin --all` (optional — leaves `[]` in the pins file).
+2. Remove `inputs.cheni.url` from `flake.nix`.
+3. Remove `environment.systemPackages = [ inputs.cheni.packages... ]` if
+   you had it.
+4. Optional: remove the `nixpkgs-latest` input and the cheni overlay
+   block. Leaving them in place is harmless once pins are empty.
+5. Rebuild: `sudo nixos-rebuild switch --flake .`
+
+The only cheni-specific file in your repo is `package-pins.json` —
+safe to delete.
+
 ---
 
 ## Status

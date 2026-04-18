@@ -190,13 +190,24 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
 fn add_overlay(flake_path: &Path, content: &str, _hostname: &str) -> Result<()> {
     // Look for the overlay block in the matching nixosConfiguration
     // We look for `nixpkgs.overlays = [` within the hostname's section
-    let overlay_code = r#"              # cheni: per-package updates from nixpkgs-latest
+    // The overlay is deliberately self-sufficient:
+    //   - No cheni binary required at build time (it's a one-off edit).
+    //   - package-pins.json missing = no pins = plain nixpkgs. Users who
+    //     delete the file (e.g. uninstalling cheni) keep a working flake.
+    //   - Empty pins = identity overlay.
+    // Removing the overlay + the nixpkgs-latest input leaves the flake
+    // exactly as it was before `cheni init`.
+    let overlay_code = r#"              # cheni: per-package updates from nixpkgs-latest.
+              # Safe to leave in place if cheni is uninstalled — an absent
+              # or empty package-pins.json degrades to the identity overlay.
               (let
                 pkgs-latest = import inputs.nixpkgs-latest {
                   system = "x86_64-linux";
                   config.allowUnfree = true;
                 };
-                pins = builtins.fromJSON (builtins.readFile ./package-pins.json);
+                pins = if builtins.pathExists ./package-pins.json
+                       then builtins.fromJSON (builtins.readFile ./package-pins.json)
+                       else [];
               in final: prev: builtins.listToAttrs (builtins.filter (x: x != null) (map (name:
                 if pkgs-latest ? ${name}
                 then { inherit name; value = pkgs-latest.${name}; }
@@ -251,7 +262,12 @@ fn print_overlay_instructions(_hostname: &str) {
       system = "x86_64-linux";
       config.allowUnfree = true;
     };
-    pins = builtins.fromJSON (builtins.readFile ./package-pins.json);
+    # Missing / empty file degrades to the identity overlay — remove cheni
+    # safely at any time by deleting this block, the nixpkgs-latest input,
+    # and (optionally) package-pins.json.
+    pins = if builtins.pathExists ./package-pins.json
+           then builtins.fromJSON (builtins.readFile ./package-pins.json)
+           else [];
   in {
     nixpkgs.overlays = [
       # cheni: pinned packages from nixpkgs-latest

@@ -70,6 +70,9 @@ pub fn run() -> Result<()> {
     // Check 9: Repology cache health
     checks.push(check_cache());
 
+    // Check 10: overlay is resilient to a missing pins file
+    checks.push(check_overlay_resilience(&nix_config.flake_dir));
+
     // Print results
     let mut ok_count = 0;
     let mut warn_count = 0;
@@ -367,6 +370,61 @@ fn check_generations() -> CheckResult {
             name: "System generations".to_string(),
             message: format!("{} generation(s)", count),
             hint: None,
+        }
+    }
+}
+
+/// Flag the legacy overlay form that reads package-pins.json without a
+/// pathExists guard. If the user ever deletes the file (or stops using
+/// cheni without cleaning up the overlay), that form makes the whole
+/// flake fail to evaluate. The resilient form degrades to an empty
+/// pin list instead.
+fn check_overlay_resilience(flake_dir: &std::path::Path) -> CheckResult {
+    let flake_path = flake_dir.join("flake.nix");
+    let content = match std::fs::read_to_string(&flake_path) {
+        Ok(c) => c,
+        Err(_) => {
+            return CheckResult {
+                severity: Severity::Warning,
+                name: "Overlay resilience".to_string(),
+                message: "could not read flake.nix".to_string(),
+                hint: None,
+            };
+        }
+    };
+
+    // Nothing to check when cheni isn't wired up at all.
+    if !content.contains("package-pins.json") {
+        return CheckResult {
+            severity: Severity::Ok,
+            name: "Overlay resilience".to_string(),
+            message: "no cheni overlay present".to_string(),
+            hint: None,
+        };
+    }
+
+    if content.contains("builtins.pathExists ./package-pins.json") {
+        CheckResult {
+            severity: Severity::Ok,
+            name: "Overlay resilience".to_string(),
+            message: "overlay degrades gracefully when pins file is missing".to_string(),
+            hint: None,
+        }
+    } else {
+        CheckResult {
+            severity: Severity::Warning,
+            name: "Overlay resilience".to_string(),
+            message: "legacy overlay would fail if package-pins.json is deleted".to_string(),
+            hint: Some(
+                "Replace 'pins = builtins.fromJSON (builtins.readFile ./package-pins.json);' with:\n\
+                 \n  \
+                   pins = if builtins.pathExists ./package-pins.json\n  \
+                          then builtins.fromJSON (builtins.readFile ./package-pins.json)\n  \
+                          else [];\n\
+                 \n  \
+                 This keeps the flake working if you ever uninstall cheni."
+                    .to_string(),
+            ),
         }
     }
 }
