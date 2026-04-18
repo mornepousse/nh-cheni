@@ -70,7 +70,14 @@ pub fn run(query: &str) -> Result<()> {
         (short_name, version, description)
     }).collect();
 
-    results.sort_by(|a, b| a.0.cmp(&b.0));
+    // Sort by relevance: exact matches first, then prefix matches,
+    // then substring matches, then alphabetical within each bucket.
+    let q = query.to_lowercase();
+    results.sort_by(|a, b| {
+        let rank_a = relevance_rank(&a.0.to_lowercase(), &q);
+        let rank_b = relevance_rank(&b.0.to_lowercase(), &q);
+        rank_a.cmp(&rank_b).then_with(|| a.0.cmp(&b.0))
+    });
 
     // Display (cap at 30 results)
     let max_display = 30;
@@ -81,9 +88,17 @@ pub fn run(query: &str) -> Result<()> {
             description.clone()
         };
 
+        // Highlight the matching package name in green; perfect matches
+        // in bold green so the eye lands there first.
+        let name_styled = if name.to_lowercase() == q {
+            name.bold().green().to_string()
+        } else {
+            name.green().to_string()
+        };
+
         println!(
             "  {:<30} {:<14} {}",
-            name.green(),
+            name_styled,
             version.dimmed(),
             truncated,
         );
@@ -101,4 +116,19 @@ pub fn run(query: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Lower number = more relevant. Used to sort search results so that
+/// exact name matches show up first, then prefix matches, then everything
+/// else (substring matches and full-text hits from the description).
+fn relevance_rank(name_lower: &str, query_lower: &str) -> u8 {
+    if name_lower == query_lower {
+        0
+    } else if name_lower.starts_with(query_lower) {
+        1
+    } else if name_lower.contains(query_lower) {
+        2
+    } else {
+        3
+    }
 }

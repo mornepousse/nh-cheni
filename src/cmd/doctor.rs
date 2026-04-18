@@ -300,7 +300,11 @@ fn check_store_size() -> CheckResult {
                     severity: Severity::Warning,
                     name: "Nix store size".to_string(),
                     message: format!("{} (quite large)", size),
-                    hint: Some("Run 'nh clean all' or 'cheni clean' to free space.".to_string()),
+                    hint: Some(
+                        "Prune old generations safely with 'cheni history --keep 20 --gc' \
+                         (keeps the 20 most recent, then reclaims the disk)."
+                            .to_string(),
+                    ),
                 }
             } else {
                 CheckResult {
@@ -320,39 +324,46 @@ fn check_store_size() -> CheckResult {
     }
 }
 
-/// Check the number of system generations.
+/// Count the system generations by reading /nix/var/nix/profiles directly.
+/// No sudo required — the symlinks are world-readable.
 fn check_generations() -> CheckResult {
-    let output = std::process::Command::new("sudo")
-        .args(["-n", "nix-env", "-p", "/nix/var/nix/profiles/system", "--list-generations"])
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let count = stdout.lines().count();
-
-            if count > 20 {
-                CheckResult {
-                    severity: Severity::Warning,
-                    name: "System generations".to_string(),
-                    message: format!("{} generations (a lot)", count),
-                    hint: Some("Run 'sudo nix-collect-garbage --delete-older-than 30d'.".to_string()),
-                }
-            } else {
-                CheckResult {
-                    severity: Severity::Ok,
-                    name: "System generations".to_string(),
-                    message: format!("{} generation(s)", count),
-                    hint: None,
-                }
-            }
+    let dir = std::path::Path::new("/nix/var/nix/profiles");
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => {
+            return CheckResult {
+                severity: Severity::Warning,
+                name: "System generations".to_string(),
+                message: "could not read /nix/var/nix/profiles".to_string(),
+                hint: None,
+            };
         }
-        _ => CheckResult {
+    };
+
+    let count = entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with("system-") && n.ends_with("-link"))
+        .count();
+
+    if count > 30 {
+        CheckResult {
+            severity: Severity::Warning,
+            name: "System generations".to_string(),
+            message: format!("{} generations (a lot)", count),
+            hint: Some(
+                "Prune with 'cheni history --keep 20' or 'cheni history --older-than 30d' \
+                 (keeps the active generation safe)."
+                    .to_string(),
+            ),
+        }
+    } else {
+        CheckResult {
             severity: Severity::Ok,
             name: "System generations".to_string(),
-            message: "(skipped — requires sudo)".to_string(),
+            message: format!("{} generation(s)", count),
             hint: None,
-        },
+        }
     }
 }
 
