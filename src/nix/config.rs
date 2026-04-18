@@ -98,6 +98,159 @@ fn is_nixos_config_flake(dir: &Path) -> bool {
     }
 }
 
+/// Walk `imports = [ ... ];` recursively from the host (and home-manager)
+/// entry points and return the set of `.nix` files actually pulled into
+/// the build for `hostname`. Skips commented-out imports.
+///
+/// Used by `cheni check` so that the "in <file>" annotation only points
+/// to modules that are really active — without this, a commented-out
+/// `modules/dev/lpc40.nix` could be reported as the source for `nspr`.
+///
+/// Returns `None` if no entry point can be found (very exotic layouts);
+/// callers should then fall back to scanning every module file.
+pub fn list_active_modules(flake_dir: &Path, hostname: &str) -> Option<Vec<PathBuf>> {
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+
+    // Entry 1: hosts/<hostname>/default.nix (system-level imports)
+    let host_entry = flake_dir.join("hosts").join(hostname).join("default.nix");
+    let mut found_any = false;
+    if host_entry.exists() {
+        walk_imports(&host_entry, &mut visited);
+        found_any = true;
+    }
+
+    // Entry 2: home-manager file referenced from flake.nix
+    if let Some(home_user) = find_home_manager_user(flake_dir) {
+        let home_entry = flake_dir.join("home").join(format!("{}.nix", home_user));
+        if home_entry.exists() {
+            walk_imports(&home_entry, &mut visited);
+            found_any = true;
+        }
+    }
+
+    if !found_any {
+        return None;
+    }
+    Some(visited.into_iter().collect())
+}
+
+/// Look for `home-manager.users.<NAME> = import ./home/<NAME>.nix` in
+/// flake.nix. Returns the first user name found, or None.
+fn find_home_manager_user(flake_dir: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(flake_dir.join("flake.nix")).ok()?;
+    let re = regex::Regex::new(r"home-manager\.users\.([a-zA-Z_][a-zA-Z0-9_-]*)").ok()?;
+    re.captures(&content)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string())
+}
+
+/// Recursively follow `imports = [...]` from a starting `.nix` file,
+/// inserting each visited file into `visited`. Commented-out lines are
+/// skipped, and only relative paths (`./foo.nix`, `../bar`) are followed
+/// — `inputs.something.nixosModules.x` is opaque so we leave it alone.
+fn walk_imports(file: &Path, visited: &mut std::collections::HashSet<PathBuf>) {
+    let canon = match file.canonicalize() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    if !visited.insert(canon.clone()) {
+        return; // already walked
+    }
+
+    let content = match std::fs::read_to_string(&canon) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let parent = match canon.parent() {
+        Some(p) => p,
+        None => return,
+    };
+
+    for import in parse_imports(&content) {
+        // Resolve relative to the current file's parent
+        let resolved = parent.join(&import);
+        let target = if resolved.is_dir() {
+            resolved.join("default.nix")
+        } else if resolved.exists() {
+            resolved
+        } else {
+            // Try adding .nix extension
+            let with_ext = resolved.with_extension("nix");
+            if with_ext.exists() {
+                with_ext
+            } else {
+                continue;
+            }
+        };
+        walk_imports(&target, visited);
+    }
+}
+
+/// Pull relative `.nix` paths out of an `imports = [ ... ];` block.
+/// Strips line and inline comments, ignores `inputs.*` references.
+fn parse_imports(content: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut idx = 0;
+
+    // Walk every `imports = [` occurrence — there can be more than one
+    // (e.g. specialisations, conditional sub-blocks).
+    while let Some(pos) = content[idx..].find("imports") {
+        let abs = idx + pos;
+        let after = &content[abs + "imports".len()..];
+        // Expect "= [" (with optional whitespace), otherwise it might be
+        // a comment / different identifier — skip.
+        let trimmed = after.trim_start();
+        if !trimmed.starts_with('=') {
+            idx = abs + 1;
+            continue;
+        }
+        let after_eq = trimmed[1..].trim_start();
+        // Skip "with lib;" prefix if present
+        let after_with = if let Some(rest) = after_eq.strip_prefix("with") {
+            // skip until ';'
+            match rest.find(';') {
+                Some(semi) => rest[semi + 1..].trim_start(),
+                None => after_eq,
+            }
+        } else {
+            after_eq
+        };
+        if !after_with.starts_with('[') {
+            idx = abs + 1;
+            continue;
+        }
+        // Find matching close bracket (no nested handling — imports blocks
+        // are flat in practice).
+        let block_start_in_after = after_with.as_ptr() as usize - content.as_ptr() as usize + 1;
+        let close = match content[block_start_in_after..].find(']') {
+            Some(c) => block_start_in_after + c,
+            None => break,
+        };
+        let block = &content[block_start_in_after..close];
+        for raw_line in block.lines() {
+            let mut line = raw_line.trim();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if let Some(hash) = line.find('#') {
+                line = line[..hash].trim();
+            }
+            if line.is_empty() {
+                continue;
+            }
+            // The block may have multiple imports on one line separated by space
+            for token in line.split_whitespace() {
+                if token.starts_with("./") || token.starts_with("../") {
+                    out.push(token.trim_end_matches(';').to_string());
+                }
+            }
+        }
+        idx = close + 1;
+    }
+    out
+}
+
 /// Has `cheni init` been run? Looks for `nixpkgs-latest` in the flake
 /// (either the source flake.nix or the lock file). Used by gateway
 /// commands to surface a friendly message before failing in surprising

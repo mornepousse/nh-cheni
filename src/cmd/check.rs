@@ -92,9 +92,34 @@ pub async fn run(category: Option<&str>) -> Result<()> {
         }
     };
 
-    // Track which file declares which package — used to annotate the output.
-    let names_with_files = config::extract_package_names_with_files(&nix_files);
-    debug!("Config declares {} package names", names_with_files.len());
+    // Limit "in <file>" attribution to files that are actually imported
+    // by the active host configuration. Without this filter, packages
+    // declared in commented-out or otherwise inactive modules would be
+    // misreported as the source.
+    let active_set: Option<std::collections::HashSet<std::path::PathBuf>> =
+        if category.is_some() {
+            // User explicitly asked for a category — show everything in it.
+            None
+        } else {
+            config::list_active_modules(&nix_config.flake_dir, &nix_config.hostname)
+                .map(|v| v.into_iter().collect())
+        };
+
+    let mut names_with_files = config::extract_package_names_with_files(&nix_files);
+    if let Some(active) = &active_set {
+        for paths in names_with_files.values_mut() {
+            paths.retain(|p| {
+                p.canonicalize()
+                    .ok()
+                    .map(|c| active.contains(&c))
+                    .unwrap_or(false)
+            });
+        }
+        // Drop entries whose only declarations were in inactive files.
+        names_with_files.retain(|_, paths| !paths.is_empty());
+    }
+    debug!("Config declares {} package names (active filter applied: {})",
+        names_with_files.len(), active_set.is_some());
 
     // 4. Cross-reference: keep only packages that are both in config AND store
     let mut packages_to_check: Vec<(String, String)> = Vec::new();
@@ -219,15 +244,27 @@ pub async fn run(category: Option<&str>) -> Result<()> {
     }
 
     // 7. Display results — flake inputs FIRST (most actionable), then packages.
-    if category.is_none() && !flake_inputs.is_empty() {
-        let has_flake_updates = flake_inputs.iter().any(|i| i.has_update == Some(true));
+    // Skip inputs that aren't referenced anywhere in the active modules
+    // (typical case: a `zen-browser` input declared but never wired up).
+    let used_inputs: std::collections::HashSet<String> = if category.is_none() {
+        find_used_flake_inputs(&nix_config.flake_dir, active_set.as_ref())
+    } else {
+        flake_inputs.iter().map(|i| i.name.clone()).collect()
+    };
+    let visible_flake_inputs: Vec<&flake::FlakeInput> = flake_inputs
+        .iter()
+        .filter(|i| used_inputs.contains(&i.name))
+        .collect();
+
+    if category.is_none() && !visible_flake_inputs.is_empty() {
+        let has_flake_updates = visible_flake_inputs.iter().any(|i| i.has_update == Some(true));
         if has_flake_updates {
             println!("{}:", "Flake inputs (updates available)".yellow().bold());
         } else {
             println!("{}:", "Flake inputs".bold());
         }
 
-        for input in &flake_inputs {
+        for input in &visible_flake_inputs {
             let version_str = input.installed_version
                 .as_deref()
                 .unwrap_or("?");
@@ -317,6 +354,102 @@ fn format_origin(r: &CheckResult) -> String {
         Some(path) => format!("in {}", path),
         None => String::new(),
     }
+}
+
+/// Return the set of flake inputs that are actually referenced from
+/// the user's config. An input shows up here if any active `.nix` file
+/// (or `flake.nix` itself, beyond the `inputs = { ... }` block) mentions
+/// `inputs.<name>` or `inputs.<name>.something`.
+///
+/// Falls back to listing every input when active_set is None, so
+/// non-NixOS-flake users still see their inputs in `cheni check`.
+fn find_used_flake_inputs(
+    flake_dir: &std::path::Path,
+    active_set: Option<&std::collections::HashSet<std::path::PathBuf>>,
+) -> std::collections::HashSet<String> {
+    use std::collections::HashSet;
+
+    let lock_text = std::fs::read_to_string(flake_dir.join("flake.lock")).unwrap_or_default();
+    let lock: serde_json::Value = match serde_json::from_str(&lock_text) {
+        Ok(v) => v,
+        Err(_) => return HashSet::new(),
+    };
+    let all_inputs: Vec<String> = lock
+        .get("nodes")
+        .and_then(|n| n.get("root"))
+        .and_then(|r| r.get("inputs"))
+        .and_then(|i| i.as_object())
+        .map(|m| m.keys().cloned().collect())
+        .unwrap_or_default();
+
+    let active = match active_set {
+        Some(a) => a,
+        None => return all_inputs.into_iter().collect(),
+    };
+
+    let mut used: HashSet<String> = HashSet::new();
+
+    // Read every active .nix file once and grep textually for `inputs.<name>`.
+    let mut texts: Vec<String> = active
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .collect();
+
+    // Also consider flake.nix itself — but only the part *outside* the
+    // `inputs = { ... };` declaration block (every input is named there
+    // and would otherwise look "used").
+    let flake_text = std::fs::read_to_string(flake_dir.join("flake.nix")).unwrap_or_default();
+    texts.push(strip_inputs_block(&flake_text));
+
+    for name in all_inputs {
+        let needle = format!("inputs.{}", name);
+        if texts.iter().any(|t| t.contains(&needle)) {
+            used.insert(name);
+        }
+    }
+    used
+}
+
+/// Remove the top-level `inputs = { ... };` declaration from flake.nix
+/// so that grepping for `inputs.<name>` inside the rest of the file
+/// detects real usage instead of declarations.
+fn strip_inputs_block(text: &str) -> String {
+    let lower = text;
+    let start = match lower.find("inputs") {
+        Some(s) => s,
+        None => return text.to_string(),
+    };
+    // Look for the opening brace after "inputs ="
+    let after = &lower[start..];
+    let eq = match after.find('=') {
+        Some(e) => start + e,
+        None => return text.to_string(),
+    };
+    let brace = match lower[eq..].find('{') {
+        Some(b) => eq + b,
+        None => return text.to_string(),
+    };
+    // Find matching closing brace (track depth).
+    let bytes = lower.as_bytes();
+    let mut depth = 0;
+    let mut end = brace;
+    for (i, &b) in bytes.iter().enumerate().skip(brace) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..start]);
+    out.push_str(&text[end..]);
+    out
 }
 
 /// Friendly explanation shown when `cheni init` has never been run.
