@@ -2,12 +2,34 @@
 //!
 //! Lists all NixOS system generations with their date, kernel,
 //! and the differences (added/changed/removed packages).
+//!
+//! Also handles selective generation deletion via the `--prune`,
+//! `--delete`, `--keep`, and `--older-than` flags.
 
 use std::process::Command;
 
 use anyhow::{Context, Result};
 use colored::Colorize;
+use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
 use tracing::debug;
+
+/// Options accepted by `cheni history`.
+pub struct HistoryOptions {
+    pub diff: bool,
+    pub limit: Option<usize>,
+    /// Specific generation numbers or ranges to delete.
+    pub delete: Vec<String>,
+    /// Pick generations to delete interactively.
+    pub prune: bool,
+    /// Delete the oldest generations, keeping only N most recent.
+    pub keep: Option<usize>,
+    /// Delete generations older than this duration spec (e.g. "30d").
+    pub older_than: Option<String>,
+    /// Run nix-collect-garbage after deletion.
+    pub gc: bool,
+    /// Skip confirmation prompt.
+    pub yes: bool,
+}
 
 /// A single NixOS generation.
 struct Generation {
@@ -27,21 +49,30 @@ struct Generation {
 ///
 /// Lists all system generations with their differences.
 /// Use --diff to show package changes between generations.
-pub fn run(diff: bool, limit: Option<usize>) -> Result<()> {
-    println!("{}\n", "=== cheni history ===".bold());
-
+/// Use --prune / --delete / --keep / --older-than to remove generations.
+pub fn run(opts: HistoryOptions) -> Result<()> {
     let generations = read_generations()?;
 
     if generations.is_empty() {
+        println!("{}\n", "=== cheni history ===".bold());
         println!("{}", "No generations found.".dimmed());
-        println!(
-            "  This requires read access to /nix/var/nix/profiles/system-*-link"
-        );
+        println!("  This requires read access to /nix/var/nix/profiles/system-*-link");
         return Ok(());
     }
 
+    let in_delete_mode = opts.prune
+        || !opts.delete.is_empty()
+        || opts.keep.is_some()
+        || opts.older_than.is_some();
+
+    if in_delete_mode {
+        return run_delete(&opts, &generations);
+    }
+
+    println!("{}\n", "=== cheni history ===".bold());
+
     let total = generations.len();
-    let to_show = limit.unwrap_or(10).min(total);
+    let to_show = opts.limit.unwrap_or(10).min(total);
 
     // Show most recent first
     let displayed: Vec<&Generation> = generations.iter().rev().take(to_show).collect();
@@ -82,7 +113,7 @@ pub fn run(diff: bool, limit: Option<usize>) -> Result<()> {
         if i + 1 < displayed.len() {
             let previous = displayed[i + 1];
 
-            if diff {
+            if opts.diff {
                 // Full diff requested
                 match get_diff(&previous.store_path, &gen.store_path) {
                     Ok(diff_text) if !diff_text.is_empty() => {
@@ -118,6 +149,233 @@ pub fn run(diff: bool, limit: Option<usize>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve which generations to delete from the user's flags, then run
+/// `nix-env --delete-generations` (with sudo) for the chosen numbers.
+fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
+    println!("{}\n", "=== cheni history (prune) ===".bold());
+
+    let all: Vec<u32> = generations.iter().map(|g| g.number).collect();
+    let current = generations.iter().find(|g| g.is_current).map(|g| g.number);
+
+    let mut to_delete: Vec<u32> = Vec::new();
+
+    if opts.prune {
+        to_delete.extend(pick_interactively(generations, current)?);
+    }
+
+    for spec in &opts.delete {
+        to_delete.extend(parse_target_spec(spec, &all)?);
+    }
+
+    if let Some(k) = opts.keep {
+        to_delete.extend(pick_oldest_beyond(&all, k));
+    }
+
+    if let Some(spec) = opts.older_than.as_deref() {
+        let days = parse_duration_days(spec)
+            .with_context(|| format!("Invalid --older-than value: '{}'", spec))?;
+        to_delete.extend(pick_older_than(&all, days)?);
+    }
+
+    to_delete.sort_unstable();
+    to_delete.dedup();
+
+    // Refuse to delete the active generation — it would brick rollback.
+    if let Some(c) = current {
+        if to_delete.contains(&c) {
+            anyhow::bail!(
+                "Refusing to delete the active generation ({}). \
+                 Switch to another generation first (cheni rollback).",
+                c
+            );
+        }
+    }
+
+    if to_delete.is_empty() {
+        println!("{}", "Nothing to delete.".dimmed());
+        return Ok(());
+    }
+
+    println!(
+        "Will delete {} generation(s):",
+        to_delete.len().to_string().bold()
+    );
+    for n in &to_delete {
+        println!("  {} {}", "-".red(), n.to_string().bold());
+    }
+    println!();
+
+    if !opts.yes {
+        let confirm = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Proceed?")
+            .default(false)
+            .interact()?;
+        if !confirm {
+            println!("{}", "Aborted.".dimmed());
+            return Ok(());
+        }
+    }
+
+    let mut args: Vec<String> = vec![
+        "/run/current-system/sw/bin/nix-env".to_string(),
+        "-p".to_string(),
+        "/nix/var/nix/profiles/system".to_string(),
+        "--delete-generations".to_string(),
+    ];
+    args.extend(to_delete.iter().map(|n| n.to_string()));
+
+    println!("{}", "Requires sudo to modify the system profile.".dimmed());
+    let status = Command::new("sudo")
+        .args(&args)
+        .status()
+        .context("Failed to run nix-env --delete-generations")?;
+
+    if !status.success() {
+        anyhow::bail!("Generation deletion failed");
+    }
+
+    println!(
+        "\n{} {} generation(s) removed.",
+        "✓".green(),
+        to_delete.len()
+    );
+
+    if opts.gc {
+        println!("\n{}", "Running garbage collection...".bold());
+        let gc_status = Command::new("sudo")
+            .args(["/run/current-system/sw/bin/nix-collect-garbage"])
+            .status()
+            .context("Failed to run nix-collect-garbage")?;
+        if !gc_status.success() {
+            anyhow::bail!("Garbage collection failed");
+        }
+        println!("\n{} Disk space reclaimed.", "✓".green());
+    } else {
+        println!(
+            "{}",
+            "  (store paths kept until next GC — pass --gc to reclaim disk now)".dimmed()
+        );
+    }
+
+    Ok(())
+}
+
+/// Parse a target spec string into a list of generation numbers.
+/// Accepts "405", "405..410" (inclusive range).
+fn parse_target_spec(spec: &str, all: &[u32]) -> Result<Vec<u32>> {
+    if let Some((from, to)) = spec.split_once("..") {
+        let from: u32 = from
+            .parse()
+            .with_context(|| format!("Invalid range start in '{}'", spec))?;
+        let to: u32 = to
+            .parse()
+            .with_context(|| format!("Invalid range end in '{}'", spec))?;
+        let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
+        Ok(all.iter().copied().filter(|n| *n >= lo && *n <= hi).collect())
+    } else {
+        let n: u32 = spec
+            .parse()
+            .with_context(|| format!("Invalid generation number '{}'", spec))?;
+        if !all.contains(&n) {
+            anyhow::bail!("Generation {} does not exist", n);
+        }
+        Ok(vec![n])
+    }
+}
+
+/// Return all generations except the `keep` most recent.
+fn pick_oldest_beyond(all: &[u32], keep: usize) -> Vec<u32> {
+    if all.len() <= keep {
+        return Vec::new();
+    }
+    all[..all.len() - keep].to_vec()
+}
+
+/// Parse a duration like "30d", "2w", "1m" into days.
+fn parse_duration_days(spec: &str) -> Result<u64> {
+    let spec = spec.trim();
+    let (num_part, unit) = spec.split_at(
+        spec.find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(spec.len()),
+    );
+    let n: u64 = num_part
+        .parse()
+        .with_context(|| format!("Expected a number, got '{}'", num_part))?;
+    let multiplier = match unit.trim() {
+        "" | "d" => 1,
+        "w" => 7,
+        "m" => 30,
+        "y" => 365,
+        other => anyhow::bail!("Unknown time unit '{}' (use d, w, m, y)", other),
+    };
+    Ok(n * multiplier)
+}
+
+/// Pick generations whose symlink mtime is older than `days` days.
+fn pick_older_than(all: &[u32], days: u64) -> Result<Vec<u32>> {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(days * 86400))
+        .context("Cutoff date underflow")?;
+
+    let mut out = Vec::new();
+    for &n in all {
+        let path = format!("/nix/var/nix/profiles/system-{}-link", n);
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if let Ok(modified) = meta.modified() {
+            if modified < cutoff {
+                out.push(n);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Show a multi-select picker so the user can tick generations to delete.
+/// The active generation is shown but excluded from the result.
+fn pick_interactively(generations: &[Generation], current: Option<u32>) -> Result<Vec<u32>> {
+    // Newest first for picking
+    let ordered: Vec<&Generation> = generations.iter().rev().collect();
+
+    let labels: Vec<String> = ordered
+        .iter()
+        .map(|g| {
+            let marker = if Some(g.number) == current { " (current)" } else { "" };
+            let summary = if let Some(idx) = ordered.iter().position(|x| x.number == g.number) {
+                if idx + 1 < ordered.len() {
+                    let prev = ordered[idx + 1];
+                    get_diff_summary(&prev.store_path, &g.store_path)
+                        .unwrap_or_else(|| String::new())
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            let summary_str = if summary.is_empty() {
+                String::new()
+            } else {
+                format!("  — {}", summary)
+            };
+            format!("{:<5} {}{}{}", g.number, g.date, marker, summary_str)
+        })
+        .collect();
+
+    let selection = MultiSelect::with_theme(&ColorfulTheme::default())
+        .with_prompt("Pick generations to delete (space = toggle, enter = confirm)")
+        .items(&labels)
+        .interact_opt()?
+        .unwrap_or_default();
+
+    Ok(selection
+        .into_iter()
+        .map(|i| ordered[i].number)
+        .filter(|n| Some(*n) != current)
+        .collect())
 }
 
 /// Read all system generations by listing symlinks in /nix/var/nix/profiles.

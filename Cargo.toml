@@ -25,6 +25,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Output
 colored = "3"
 
+# Interactive prompts (used by `cheni` with no subcommand)
+dialoguer = { version = "0.11", default-features = false }
+
 # Utilities
 regex = "1"
 anyhow = "1"

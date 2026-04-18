@@ -9,6 +9,7 @@ pub mod diff;
 pub mod doctor;
 pub mod history;
 pub mod init;
+pub mod interactive;
 pub mod obsolete;
 pub mod pin;
 pub mod rollback;

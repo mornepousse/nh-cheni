@@ -38,7 +38,12 @@ History & rollback:\n  \
   cheni history --diff         Show full per-package diff between generations\n  \
   cheni rollback               Roll back to the previous generation\n  \
   cheni rollback 405           Roll back to a specific generation\n  \
-  cheni diff 405 409           Compare two generations\n\
+  cheni diff 405 409           Compare two generations\n  \
+  cheni history --prune        Pick generations to delete interactively\n  \
+  cheni history --delete 405 406  Delete specific generations\n  \
+  cheni history --delete 400..410 Delete a range\n  \
+  cheni history --keep 20      Keep only the 20 most recent\n  \
+  cheni history --older-than 30d  Delete generations older than 30 days\n\
 \n\
 Discovery:\n  \
   cheni search firefox         Search nixpkgs\n  \
@@ -60,7 +65,7 @@ struct Cli {
     no_color: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -152,7 +157,7 @@ enum Commands {
     #[command(name = "self-update")]
     SelfUpdate,
 
-    /// List system generations with date, nixpkgs commit, and changes since previous
+    /// List system generations (or selectively delete them with --prune/--delete/--keep)
     History {
         /// Show full per-package diff between generations (uses nvd if available)
         #[arg(long)]
@@ -161,6 +166,30 @@ enum Commands {
         /// Limit the number of generations shown (default: 10)
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
+
+        /// Delete the listed generations (numbers or ranges, e.g. "405" "400..410")
+        #[arg(long, value_name = "TARGET", num_args = 1..)]
+        delete: Vec<String>,
+
+        /// Pick generations to delete from an interactive multi-select list
+        #[arg(short, long)]
+        prune: bool,
+
+        /// Delete the oldest generations, keeping only the N most recent
+        #[arg(long, value_name = "N")]
+        keep: Option<usize>,
+
+        /// Delete generations older than this duration (e.g. "30d", "2w", "6m")
+        #[arg(long, value_name = "DURATION")]
+        older_than: Option<String>,
+
+        /// After deletion, run nix-collect-garbage to reclaim disk space
+        #[arg(long)]
+        gc: bool,
+
+        /// Skip the deletion confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
     },
 
     /// Roll back to the previous generation (or a specific one)
@@ -221,8 +250,25 @@ async fn main() -> Result<()> {
         .without_time()
         .init();
 
+    // No subcommand → launch the interactive menu (or print help if not a TTY).
+    let command = match cli.command {
+        Some(c) => c,
+        None => {
+            use std::io::IsTerminal;
+            if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
+                cmd::interactive::run().await?;
+                return Ok(());
+            } else {
+                use clap::CommandFactory;
+                Cli::command().print_help()?;
+                println!();
+                return Ok(());
+            }
+        }
+    };
+
     // Dispatch to the right command
-    match cli.command {
+    match command {
         Commands::Check {
             dev, apps, desktop, hardware, category,
         } => {
@@ -294,8 +340,17 @@ async fn main() -> Result<()> {
             cmd::self_update::run()?;
         }
 
-        Commands::History { diff, limit } => {
-            cmd::history::run(diff, limit)?;
+        Commands::History { diff, limit, delete, prune, keep, older_than, gc, yes } => {
+            cmd::history::run(cmd::history::HistoryOptions {
+                diff,
+                limit,
+                delete,
+                prune,
+                keep,
+                older_than,
+                gc,
+                yes,
+            })?;
         }
 
         Commands::Rollback { target } => {
