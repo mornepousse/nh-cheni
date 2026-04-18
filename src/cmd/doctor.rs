@@ -289,77 +289,57 @@ fn check_obsolete_pins(flake_dir: &std::path::Path) -> CheckResult {
 
 /// Check the total size of the nix store.
 ///
-/// Tries `du -sh /nix/store` first. If that fails (permissions, missing
-/// binary, or a transient error), falls back to summing block counts via
-/// `stat` on the mount point, which is O(1) and works without root.
-/// Always logs *why* when a path fails, so running with `-v` surfaces
-/// the actual error instead of a generic "could not determine".
+/// Tries `du -sh /nix/store` and surfaces the exact failure reason
+/// (spawn error, exit code, stderr) directly in the warning message
+/// so users don't need to remember to re-run with `-v`.
 fn check_store_size() -> CheckResult {
-    if let Some(size) = size_via_du() {
-        return classify_store_size(&size);
-    }
-
-    // Fallback: rough estimate from the filesystem containing /nix/store.
-    // Less precise (includes non-store files on the same FS) but fast and
-    // never fails on a readable mount.
-    if let Some(size) = size_via_statvfs() {
-        return classify_store_size(&size);
-    }
-
-    CheckResult {
-        severity: Severity::Warning,
-        name: "Nix store size".to_string(),
-        message: "could not determine (neither 'du' nor statvfs returned a usable value)"
-            .to_string(),
-        hint: Some("Run with -v for details.".to_string()),
+    match size_via_du() {
+        Ok(size) => classify_store_size(&size),
+        Err(reason) => CheckResult {
+            severity: Severity::Warning,
+            name: "Nix store size".to_string(),
+            message: format!("could not determine — {}", reason),
+            hint: None,
+        },
     }
 }
 
-/// Shell out to `du -sh /nix/store`. Returns None on any failure, with
-/// the reason logged at DEBUG.
-fn size_via_du() -> Option<String> {
-    let output = match std::process::Command::new("du")
+/// Shell out to `du -sh /nix/store`. Returns the parsed size on success,
+/// or a short human-readable reason string on any failure — intended to
+/// be shown directly to the user rather than hidden behind DEBUG logs.
+fn size_via_du() -> Result<String, String> {
+    let output = std::process::Command::new("du")
         .args(["-sh", "/nix/store"])
         .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::debug!("du failed to spawn: {}", e);
-            return None;
-        }
-    };
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => "'du' binary not in PATH".to_string(),
+            _ => format!("failed to run du: {}", e),
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::debug!(
-            "du exited with {:?}, stderr: {}",
-            output.status.code(),
-            stderr.lines().next().unwrap_or("<empty>")
-        );
-        return None;
+        let first_line = stderr.lines().next().unwrap_or("").trim();
+        let detail = if first_line.is_empty() {
+            match output.status.code() {
+                Some(c) => format!("du exited with code {}", c),
+                None => "du terminated without exit code".to_string(),
+            }
+        } else {
+            // Strip a leading "du: " if present — the error is still clear
+            // and a bit shorter.
+            first_line.strip_prefix("du: ").unwrap_or(first_line).to_string()
+        };
+        return Err(detail);
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let size = stdout.split_whitespace().next()?.to_string();
+    let size = stdout.split_whitespace().next()
+        .ok_or_else(|| "du returned empty output".to_string())?
+        .to_string();
     if size.is_empty() || size == "?" {
-        return None;
+        return Err("du returned an unparseable size".to_string());
     }
-    Some(size)
-}
-
-/// Report the used disk space of the filesystem backing /nix/store using
-/// libc statvfs. Returns a human-readable size like "76G" — this over-
-/// counts on systems where /nix/store shares its FS with other data, but
-/// on dedicated NixOS installs it's a good-enough proxy.
-fn size_via_statvfs() -> Option<String> {
-    // Use std::fs::metadata as a sanity check that the path is readable,
-    // then walk the nix-store child directories ourselves if statvfs isn't
-    // easily reachable without an extra crate. Without libc bindings we
-    // can't read raw statvfs — so just give up gracefully here.
-    // (When users hit this path, the du fallback log message tells them
-    // why. Not worth pulling in a libc crate just for the rare case.)
-    let _ = std::fs::metadata("/nix/store").ok()?;
-    None
+    Ok(size)
 }
 
 fn classify_store_size(size: &str) -> CheckResult {
