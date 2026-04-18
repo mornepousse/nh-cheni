@@ -37,25 +37,20 @@ pub struct FlakeInput {
     pub remote_age: Option<String>,
 }
 
-/// Inputs that are infrastructure, not user-facing packages.
-/// These are excluded from the flake input list.
+/// Inputs whose updates are handled globally via `cheni upgrade` rather
+/// than listed alongside user-facing package flakes. Kept tight: only
+/// what every NixOS flake user has. Optional toolchain flakes
+/// (rust-overlay, nixpkgs-esp-dev, fenix, nix-darwin, ...) stay visible
+/// because they're not universal — a user with `nixpkgs-esp-dev` very
+/// likely wants to see when it has a new commit.
 const INFRASTRUCTURE_INPUTS: &[&str] = &[
     "nixpkgs",
     "nixpkgs-latest",
     "home-manager",
-    "rust-overlay",
-    "nixpkgs-esp-dev",
+    // cheni's own flake self-reference — always excluded so 'cheni check'
+    // doesn't suggest updating cheni alongside user packages. Use
+    // `cheni self-update` for that.
     "cheni",
-];
-
-/// Mapping from flake input names to store package names.
-/// Used to find the installed version of a flake input package.
-/// Input name → store name prefix (matched case-insensitively).
-const INPUT_STORE_MAPPINGS: &[(&str, &str)] = &[
-    ("claude-code", "claude-code"),
-    ("zen-browser", "zen-browser"),
-    ("affinity-nix", "Affinity-Designer"),
-    ("kesp-controller", "kesp-controller"),
 ];
 
 /// Build the list of store paths to scan for installed versions.
@@ -199,21 +194,20 @@ pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
 
 /// Try to find the installed version of a flake input from the nix store.
 ///
-/// Uses the INPUT_STORE_MAPPINGS table to find the store package name,
-/// then scans the store output for a matching version.
+/// We scan `/run/current-system/sw` and the current user's profile for
+/// a store entry whose name starts with the input name. This is a
+/// heuristic — it works for flake inputs that publish a package with
+/// the same name as the input (the common case), but not for flakes
+/// that rename their output (e.g. an `affinity-nix` flake producing
+/// `Affinity-Designer-*`). When no match is found we return None and
+/// the UI shows "?" for the version — the user gets their update
+/// notification either way, it's only the "current" column that suffers.
 fn find_store_version(input_name: &str) -> Option<String> {
-    // Find the store name for this input
-    let store_prefix = INPUT_STORE_MAPPINGS.iter()
-        .find(|(input, _)| *input == input_name)
-        .map(|(_, store)| *store)?;
-
-    // Scan all store paths (system + user profile)
     for store_path in store_paths() {
-        if let Some(version) = scan_store_for_version(&store_path, store_prefix) {
+        if let Some(version) = scan_store_for_version(&store_path, input_name) {
             return Some(version);
         }
     }
-
     None
 }
 
@@ -403,9 +397,21 @@ mod tests {
 
     #[test]
     fn infrastructure_inputs_excluded() {
+        // Core infrastructure (always excluded)
         assert!(INFRASTRUCTURE_INPUTS.contains(&"nixpkgs"));
+        assert!(INFRASTRUCTURE_INPUTS.contains(&"nixpkgs-latest"));
         assert!(INFRASTRUCTURE_INPUTS.contains(&"home-manager"));
+        assert!(INFRASTRUCTURE_INPUTS.contains(&"cheni"));
+
+        // User-facing package flakes (never excluded)
         assert!(!INFRASTRUCTURE_INPUTS.contains(&"zen-browser"));
+        assert!(!INFRASTRUCTURE_INPUTS.contains(&"claude-code"));
+
+        // Optional toolchain flakes should NOT be excluded — not every user
+        // has them and those who do want update visibility.
+        assert!(!INFRASTRUCTURE_INPUTS.contains(&"rust-overlay"));
+        assert!(!INFRASTRUCTURE_INPUTS.contains(&"nixpkgs-esp-dev"));
+        assert!(!INFRASTRUCTURE_INPUTS.contains(&"fenix"));
     }
 
     #[test]
