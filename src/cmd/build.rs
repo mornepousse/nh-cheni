@@ -78,7 +78,7 @@ pub fn run() -> Result<()> {
     let stderr = &captured_stderr;
     debug!("Parsing {} bytes of captured stderr", stderr.len());
 
-    let errors = parse_errors(&stderr);
+    let errors = parse_errors(stderr);
 
     if errors.is_empty() {
         // Couldn't parse the error — show raw output
@@ -351,9 +351,7 @@ fn parse_hash_mismatch(lines: &[&str], idx: usize) -> Option<ParsedError> {
         what: pkg_name,
         category: "Hash mismatch",
         message,
-        hint: Some(format!(
-            "Update the hash in your derivation. If using fetchFromGitHub, the upstream source may have changed."
-        )),
+        hint: Some("Update the hash in your derivation. If using fetchFromGitHub, the upstream source may have changed.".to_string()),
     })
 }
 

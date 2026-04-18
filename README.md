@@ -208,8 +208,11 @@ Recognised error patterns:
 ## Requirements
 
 - NixOS with flakes enabled
-- A flake-based configuration
-- [`nh`](https://github.com/viperML/nh) (used internally for rebuilds)
+- A flake-based configuration declaring `nixosConfigurations.<hostname>`
+- [`nh`](https://github.com/viperML/nh) — used internally for rebuilds
+- [`nvd`](https://gitlab.com/khumba/nvd) (optional) — produces nicer output
+  for `cheni diff` and `cheni history --diff`; cheni falls back to
+  `nix store diff-closures` if absent
 
 ---
 

@@ -349,7 +349,7 @@ fn pick_interactively(generations: &[Generation], current: Option<u32>) -> Resul
                 if idx + 1 < ordered.len() {
                     let prev = ordered[idx + 1];
                     get_diff_summary(&prev.store_path, &g.store_path)
-                        .unwrap_or_else(|| String::new())
+                        .unwrap_or_default()
                 } else {
                     String::new()
                 }
@@ -629,7 +629,7 @@ fn parse_size_delta(line: &str) -> Option<f64> {
         if let Some(idx) = line.rfind(unit) {
             let before = &line[..idx].trim_end();
             // Walk back to find the number
-            let num_start = before.rfind(|c: char| c == ' ' || c == ',').map(|i| i + 1).unwrap_or(0);
+            let num_start = before.rfind([' ', ',']).map(|i| i + 1).unwrap_or(0);
             let num_str = before[num_start..].trim();
             if let Ok(n) = num_str.parse::<f64>() {
                 let kib = match *unit {

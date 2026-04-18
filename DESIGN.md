@@ -212,24 +212,37 @@ cheni/
 │   │   ├── check.rs         # cheni check
 │   │   ├── pin.rs           # cheni pin / unpin
 │   │   ├── update.rs        # cheni update
+│   │   ├── upgrade.rs       # cheni upgrade (full system upgrade)
+│   │   ├── build.rs         # cheni build (rebuild + error parsing)
 │   │   ├── init.rs          # cheni init
-│   │   └── status.rs        # cheni status
+│   │   ├── status.rs        # cheni status
+│   │   ├── doctor.rs        # cheni doctor (health checks)
+│   │   ├── search.rs        # cheni search (nix search wrapper)
+│   │   ├── why.rs           # cheni why (find declaring .nix file)
+│   │   ├── clean.rs         # cheni clean (obsolete pins)
+│   │   ├── self_update.rs   # cheni self-update
+│   │   ├── history.rs       # cheni history (list + --prune/--delete/--keep)
+│   │   ├── rollback.rs      # cheni rollback
+│   │   ├── diff.rs          # cheni diff <from> <to>
+│   │   ├── interactive.rs   # menu when run with no subcommand
+│   │   └── obsolete.rs      # shared helpers for pin obsolescence
 │   ├── nix/                 # NixOS system interaction
 │   │   ├── mod.rs
 │   │   ├── store.rs         # Read installed packages from store
 │   │   ├── config.rs        # Detect flake, hostname, modules
-│   │   ├── flake.rs         # Parse/modify flake.nix, read inputs
+│   │   ├── flake.rs         # Parse flake.lock, check remote inputs
 │   │   └── pins.rs          # Read/write package-pins.json
 │   ├── api/                 # External data sources
 │   │   ├── mod.rs
-│   │   ├── repology.rs      # Repology API client
-│   │   └── cache.rs         # On-disk cache
+│   │   ├── repology.rs      # Repology API client (rate-limited)
+│   │   └── cache.rs         # On-disk cache (~/.cache/cheni)
 │   └── version/             # Version logic
 │       ├── mod.rs
-│       ├── parse.rs         # Parse version strings
-│       └── compare.rs       # Major/minor detection
+│       ├── parse.rs         # Parse version strings (semver + calver)
+│       └── compare.rs       # Major/minor/newer detection
 ├── Cargo.toml
 ├── flake.nix
+├── build.rs                 # Embeds GIT_SHORT_HASH at compile time
 ├── DESIGN.md
 └── README.md
 ```
@@ -285,36 +298,49 @@ tracing::debug!("Package '{}': store={}  repology={} → minor update", name, in
 
 ## Versioning
 
-Alpha releases — expect breaking changes:
+Alpha releases — expect breaking changes. Versioning is calendar-ish for now;
+the `0.1.0-alpha` series shipped the full feature set incrementally:
 ```
-v0.1.0-alpha  →  cheni check
-v0.2.0-alpha  →  + cheni pin / unpin
-v0.3.0-alpha  →  + cheni update
-v0.4.0-alpha  →  + cheni init
-v0.5.0-alpha  →  + cheni status
-v1.0.0        →  stable, tested, documented
+inspection      cheni check, status, doctor, search, why
+pin lifecycle   cheni pin / unpin / clean
+apply           cheni update, build (with error parser), upgrade (preview)
+history         cheni history (list + diffs + prune/--delete/--keep/--older-than)
+                cheni rollback, diff
+self            cheni init, self-update
+UX              interactive menu (cheni with no args)
 ```
 
-## Future Modules (v2+)
+Aim for `v1.0.0` once the API has settled, the test suite covers the
+critical paths, and the `cheni init` flow has been validated on multiple
+real-world flake layouts.
 
-### Build Error Parser
-Wrap `nh os switch` / `nixos-rebuild` and translate cryptic errors:
-- Hash mismatch → show expected vs got, suggest `--update-hash`
-- Missing dependency → suggest package to add
-- Eval error → show file + line + context
-- Unfree → suggest `allowUnfree` or per-package override
+## Future ideas
 
-### System Visualizer
-Human-readable view of generations and packages:
-- Generation history with diffs (what changed)
-- Package tree grouped by module
-- Size tracking
+### Multi-host support
+Today cheni assumes one hostname per flake. Could grow to handle several
+`nixosConfigurations` (laptop + desktop + server) sharing the same pin set
+or scoped per host.
 
-### TUI Mode
-Visual layer on top of the CLI commands:
-- `cheni tui` — interactive package manager
-- Uses the same logic as CLI commands
-- Multi-select, search, detail views
+### Module-aware pin grouping
+`cheni pin --dev` already groups by `modules/dev/`. A natural extension is
+named pin groups ("dev-toolchain", "design-apps") that can be applied or
+unpinned together.
+
+### Generation tagging / notes
+Annotate a generation with a one-line note ("before kernel bump", "demo
+config for talk") that surfaces in `cheni history`. Useful when keeping
+many generations around for testing.
+
+### Faster check
+The Repology lookup is the dominant cost. Possible wins:
+- Parallel batches with smarter rate-limiting
+- Fall back to `nix-env -qa --json` for packages Repology doesn't know
+- Persistent shared cache across machines
+
+### TUI
+The interactive menu already covers the "I don't remember the flag"
+use case. A full TUI could add multi-select pinning, search-as-you-type
+across the package list, and a live diff view.
 
 ## Non-goals
 
