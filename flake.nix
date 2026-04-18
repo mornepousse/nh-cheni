@@ -15,7 +15,14 @@
         version = "0.1.0";
         src = ./.;
 
-        cargoHash = "sha256-0FndbTSpu8Ia8TEB7F4E5nnbhU3w4Y2gu/uuOdiGO1Q=";
+        # Derive the vendored-deps hash from Cargo.lock directly — no manual
+        # bump needed when deps change (cheni relies on this for self-update
+        # to keep working after 'cargo add'). Only works while every dep
+        # comes from crates.io; add `outputHashes` here if we ever pull a
+        # git or local dep.
+        cargoLock = {
+          lockFile = ./Cargo.lock;
+        };
 
         # reqwest uses rustls-tls, no need for pkg-config or openssl
         nativeBuildInputs = [];
