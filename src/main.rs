@@ -29,9 +29,14 @@ Common workflows:\n  \
   cheni pin vivaldi            Pin a single package to nixpkgs-latest\n  \
   cheni pin --dev              Pin all minor updates in modules/dev/\n  \
   cheni pin --flakes           Update flake inputs (zen-browser, claude-code, ...)\n  \
+  cheni build                  Just rebuild the current flake state (old 'update' alias)\n  \
   cheni update                 Refresh nixpkgs-latest + apply pinned updates\n  \
-  cheni build                  Just rebuild (no input refresh, parses errors)\n  \
-  cheni upgrade                Full upgrade: update all inputs, preview, build\n\
+  cheni upgrade                Full upgrade: update ALL inputs, preview, build (old 'upgrade')\n\
+\n\
+Build vs update vs upgrade — the short version:\n  \
+  build      =  nothing fetched, just rebuild with what's already in flake.lock\n  \
+  update     =  refresh nixpkgs-latest only, then rebuild  (applies pending pins)\n  \
+  upgrade    =  refresh every flake input, preview, then rebuild\n\
 \n\
 History & rollback:\n  \
   cheni history                List recent generations with package diffs\n  \
@@ -145,11 +150,11 @@ enum Commands {
         all: bool,
     },
 
-    /// Refresh nixpkgs-latest and rebuild the system (applies pending pins)
+    /// Refresh nixpkgs-latest + rebuild (applies pending pins — see 'build' for plain rebuild)
     #[command(alias = "up")]
     Update,
 
-    /// Full system upgrade: update all flake inputs, preview, build, clean pins
+    /// Full system upgrade: refresh ALL flake inputs, preview, build, clean pins
     #[command(alias = "ug")]
     Upgrade {
         /// Also run garbage collection (DELETES old generations — no rollback!)
@@ -165,7 +170,7 @@ enum Commands {
         yes: bool,
     },
 
-    /// Build and switch the current configuration (no input refresh, parses nix errors)
+    /// Rebuild the current flake state, no input refresh (equivalent of the old 'update' alias)
     #[command(alias = "b")]
     Build,
 
