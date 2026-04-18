@@ -132,6 +132,31 @@ enum Commands {
     #[command(name = "self-update")]
     SelfUpdate,
 
+    /// List system generations with their dates
+    History {
+        /// Show package diff between consecutive generations
+        #[arg(long)]
+        diff: bool,
+
+        /// Limit the number of generations shown
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+    },
+
+    /// Roll back to the previous generation (or a specific one)
+    Rollback {
+        /// Generation number to roll back to
+        target: Option<u32>,
+    },
+
+    /// Diff between two specific generations
+    Diff {
+        /// Source generation number
+        from: u32,
+        /// Target generation number
+        to: u32,
+    },
+
     /// Search nixpkgs for a package
     Search {
         /// Search query
@@ -247,6 +272,18 @@ async fn main() -> Result<()> {
 
         Commands::SelfUpdate => {
             cmd::self_update::run()?;
+        }
+
+        Commands::History { diff, limit } => {
+            cmd::history::run(diff, limit)?;
+        }
+
+        Commands::Rollback { target } => {
+            cmd::rollback::run(target)?;
+        }
+
+        Commands::Diff { from, to } => {
+            cmd::diff::run(from, to)?;
         }
 
         Commands::Search { query } => {
