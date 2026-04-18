@@ -23,12 +23,32 @@ use tracing_subscriber::EnvFilter;
         on NixOS, integrated with your flake configuration.\n\
         Packages are pinned to nixpkgs-latest for safe, incremental updates.",
     after_help = "\
-Quick start:\n  \
-  cheni check          See available updates\n  \
-  cheni pin vivaldi    Pin a single package\n  \
-  cheni pin --dev      Pin all minor updates in modules/dev/\n  \
-  cheni pin --flakes   Update flake inputs (zen-browser, claude-code, ...)\n  \
-  cheni update         Apply pinned updates"
+Common workflows:\n  \
+  cheni check                  See what's outdated (packages + flake inputs)\n  \
+  cheni pin vivaldi            Pin a single package to nixpkgs-latest\n  \
+  cheni pin --dev              Pin all minor updates in modules/dev/\n  \
+  cheni pin --flakes           Update flake inputs (zen-browser, claude-code, ...)\n  \
+  cheni update                 Refresh nixpkgs-latest + apply pinned updates\n  \
+  cheni build                  Just rebuild (no input refresh, parses errors)\n  \
+  cheni upgrade                Full upgrade: update all inputs, preview, build\n\
+\n\
+History & rollback:\n  \
+  cheni history                List recent generations with package diffs\n  \
+  cheni history --limit 30     Show more generations\n  \
+  cheni history --diff         Show full per-package diff between generations\n  \
+  cheni rollback               Roll back to the previous generation\n  \
+  cheni rollback 405           Roll back to a specific generation\n  \
+  cheni diff 405 409           Compare two generations\n\
+\n\
+Discovery:\n  \
+  cheni search firefox         Search nixpkgs\n  \
+  cheni why kitty              Find which .nix file declares a package\n  \
+  cheni status                 Show config path, active pins, flake inputs\n\
+\n\
+Maintenance:\n  \
+  cheni clean                  Remove obsolete pins (caught up by nixpkgs)\n  \
+  cheni doctor                 Health checks on the cheni setup\n  \
+  cheni self-update            Update cheni itself"
 )]
 struct Cli {
     /// Increase verbosity (-v for debug, -vv for trace)
@@ -101,10 +121,10 @@ enum Commands {
         all: bool,
     },
 
-    /// Apply pinned updates: refresh nixpkgs-latest and rebuild the system
+    /// Refresh nixpkgs-latest and rebuild the system (applies pending pins)
     Update,
 
-    /// Full system upgrade: update all inputs, preview, rebuild, clean pins
+    /// Full system upgrade: update all flake inputs, preview, build, clean pins
     Upgrade {
         /// Also run garbage collection (DELETES old generations — no rollback!)
         #[arg(long)]
@@ -119,37 +139,37 @@ enum Commands {
         yes: bool,
     },
 
-    /// Build and switch with human-readable error parsing
+    /// Build and switch the current configuration (no input refresh, parses nix errors)
     Build,
 
     /// Remove obsolete pins whose nixpkgs version has caught up
     Clean,
 
-    /// Run health checks on your cheni setup
+    /// Run health checks on the cheni setup (paths, pins, flake, store access)
     Doctor,
 
-    /// Update cheni itself (nix flake update cheni + rebuild)
+    /// Update cheni itself (refresh the cheni flake input and rebuild)
     #[command(name = "self-update")]
     SelfUpdate,
 
-    /// List system generations with their dates
+    /// List system generations with date, nixpkgs commit, and changes since previous
     History {
-        /// Show package diff between consecutive generations
+        /// Show full per-package diff between generations (uses nvd if available)
         #[arg(long)]
         diff: bool,
 
-        /// Limit the number of generations shown
+        /// Limit the number of generations shown (default: 10)
         #[arg(long, value_name = "N")]
         limit: Option<usize>,
     },
 
     /// Roll back to the previous generation (or a specific one)
     Rollback {
-        /// Generation number to roll back to
+        /// Generation number to roll back to (omit for the previous generation)
         target: Option<u32>,
     },
 
-    /// Diff between two specific generations
+    /// Compare two specific generations (uses nvd if available)
     Diff {
         /// Source generation number
         from: u32,
@@ -159,20 +179,20 @@ enum Commands {
 
     /// Search nixpkgs for a package
     Search {
-        /// Search query
+        /// Search query (e.g. "firefox", "rust analyzer")
         query: String,
     },
 
-    /// Find which .nix file declares a package
+    /// Find which .nix file in the config declares a given package
     Why {
         /// Package name to search for
         package: String,
     },
 
-    /// First-time setup: add nixpkgs-latest input to your flake
+    /// First-time setup: add the nixpkgs-latest input + overlay to your flake
     Init,
 
-    /// Show current status: config path, active pins, and flake inputs
+    /// Show config path, active pins, and flake input ages
     Status,
 }
 
