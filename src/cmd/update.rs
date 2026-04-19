@@ -23,15 +23,12 @@ use crate::nix::{config, pins};
 /// 4. Rebuild the system with nh os switch
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
-
     if !config::is_initialized(&nix_config.flake_dir) {
         super::check::print_first_run_hint();
         return Ok(());
     }
 
     let current_pins = pins::read(&nix_config.flake_dir)?;
-
-    // Check if flake.lock is dirty (flake inputs were updated via cheni pin)
     let flake_lock_dirty = is_flake_lock_dirty(&nix_config.flake_dir);
 
     if current_pins.is_empty() && !flake_lock_dirty {
@@ -40,53 +37,66 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("{}", "=== cheni update ===\n".bold());
+    print_update_header(&current_pins, flake_lock_dirty);
 
-    // Show what will be updated
+    if !current_pins.is_empty() {
+        refresh_nixpkgs_latest(&nix_config.flake_dir)?;
+        if !verify_nixpkgs_order(&nix_config.flake_dir) {
+            return Ok(());
+        }
+    }
+
+    rebuild_and_announce(&nix_config.flake_dir, current_pins.len())
+}
+
+/// Banner + pinned-package list. The dirty-lock hint only fires when
+/// there are no pins, since the pin list otherwise already implies the
+/// rebuild reason.
+fn print_update_header(current_pins: &[String], flake_lock_dirty: bool) {
+    println!("{}", "=== cheni update ===\n".bold());
     if !current_pins.is_empty() {
         println!("Pinned packages:");
-        for name in &current_pins {
+        for name in current_pins {
             println!("  {} {}", "+".green(), name);
         }
         println!();
     }
-
     if flake_lock_dirty && current_pins.is_empty() {
         println!("Flake inputs updated — rebuilding.\n");
     }
+}
 
-    if !current_pins.is_empty() {
-        // Step 1: Update nixpkgs-latest (only needed for nixpkgs pins)
-        println!(
-            "{} Updating nixpkgs-latest...",
-            "[1/3]".dimmed()
+/// Step 1: bump only `nixpkgs-latest` (the per-package overlay source).
+fn refresh_nixpkgs_latest(flake_dir: &Path) -> Result<()> {
+    println!("{} Updating nixpkgs-latest...", "[1/3]".dimmed());
+    let status = Command::new("nix")
+        .args(["flake", "update", "nixpkgs-latest"])
+        .current_dir(flake_dir)
+        .status()
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
+    if !status.success() {
+        anyhow::bail!(
+            "nix flake update nixpkgs-latest failed.\n\
+             Hint: make sure 'nixpkgs-latest' is defined in your flake.nix.\n\
+             Run 'cheni init' to set it up."
         );
+    }
+    debug!("nixpkgs-latest updated successfully");
+    Ok(())
+}
 
-        let update_status = Command::new("nix")
-            .args(["flake", "update", "nixpkgs-latest"])
-            .current_dir(&nix_config.flake_dir)
-            .status()
-            .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
-
-        if !update_status.success() {
-            anyhow::bail!(
-                "nix flake update nixpkgs-latest failed.\n\
-                 Hint: make sure 'nixpkgs-latest' is defined in your flake.nix.\n\
-                 Run 'cheni init' to set it up."
-            );
-        }
-
-        debug!("nixpkgs-latest updated successfully");
-
-        // Step 2: Verify nixpkgs-latest is ahead of nixpkgs
-        println!(
-            "{} Checking versions...",
-            "[2/3]".dimmed()
-        );
-
-    match check_nixpkgs_order(&nix_config.flake_dir) {
+/// Step 2: ensure nixpkgs-latest is actually ahead of nixpkgs.
+///
+/// Returns true when it's safe to rebuild. Prints its own user-facing
+/// guidance and returns false on the two "stop" branches (Same / older).
+/// `Unknown` proceeds with a debug warning so a missing/odd flake.lock
+/// doesn't strand the user — the rebuild itself will surface real errors.
+fn verify_nixpkgs_order(flake_dir: &Path) -> bool {
+    println!("{} Checking versions...", "[2/3]".dimmed());
+    match check_nixpkgs_order(flake_dir) {
         InputOrder::LatestIsNewer => {
             debug!("nixpkgs-latest is ahead of nixpkgs — safe to apply");
+            true
         }
         InputOrder::Same => {
             println!(
@@ -95,7 +105,7 @@ pub fn run() -> Result<()> {
             );
             println!("Pins won't have any effect. Run '{}' to update nixpkgs first.", "upgrade".bold());
             println!("Or '{}' to remove pins.", "cheni unpin --all".bold());
-            return Ok(());
+            false
         }
         InputOrder::LatestIsOlder => {
             println!(
@@ -104,39 +114,38 @@ pub fn run() -> Result<()> {
             );
             println!("This can happen after a full '{}'. Pins are no longer needed.", "upgrade".bold());
             println!("Run '{}' to clean up.", "cheni unpin --all".bold());
-            return Ok(());
+            false
         }
         InputOrder::Unknown => {
             warn!("Could not compare nixpkgs revisions, proceeding anyway");
+            true
         }
     }
-    } // end of if !current_pins.is_empty()
+}
 
-    // Rebuild
+/// Final step: hand off to `nh os switch`. The custom failure message
+/// reminds the user that pins are still on disk, so they can iterate
+/// without losing their work.
+fn rebuild_and_announce(flake_dir: &Path, pin_count: usize) -> Result<()> {
     println!("{} Rebuilding system...\n", "Rebuilding...".dimmed());
-
-    let config_path = nix_config.flake_dir.to_str()
+    let config_path = flake_dir.to_str()
         .context("Config path is not valid UTF-8")?;
-
-    let rebuild_status = Command::new("nh")
+    let status = Command::new("nh")
         .args(["os", "switch", config_path])
         .status()
         .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
-
-    if !rebuild_status.success() {
+    if !status.success() {
         anyhow::bail!(
             "System rebuild failed.\n\
              Your pins are still in package-pins.json.\n\
              Fix the issue and run 'cheni update' again, or 'cheni unpin --all' to revert."
         );
     }
-
     println!(
         "\n{} {} package(s) updated successfully!",
         "✓".green(),
-        current_pins.len().to_string().bold()
+        pin_count.to_string().bold()
     );
-
     Ok(())
 }
 
