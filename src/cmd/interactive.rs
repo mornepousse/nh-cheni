@@ -212,84 +212,17 @@ async fn dispatch(action: Action) -> Result<()> {
     match action {
         Action::Check => super::check::run(None, false, false, false).await?,
         Action::Update => super::update::run()?,
-        Action::Upgrade => super::upgrade::run(super::upgrade::UpgradeOptions {
-            gc: false,
-            no_clean_pins: false,
-            yes: false,
-        })?,
-        Action::PinPackage => {
-            let name: String = Input::with_theme(&theme)
-                .with_prompt("Package to pin")
-                .interact_text()?;
-            let force: bool = dialoguer::Confirm::with_theme(&theme)
-                .with_prompt("Allow major version bump?")
-                .default(false)
-                .interact()?;
-            super::pin::pin_one(&name, force).await?;
-        }
+        Action::Upgrade => super::upgrade::run(default_upgrade_options())?,
+        Action::PinPackage => dispatch_pin_package(&theme).await?,
         Action::PinFlakes => super::pin::pin_flake_inputs().await?,
-        Action::Unpin => {
-            let name: String = Input::with_theme(&theme)
-                .with_prompt("Package to unpin")
-                .interact_text()?;
-            super::pin::unpin_one(&name)?;
-        }
+        Action::Unpin => dispatch_unpin(&theme)?,
         Action::Build => super::build::run()?,
-        Action::History => super::history::run(super::history::HistoryOptions {
-            diff: false,
-            full: false,
-            limit: None,
-            delete: Vec::new(),
-            prune: false,
-            keep: None,
-            older_than: None,
-            gc: false,
-            yes: false,
-        })?,
-        Action::Prune => super::history::run(super::history::HistoryOptions {
-            diff: false,
-            full: false,
-            limit: None,
-            delete: Vec::new(),
-            prune: true,
-            keep: None,
-            older_than: None,
-            gc: false,
-            yes: false,
-        })?,
-        Action::Rollback => {
-            let target: String = Input::with_theme(&theme)
-                .with_prompt("Generation number (empty = previous)")
-                .allow_empty(true)
-                .interact_text()?;
-            let parsed = if target.trim().is_empty() {
-                None
-            } else {
-                Some(target.trim().parse::<u32>()?)
-            };
-            super::rollback::run(parsed)?;
-        }
-        Action::Diff => {
-            let from: u32 = Input::with_theme(&theme)
-                .with_prompt("From generation")
-                .interact_text()?;
-            let to: u32 = Input::with_theme(&theme)
-                .with_prompt("To generation")
-                .interact_text()?;
-            super::diff::run(from, to)?;
-        }
-        Action::Search => {
-            let query: String = Input::with_theme(&theme)
-                .with_prompt("Search query")
-                .interact_text()?;
-            super::search::run(&query)?;
-        }
-        Action::Why => {
-            let package: String = Input::with_theme(&theme)
-                .with_prompt("Package name")
-                .interact_text()?;
-            super::why::run(&package)?;
-        }
+        Action::History => super::history::run(default_history_options(false))?,
+        Action::Prune => super::history::run(default_history_options(true))?,
+        Action::Rollback => dispatch_rollback(&theme)?,
+        Action::Diff => dispatch_diff(&theme)?,
+        Action::Search => dispatch_search(&theme)?,
+        Action::Why => dispatch_why(&theme)?,
         Action::Status => super::status::run()?,
         Action::Clean => super::clean::run()?,
         Action::Doctor => super::doctor::run()?,
@@ -298,4 +231,82 @@ async fn dispatch(action: Action) -> Result<()> {
         Action::Quit => {}
     }
     Ok(())
+}
+
+/// Upgrade defaults when launched from the interactive menu: no GC,
+/// keep pins, ask for confirmation (yes=false). These mirror what the
+/// user would get with a bare `cheni upgrade` from the shell.
+fn default_upgrade_options() -> super::upgrade::UpgradeOptions {
+    super::upgrade::UpgradeOptions {
+        gc: false,
+        no_clean_pins: false,
+        yes: false,
+    }
+}
+
+/// History defaults shared between the "history" and "prune" menu
+/// entries — the only difference is the `prune` flag.
+fn default_history_options(prune: bool) -> super::history::HistoryOptions {
+    super::history::HistoryOptions {
+        diff: false,
+        full: false,
+        limit: None,
+        delete: Vec::new(),
+        prune,
+        keep: None,
+        older_than: None,
+        gc: false,
+        yes: false,
+    }
+}
+
+async fn dispatch_pin_package(theme: &ColorfulTheme) -> Result<()> {
+    let name: String = Input::with_theme(theme)
+        .with_prompt("Package to pin")
+        .interact_text()?;
+    let force: bool = dialoguer::Confirm::with_theme(theme)
+        .with_prompt("Allow major version bump?")
+        .default(false)
+        .interact()?;
+    super::pin::pin_one(&name, force).await
+}
+
+fn dispatch_unpin(theme: &ColorfulTheme) -> Result<()> {
+    let name: String = Input::with_theme(theme)
+        .with_prompt("Package to unpin")
+        .interact_text()?;
+    super::pin::unpin_one(&name)
+}
+
+fn dispatch_rollback(theme: &ColorfulTheme) -> Result<()> {
+    let target: String = Input::with_theme(theme)
+        .with_prompt("Generation number (empty = previous)")
+        .allow_empty(true)
+        .interact_text()?;
+    let parsed = if target.trim().is_empty() {
+        None
+    } else {
+        Some(target.trim().parse::<u32>()?)
+    };
+    super::rollback::run(parsed)
+}
+
+fn dispatch_diff(theme: &ColorfulTheme) -> Result<()> {
+    let from: u32 = Input::with_theme(theme).with_prompt("From generation").interact_text()?;
+    let to: u32 = Input::with_theme(theme).with_prompt("To generation").interact_text()?;
+    super::diff::run(from, to)
+}
+
+fn dispatch_search(theme: &ColorfulTheme) -> Result<()> {
+    let query: String = Input::with_theme(theme)
+        .with_prompt("Search query")
+        .interact_text()?;
+    super::search::run(&query)
+}
+
+fn dispatch_why(theme: &ColorfulTheme) -> Result<()> {
+    let package: String = Input::with_theme(theme)
+        .with_prompt("Package name")
+        .interact_text()?;
+    super::why::run(&package)
 }
