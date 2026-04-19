@@ -181,7 +181,8 @@ fn run_gc_step() -> Result<()> {
     let status = Command::new("sudo")
         .args(["nix-collect-garbage", "--delete-older-than", "30d"])
         .status()
-        .context("Failed to run nix-collect-garbage")?;
+        .map_err(|e| crate::nix::tools::tool_error("sudo", e))
+        .context("running nix-collect-garbage")?;
     if !status.success() {
         println!("{}", "  (garbage collection skipped or failed)".dimmed());
     }

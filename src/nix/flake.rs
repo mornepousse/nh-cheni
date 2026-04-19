@@ -202,10 +202,23 @@ fn find_store_version(input_name: &str) -> Option<String> {
 
 /// Scan a single store path for a package version.
 fn scan_store_for_version(store_path: &str, store_prefix: &str) -> Option<String> {
-    let output = std::process::Command::new("nix-store")
+    // Soft probe: we return `None` instead of bubbling errors up because
+    // callers treat "no version found" as a neutral signal. Log via
+    // `tool_error` formatting so a missing `nix-store` still surfaces
+    // a helpful hint in debug logs.
+    let output = match std::process::Command::new("nix-store")
         .args(["-qR", store_path])
         .output()
-        .ok()?;
+    {
+        Ok(out) => out,
+        Err(e) => {
+            tracing::debug!(
+                "scan_store_for_version: {}",
+                crate::nix::tools::tool_error("nix-store", e),
+            );
+            return None;
+        }
+    };
 
     let stdout = String::from_utf8(output.stdout).ok()?;
 

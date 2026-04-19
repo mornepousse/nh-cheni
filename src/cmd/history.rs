@@ -314,7 +314,8 @@ fn apply_deletion(to_delete: &[u32]) -> Result<()> {
     let status = Command::new("sudo")
         .args(&args)
         .status()
-        .context("Failed to run nix-env --delete-generations")?;
+        .map_err(|e| crate::nix::tools::tool_error("sudo", e))
+        .context("running nix-env --delete-generations")?;
     if !status.success() {
         anyhow::bail!("Generation deletion failed");
     }
@@ -332,7 +333,8 @@ fn run_gc() -> Result<()> {
     let gc_status = Command::new("sudo")
         .args(["/run/current-system/sw/bin/nix-collect-garbage"])
         .status()
-        .context("Failed to run nix-collect-garbage")?;
+        .map_err(|e| crate::nix::tools::tool_error("sudo", e))
+        .context("running nix-collect-garbage")?;
     if !gc_status.success() {
         anyhow::bail!("Garbage collection failed");
     }

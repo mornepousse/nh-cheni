@@ -42,7 +42,8 @@ pub fn run(target: Option<u32>) -> Result<()> {
     cmd.args(&cmd_args);
 
     let status = cmd.status()
-        .context("Failed to run rollback command")?;
+        .map_err(|e| crate::nix::tools::tool_error("sudo", e))
+        .context("running rollback")?;
 
     if !status.success() {
         anyhow::bail!("Rollback failed");
@@ -54,7 +55,8 @@ pub fn run(target: Option<u32>) -> Result<()> {
         let activate_status = Command::new("sudo")
             .args(["/nix/var/nix/profiles/system/bin/switch-to-configuration", "switch"])
             .status()
-            .context("Failed to activate generation")?;
+            .map_err(|e| crate::nix::tools::tool_error("sudo", e))
+            .context("activating generation")?;
 
         if !activate_status.success() {
             anyhow::bail!("Activation failed — system may be in inconsistent state");
