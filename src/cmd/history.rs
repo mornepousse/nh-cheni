@@ -313,7 +313,18 @@ fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
 /// Parse a target spec string into a list of generation numbers.
 /// Accepts "405", "405..410" (inclusive range).
 fn parse_target_spec(spec: &str, all: &[u32]) -> Result<Vec<u32>> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        anyhow::bail!("Empty generation spec — expected a number or a 'N..M' range");
+    }
+
     if let Some((from, to)) = spec.split_once("..") {
+        if from.is_empty() || to.is_empty() {
+            anyhow::bail!(
+                "Range '{}' is missing one bound — expected 'N..M' with both ends present",
+                spec
+            );
+        }
         let from: u32 = from
             .parse()
             .with_context(|| format!("Invalid range start in '{}'", spec))?;
@@ -321,7 +332,14 @@ fn parse_target_spec(spec: &str, all: &[u32]) -> Result<Vec<u32>> {
             .parse()
             .with_context(|| format!("Invalid range end in '{}'", spec))?;
         let (lo, hi) = if from <= to { (from, to) } else { (to, from) };
-        Ok(all.iter().copied().filter(|n| *n >= lo && *n <= hi).collect())
+        let matched: Vec<u32> = all.iter().copied().filter(|n| *n >= lo && *n <= hi).collect();
+        if matched.is_empty() {
+            anyhow::bail!(
+                "Range {}..{} matches no existing generation",
+                lo, hi
+            );
+        }
+        Ok(matched)
     } else {
         let n: u32 = spec
             .parse()
@@ -342,8 +360,16 @@ fn pick_oldest_beyond(all: &[u32], keep: usize) -> Vec<u32> {
 }
 
 /// Parse a duration like "30d", "2w", "1m" into days.
+///
+/// Rejects `0d` / `0w` / etc — passing zero would mean "everything
+/// older than right now", which is essentially "all generations".
+/// That's never what the user wants and would silently nuke the
+/// rollback history.
 fn parse_duration_days(spec: &str) -> Result<u64> {
     let spec = spec.trim();
+    if spec.is_empty() {
+        anyhow::bail!("Empty duration — expected something like '30d', '2w', '6m', '1y'");
+    }
     let (num_part, unit) = spec.split_at(
         spec.find(|c: char| !c.is_ascii_digit())
             .unwrap_or(spec.len()),
@@ -351,6 +377,13 @@ fn parse_duration_days(spec: &str) -> Result<u64> {
     let n: u64 = num_part
         .parse()
         .with_context(|| format!("Expected a number, got '{}'", num_part))?;
+    if n == 0 {
+        anyhow::bail!(
+            "Refusing zero duration ('{}') — that would match every generation. \
+             Use '--keep N' if you want to drop all-but-N.",
+            spec
+        );
+    }
     let multiplier = match unit.trim() {
         "" | "d" => 1,
         "w" => 7,
@@ -742,3 +775,7 @@ fn get_diff(from: &str, to: &str) -> Result<String> {
 #[cfg(test)]
 #[path = "tests/history.rs"]
 mod diff_parser_tests;
+
+#[cfg(test)]
+#[path = "tests/history_specs.rs"]
+mod spec_parser_tests;
