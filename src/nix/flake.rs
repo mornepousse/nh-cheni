@@ -13,15 +13,10 @@ use tracing::debug;
 pub struct FlakeInput {
     /// Input name (e.g. "zen-browser", "claude-code").
     pub name: String,
-    /// Last modified timestamp (unix seconds).
-    /// Stored for debug logging and potential future use by consumers.
-    #[allow(dead_code)]
-    pub last_modified: u64,
     /// Short git revision hash (from flake.lock).
     pub rev: String,
-    /// How many days since the last update.
-    /// Stored for debug logging and potential future use by consumers.
-    #[allow(dead_code)]
+    /// How many days since the last update. Read by `cheni doctor` to
+    /// flag stale inputs.
     pub days_old: u64,
     /// Installed version (from the nix store, if found).
     pub installed_version: Option<String>,
@@ -175,7 +170,6 @@ fn read_one_input(
 
     Some(FlakeInput {
         name: input_name.to_string(),
-        last_modified,
         rev,
         days_old,
         installed_version,

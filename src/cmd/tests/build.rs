@@ -22,7 +22,7 @@ fn test_extract_pkg_from_drv() {
 
 #[test]
 fn test_parse_hash_mismatch() {
-    let lines = vec![
+    let lines = [
         "error: hash mismatch in fixed-output derivation",
         "  specified: sha256-aaaa",
         "  got: sha256-bbbb",
@@ -34,7 +34,7 @@ fn test_parse_hash_mismatch() {
 
 #[test]
 fn test_parse_unfree() {
-    let lines = vec![
+    let lines = [
         "error: Package 'nvidia-x11' is not free and refused to install.",
     ];
     let errors = parse_errors(&lines.join("\n"));
@@ -45,7 +45,7 @@ fn test_parse_unfree() {
 
 #[test]
 fn test_parse_broken() {
-    let lines = vec![
+    let lines = [
         "error: Package 'python3.11-some-pkg' is marked as broken.",
     ];
     let errors = parse_errors(&lines.join("\n"));
@@ -55,7 +55,7 @@ fn test_parse_broken() {
 
 #[test]
 fn test_parse_undefined_var() {
-    let lines = vec![
+    let lines = [
         "at /home/mae/nixos-config/modules/dev/test.nix:5:3:",
         "error: undefined variable 'pkgss'",
     ];
@@ -136,7 +136,7 @@ fn test_parse_generic_error_fallback() {
 
 #[test]
 fn test_parse_infinite_recursion() {
-    let lines = vec![
+    let lines = [
         "error: infinite recursion encountered",
     ];
     let errors = parse_errors(&lines.join("\n"));
@@ -146,7 +146,7 @@ fn test_parse_infinite_recursion() {
 
 #[test]
 fn test_parse_path_not_found() {
-    let lines = vec![
+    let lines = [
         "error: path '/nix/store/abc-source/modules/test.nix' does not exist",
     ];
     let errors = parse_errors(&lines.join("\n"));
@@ -156,7 +156,7 @@ fn test_parse_path_not_found() {
 
 #[test]
 fn test_parse_cargo_hash() {
-    let lines = vec![
+    let lines = [
         "ERROR: cargoHash or cargoSha256 is out of date",
     ];
     let errors = parse_errors(&lines.join("\n"));
