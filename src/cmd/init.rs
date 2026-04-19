@@ -133,73 +133,17 @@ fn create_pins_file(flake_dir: &Path) -> Result<bool> {
 ///
 /// Strategy: find the `inputs = {` block and insert after the nixpkgs line.
 fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
-    // Look for the nixpkgs input line
-    let nixpkgs_patterns = [
-        "nixpkgs.url",
-        "nixpkgs = {",
-    ];
-
-    let mut insert_after_line = None;
     // Collect lines once; the original code called `content.lines().count()`
     // inside the outer loop and `content.lines().nth(j)` inside the inner
     // loop, which made each iteration walk the whole content again — O(n³)
     // overall on a file with N lines.
     let lines: Vec<&str> = content.lines().collect();
 
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim();
-        for pattern in &nixpkgs_patterns {
-            if trimmed.contains(pattern) {
-                // Find the end of this input declaration
-                // For single-line: nixpkgs.url = "...";
-                // For multi-line: find the closing };
-                if trimmed.ends_with(';') || trimmed.ends_with("\";") {
-                    insert_after_line = Some(i);
-                } else {
-                    // Multi-line: scan forward for the closing
-                    for (j, next_line) in lines.iter().enumerate().skip(i + 1) {
-                        if next_line.trim().starts_with("};") || next_line.trim() == "};" {
-                            insert_after_line = Some(j);
-                            break;
-                        }
-                    }
-                    if insert_after_line.is_none() {
-                        insert_after_line = Some(i);
-                    }
-                }
-                break;
-            }
-        }
-        if insert_after_line.is_some() {
-            break;
-        }
-    }
-
-    let insert_line = insert_after_line
+    let insert_line = find_nixpkgs_insert_line(&lines)
         .context("Could not find nixpkgs input in flake.nix")?;
-
     debug!("Inserting nixpkgs-latest after line {}", insert_line + 1);
 
-    // Build the new content
-    let lines: Vec<&str> = content.lines().collect();
-    let mut new_lines: Vec<String> = Vec::new();
-
-    for (i, line) in lines.iter().enumerate() {
-        new_lines.push(line.to_string());
-        if i == insert_line {
-            new_lines.push(String::new());
-            new_lines.push(
-                "    # nixpkgs-latest: independently updated for per-package updates (cheni)"
-                    .to_string(),
-            );
-            new_lines.push(
-                "    nixpkgs-latest.url = \"github:NixOS/nixpkgs/nixos-unstable\";"
-                    .to_string(),
-            );
-        }
-    }
-
-    let new_content = new_lines.join("\n") + "\n";
+    let new_content = build_content_with_latest_input(&lines, insert_line);
     // Atomic write: a crash mid-write on flake.nix would break *all*
     // future rebuilds. rename-on-top ensures the file is either the
     // original or the new content, never truncated.
@@ -207,6 +151,59 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
         .context("Failed to write modified flake.nix")?;
 
     Ok(())
+}
+
+/// Locate the line to insert `nixpkgs-latest` after.
+///
+/// Matches either `nixpkgs.url = "...";` (single-line form) or
+/// `nixpkgs = { ... };` (multi-line form); for the latter we scan
+/// forward for the closing `};` so the new input doesn't land inside
+/// the existing declaration. Returns None if no nixpkgs input is
+/// recognisable — the caller converts that into a MANUAL fallback.
+fn find_nixpkgs_insert_line(lines: &[&str]) -> Option<usize> {
+    const PATTERNS: [&str; 2] = ["nixpkgs.url", "nixpkgs = {"];
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if !PATTERNS.iter().any(|p| trimmed.contains(p)) {
+            continue;
+        }
+        // Single-line form ends on the same line.
+        if trimmed.ends_with(';') || trimmed.ends_with("\";") {
+            return Some(i);
+        }
+        // Multi-line form: scan forward for the closing `};`.
+        // Fall back to the declaration line itself if no closer is found,
+        // keeping behaviour identical to the original implementation.
+        for (j, next_line) in lines.iter().enumerate().skip(i + 1) {
+            let t = next_line.trim();
+            if t.starts_with("};") || t == "};" {
+                return Some(j);
+            }
+        }
+        return Some(i);
+    }
+    None
+}
+
+/// Reconstruct the file with the new input declaration inserted after
+/// `insert_line`. A blank line first keeps the existing style (inputs
+/// are typically separated by a blank line in user flakes).
+fn build_content_with_latest_input(lines: &[&str], insert_line: usize) -> String {
+    let mut new_lines: Vec<String> = Vec::with_capacity(lines.len() + 3);
+    for (i, line) in lines.iter().enumerate() {
+        new_lines.push((*line).to_string());
+        if i == insert_line {
+            new_lines.push(String::new());
+            new_lines.push(
+                "    # nixpkgs-latest: independently updated for per-package updates (cheni)"
+                    .to_string(),
+            );
+            new_lines.push(
+                "    nixpkgs-latest.url = \"github:NixOS/nixpkgs/nixos-unstable\";".to_string(),
+            );
+        }
+    }
+    new_lines.join("\n") + "\n"
 }
 
 /// Add the cheni overlay to the nixosSystem modules.
