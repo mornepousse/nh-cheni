@@ -213,68 +213,91 @@ fn walk_imports_inner(
     }
 }
 
-/// Pull relative `.nix` paths out of an `imports = [ ... ];` block.
-/// Strips line and inline comments, ignores `inputs.*` references.
+/// Pull relative `.nix` paths out of every `imports = [ ... ];` block
+/// in a file. Strips line and inline comments, ignores `inputs.*`
+/// references. Multiple blocks (e.g. specialisations, conditional
+/// sub-blocks) are all walked.
 fn parse_imports(content: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut idx = 0;
+    let mut cursor = 0;
+    while let Some(block) = find_next_imports_block(content, cursor) {
+        extract_relative_paths(&content[block.start..block.end], &mut out);
+        cursor = block.end + 1;
+    }
+    out
+}
 
-    // Walk every `imports = [` occurrence — there can be more than one
-    // (e.g. specialisations, conditional sub-blocks).
+/// Byte offsets bracketing the contents of an `imports = [ ... ]`
+/// block, exclusive of the brackets themselves. `start` points just
+/// after `[`, `end` just before `]`.
+struct ImportsBlock {
+    start: usize,
+    end: usize,
+}
+
+/// Scan forward from `cursor` for the next `imports = [`; returns the
+/// slice boundaries of the block body or None if no more blocks exist.
+///
+/// The string gymnastics come from three realities of NixOS flakes:
+///   1. the `=` can be preceded by arbitrary whitespace;
+///   2. a `with lib;` (or similar) may precede the opening `[`;
+///   3. "imports" can appear as a substring (e.g. in a comment) — we
+///      only treat it as a block start once we've seen the `= ... [`
+///      pattern, otherwise we skip past and keep scanning.
+fn find_next_imports_block(content: &str, cursor: usize) -> Option<ImportsBlock> {
+    let mut idx = cursor;
     while let Some(pos) = content[idx..].find("imports") {
         let abs = idx + pos;
         let after = &content[abs + "imports".len()..];
-        // Expect "= [" (with optional whitespace), otherwise it might be
-        // a comment / different identifier — skip.
         let trimmed = after.trim_start();
         if !trimmed.starts_with('=') {
             idx = abs + 1;
             continue;
         }
         let after_eq = trimmed[1..].trim_start();
-        // Skip "with lib;" prefix if present
-        let after_with = if let Some(rest) = after_eq.strip_prefix("with") {
-            // skip until ';'
-            match rest.find(';') {
+        // Tolerate a leading `with lib;` (or similar) between `=` and `[`.
+        let after_with = match after_eq.strip_prefix("with") {
+            Some(rest) => match rest.find(';') {
                 Some(semi) => rest[semi + 1..].trim_start(),
                 None => after_eq,
-            }
-        } else {
-            after_eq
+            },
+            None => after_eq,
         };
         if !after_with.starts_with('[') {
             idx = abs + 1;
             continue;
         }
-        // Find matching close bracket (no nested handling — imports blocks
-        // are flat in practice).
-        let block_start_in_after = after_with.as_ptr() as usize - content.as_ptr() as usize + 1;
-        let close = match content[block_start_in_after..].find(']') {
-            Some(c) => block_start_in_after + c,
-            None => break,
-        };
-        let block = &content[block_start_in_after..close];
-        for raw_line in block.lines() {
-            let mut line = raw_line.trim();
-            if line.starts_with('#') || line.is_empty() {
-                continue;
-            }
-            if let Some(hash) = line.find('#') {
-                line = line[..hash].trim();
-            }
-            if line.is_empty() {
-                continue;
-            }
-            // The block may have multiple imports on one line separated by space
-            for token in line.split_whitespace() {
-                if token.starts_with("./") || token.starts_with("../") {
-                    out.push(token.trim_end_matches(';').to_string());
-                }
+        // Convert `after_with` (a slice into content) back to a byte index.
+        let start = after_with.as_ptr() as usize - content.as_ptr() as usize + 1;
+        // Flat match: NixOS imports lists don't nest, so the first `]`
+        // closes the block.
+        let end = start + content[start..].find(']')?;
+        return Some(ImportsBlock { start, end });
+    }
+    None
+}
+
+/// Walk every line of a block body, stripping comments, and append any
+/// `./` or `../` token (relative path) to `out`.
+fn extract_relative_paths(block: &str, out: &mut Vec<String>) {
+    for raw_line in block.lines() {
+        let mut line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some(hash) = line.find('#') {
+            line = line[..hash].trim();
+        }
+        if line.is_empty() {
+            continue;
+        }
+        // A block may list multiple imports on one line separated by space.
+        for token in line.split_whitespace() {
+            if token.starts_with("./") || token.starts_with("../") {
+                out.push(token.trim_end_matches(';').to_string());
             }
         }
-        idx = close + 1;
     }
-    out
 }
 
 /// Has `cheni init` been run? Looks for `nixpkgs-latest` in the flake
