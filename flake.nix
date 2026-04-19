@@ -10,42 +10,30 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
-      # Derive the Nix version from the flake's own git metadata so the
-      # derivation name is unique-per-commit rather than a static "0.1.0".
-      # Three cases, in order of preference:
-      #   1. git tree (revCount set)   → 0.1.{count}-alpha+{shortRev},
-      #      mirrors exactly what `cheni --version` prints at runtime.
-      #   2. tarball fetch (shortRev only, no revCount) — this is the
-      #      GitLab / GitHub flake-input path → 0.1.0-alpha+{shortRev}.
-      #   3. dirty local tree                          → +dirty-{hash}.
-      # Having the rev in the version helps `nvd` diff output and the
-      # /nix/store path carry the identity of the build.
-      cheniVersion =
-        if self ? revCount then
-          "0.1.${toString self.revCount}-alpha+${self.shortRev}"
-        else if self ? shortRev then
-          "0.1.0-alpha+${self.shortRev}"
-        else
-          # dirtyShortRev already carries its own "-dirty" suffix
-          # (e.g. "835648d-dirty"), so we don't prepend another one.
-          "0.1.0-alpha+${self.dirtyShortRev or "unknown"}";
-
-      # Metadata injected into `build.rs` so the binary's --version output
-      # matches the Nix derivation name. Without this the Nix sandbox has
-      # no .git/ available, git calls fail, and 'cheni --version' reports
-      # '0.1.0-alpha (unknown)'.
-      cheniGitShortHash =
+      # Single-source-of-truth version string, mirroring what
+      # `git describe --tags --always --dirty` would print:
+      #   - `vX.Y.Z` when on an exact release tag
+      #   - `vX.Y.Z-N-gHASH` when N commits past the latest tag
+      #   - just the short rev when no tag exists yet
+      #   - +`-dirty` suffix on a working tree with uncommitted changes
+      #
+      # In pure Nix we can't reach the git tag history (especially on
+      # tarball fetches like `gitlab:` / `github:` shorthand), so we
+      # approximate with shortRev/dirtyShortRev. cargo build with .git
+      # available will compute the real `git describe` instead — the env
+      # var below only acts as a fallback for the Nix sandbox case.
+      cheniDescribe =
         self.shortRev or self.dirtyShortRev or "unknown";
-      cheniGitCommitCount =
-        toString (self.revCount or 0);
 
       cheni = pkgs.rustPlatform.buildRustPackage {
         pname = "cheni";
-        version = cheniVersion;
+        version = cheniDescribe;
         src = ./.;
         env = {
-          CHENI_GIT_SHORT_HASH = cheniGitShortHash;
-          CHENI_GIT_COMMIT_COUNT = cheniGitCommitCount;
+          # Injected into build.rs so `cheni --version` matches the
+          # derivation name. The Nix sandbox has no .git/, so without
+          # this the binary would fall back to "unknown".
+          CHENI_GIT_DESCRIBE = cheniDescribe;
         };
 
         # Derive the vendored-deps hash from Cargo.lock directly — no manual

@@ -42,8 +42,7 @@ fn print_header() {
 fn print_environment_section() {
     println!("## Environment");
     println!();
-    let version = format!("0.1.{}-alpha", env!("GIT_COMMIT_COUNT"));
-    println!("- **cheni**: `{} ({})`", version, env!("GIT_SHORT_HASH"));
+    println!("- **cheni**: `{}`", env!("GIT_DESCRIBE"));
     if let Some(os) = read_os_release() {
         println!("- **OS**: `{}`", os);
     }

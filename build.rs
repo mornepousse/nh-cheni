@@ -1,34 +1,34 @@
-//! Build script — capture git metadata at compile time.
+//! Build script — capture the version string at compile time.
 //!
-//! Emits two env vars consumed by `main.rs` to build the user-facing
-//! version string `0.1.{count}-alpha ({hash})`:
-//!   - GIT_SHORT_HASH:   short SHA of HEAD.
-//!   - GIT_COMMIT_COUNT: total commit count, used as the patch number
-//!     so every commit bumps `cheni --version`.
+//! Emits one env var, `GIT_DESCRIBE`, used as the binary's --version
+//! string. Resolution order:
+//!
+//!   1. `$CHENI_GIT_DESCRIBE` if pre-set (the Nix sandbox path —
+//!      flake.nix injects it from `self.shortRev`/`self.dirtyShortRev`).
+//!   2. `git describe --tags --always --dirty` (cargo build with .git
+//!      available — yields `v0.1.0`, `v0.1.0-5-g37073ac`, or just
+//!      `37073ac` when no tag exists yet).
+//!   3. `"unknown"` (no env, no git, no .git/) — keeps the build alive.
 //!
 //! Cargo.toml's `version = "0.1.0-alpha"` stays static (Cargo demands a
 //! literal SemVer in the manifest); the displayed version is reconstructed
-//! at compile time and may differ — that's intentional.
+//! at compile time and intentionally diverges.
 
 fn main() {
-    // Allow the Nix build (sandbox, no .git) to inject values from flake.nix
-    // via its `env` attribute. If the vars are pre-set we take them as-is;
-    // otherwise we fall back to running git, and ultimately to placeholders
-    // so a tarball build (no git, no env injection) still compiles cleanly.
-    let short_hash = env_or_git("CHENI_GIT_SHORT_HASH", &["rev-parse", "--short", "HEAD"])
-        .unwrap_or_else(|| "unknown".into());
-    let commit_count = env_or_git("CHENI_GIT_COMMIT_COUNT", &["rev-list", "--count", "HEAD"])
-        .unwrap_or_else(|| "0".into());
+    let describe = env_or_git(
+        "CHENI_GIT_DESCRIBE",
+        &["describe", "--tags", "--always", "--dirty"],
+    )
+    .unwrap_or_else(|| "unknown".into());
+    println!("cargo:rustc-env=GIT_DESCRIBE={}", describe);
 
-    println!("cargo:rustc-env=GIT_SHORT_HASH={}", short_hash);
-    println!("cargo:rustc-env=GIT_COMMIT_COUNT={}", commit_count);
-
-    // Recompile when HEAD changes: covers commits, branch switches, rebases.
+    // Recompile when HEAD or tags change: covers commits, branch
+    // switches, rebases, and `git tag` / `git tag -d`.
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs/heads/");
-    // Also re-run if the injected vars change (Nix eval gave us new values).
-    println!("cargo:rerun-if-env-changed=CHENI_GIT_SHORT_HASH");
-    println!("cargo:rerun-if-env-changed=CHENI_GIT_COMMIT_COUNT");
+    println!("cargo:rerun-if-changed=.git/refs/tags/");
+    // Also re-run if the injected var changes (Nix eval gave us a new value).
+    println!("cargo:rerun-if-env-changed=CHENI_GIT_DESCRIBE");
 }
 
 fn env_or_git(env_name: &str, git_args: &[&str]) -> Option<String> {

@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(
     name = "cheni",
-    version = concat!("0.1.", env!("GIT_COMMIT_COUNT"), "-alpha (", env!("GIT_SHORT_HASH"), ")"),
+    version = env!("GIT_DESCRIBE"),
     about = "Granular package updates for NixOS",
     long_about = "Granular package updates for NixOS.\n\n\
         cheni lets you check, select, and apply updates per-package\n\
@@ -265,10 +265,9 @@ enum Commands {
 /// message pointing at `cheni bug-report`. The full backtrace is still
 /// available via RUST_BACKTRACE for anyone who sets it.
 fn install_panic_hook() {
-    // Match the format 'cheni --version' prints — static CARGO_PKG_VERSION
-    // (0.1.0-alpha) would lie about which commit the crash came from.
-    let version = concat!("0.1.", env!("GIT_COMMIT_COUNT"), "-alpha");
-    let git = env!("GIT_SHORT_HASH");
+    // Match the format 'cheni --version' prints — using the resolved
+    // git-describe output keeps crash reports tied to a real commit.
+    let version = env!("GIT_DESCRIBE");
     std::panic::set_hook(Box::new(move |info| {
         let location = info
             .location()
@@ -284,7 +283,7 @@ fn install_panic_hook() {
         eprintln!();
         eprintln!("\x1b[31;1m✗ cheni crashed unexpectedly\x1b[0m");
         eprintln!();
-        eprintln!("  Version: {} ({})", version, git);
+        eprintln!("  Version: {}", version);
         eprintln!("  Error:   {}{}", payload, location);
         eprintln!();
         eprintln!("This is a bug. Please report it:");
