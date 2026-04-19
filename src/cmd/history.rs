@@ -617,60 +617,82 @@ fn get_diff_summary(from: &str, to: &str) -> Option<String> {
 /// ANSI colour codes are stripped up front because nix colours the
 /// size delta in red-bold by default.
 fn summarize_diff(stdout: &str) -> Option<String> {
-    let mut updated: Vec<(String, String)> = Vec::new();
-    let mut added: Vec<String> = Vec::new();
-    let mut removed: Vec<String> = Vec::new();
-    let mut rebuilt: Vec<String> = Vec::new();
-    let mut size_delta_kib: f64 = 0.0;
+    let categories = classify_diff_lines(stdout);
+    format_summary(&categories)
+}
 
+/// Tallied categorisation of a `nix store diff-closures` output — one
+/// bucket per kind of change plus the running size delta in KiB.
+#[derive(Default)]
+struct DiffCategories {
+    updated: Vec<(String, String)>,
+    added: Vec<String>,
+    removed: Vec<String>,
+    rebuilt: Vec<String>,
+    size_delta_kib: f64,
+}
+
+/// Walk the raw diff output and drop each non-empty, ANSI-stripped line
+/// into the right bucket. The four rule patterns come from the actual
+/// nix output format:
+///   `foo: ∅ → 1.0`       → added
+///   `foo: 1.0 → ∅`       → removed
+///   `foo: 1.0 → 2.0`     → updated (version text kept)
+///   `foo: 38.6 KiB`      → rebuilt (same version, closure changed)
+/// Size-delta lines are parsed independently and summed — they can
+/// appear alongside any of the above.
+fn classify_diff_lines(stdout: &str) -> DiffCategories {
+    let mut c = DiffCategories::default();
     for line in stdout.lines() {
         let clean = strip_ansi(line);
         let trimmed = clean.trim();
         if trimmed.is_empty() {
             continue;
         }
-
         if let Some(delta) = parse_size_delta(trimmed) {
-            size_delta_kib += delta;
+            c.size_delta_kib += delta;
         }
-
-        let (name, rest) = match trimmed.split_once(": ") {
-            Some(p) => p,
-            None => continue,
+        let Some((name, rest)) = trimmed.split_once(": ") else {
+            continue;
         };
         let name = name.trim().to_string();
-
         if rest.contains("∅ →") || rest.contains("∅ ->") {
-            added.push(name);
+            c.added.push(name);
         } else if rest.contains("→ ∅") || rest.contains("-> ∅") {
-            removed.push(name);
+            c.removed.push(name);
         } else if rest.contains(" → ") || rest.contains(" -> ") {
             let versions = rest.split(',').next().unwrap_or(rest).trim().to_string();
-            updated.push((name, versions));
+            c.updated.push((name, versions));
         } else {
-            rebuilt.push(name);
+            c.rebuilt.push(name);
         }
     }
+    c
+}
 
-    if updated.is_empty() && added.is_empty() && removed.is_empty() && rebuilt.is_empty() {
+/// Compose the human-readable summary line from the tallied categories.
+/// Returns "(identical closures)" when nothing at all changed, otherwise
+/// a comma-joined list of category fragments. Size delta is appended
+/// last and only when it exceeds a 0.1 KiB rounding threshold.
+fn format_summary(c: &DiffCategories) -> Option<String> {
+    if c.updated.is_empty() && c.added.is_empty() && c.removed.is_empty() && c.rebuilt.is_empty() {
         return Some("(identical closures)".to_string());
     }
-
     let mut parts = Vec::new();
-    if !updated.is_empty() {
-        parts.push(format_update_list(&updated));
+    if !c.updated.is_empty() {
+        parts.push(format_update_list(&c.updated));
     }
-    if !added.is_empty() {
-        parts.push(format!("+ {}", format_name_list(&added)));
+    if !c.added.is_empty() {
+        parts.push(format!("+ {}", format_name_list(&c.added)));
     }
-    if !removed.is_empty() {
-        parts.push(format!("- {}", format_name_list(&removed)));
+    if !c.removed.is_empty() {
+        parts.push(format!("- {}", format_name_list(&c.removed)));
     }
-    if !rebuilt.is_empty() {
-        parts.push(format!("⟳ {}", format_name_list(&rebuilt)));
+    if !c.rebuilt.is_empty() {
+        parts.push(format!("⟳ {}", format_name_list(&c.rebuilt)));
     }
-    if size_delta_kib.abs() >= 0.1 {
-        parts.push(format_size_delta(size_delta_kib));
+    if c.size_delta_kib.abs() >= 0.1 {
+        parts.push(format_size_delta(c.size_delta_kib));
     }
     Some(parts.join(", "))
 }
