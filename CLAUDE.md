@@ -68,19 +68,25 @@ src/
 - `nvd` (optionnel, utilisé par `diff` et `history --diff`)
 
 ## Erreurs externes connues
-- Repology API : 429 fréquents, retry 1× avec 3s wait, log debug only
+- Repology API : 429 fréquents, retry 1× (honore `Retry-After` header,
+  capé à 30s sinon fallback 3s), log debug only
 - GitHub API : rate limit anonymous = 60 req/h
 - GitLab API : 600 req/min anonymous
 - HTTP timeout : default 30s, override via `CHENI_HTTP_TIMEOUT=<secs>`
   (min 5s)
+- HTTP body : capé à 5 MiB (via `api::net::check_content_length` +
+  `verify_body_size`), refuse les réponses anormalement grosses
 
 ## Tests / qualité
 
 ```bash
 cargo build
-cargo test           # 100 tests, parallel-safe
+cargo test                         # parallel-safe, sibling file tests
 cargo clippy --all-targets
+cargo audit                        # RustSec advisories (cargo install cargo-audit)
 nix flake check
 ```
 
-CI minimum à atteindre avant push : `cargo build && cargo clippy && cargo test`.
+CI minimum à atteindre avant push : `cargo build && cargo clippy &&
+cargo test && cargo audit` (le dernier si `cargo-audit` est installé,
+sinon on signale les advisories lors de la prochaine release).
