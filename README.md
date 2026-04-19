@@ -132,12 +132,34 @@ the currently-booted system to keep rollback safe.
 
 ### Maintenance
 
-| Command              | What it does                                              |
-|----------------------|-----------------------------------------------------------|
-| `cheni doctor`       | Health checks (paths, pins, flake, store, cache, tools)   |
-| `cheni self-update`  | Refresh the cheni flake input + rebuild                   |
-| `cheni init`         | One-time setup: add `nixpkgs-latest` to your flake        |
-| `cheni bug-report`   | Print a diagnostic report ready to paste into an issue    |
+| Command                     | What it does                                              |
+|-----------------------------|-----------------------------------------------------------|
+| `cheni doctor`              | Health checks (paths, pins, flake, store, cache, tools)   |
+| `cheni self-update`         | Refresh the cheni flake input + rebuild                   |
+| `cheni init`                | One-time setup: add `nixpkgs-latest` to your flake        |
+| `cheni bug-report`          | Print a diagnostic report ready to paste into an issue    |
+| `cheni completion <shell>`  | Shell completion (bash / zsh / fish / elvish / powershell)|
+| `cheni man`                 | Emit a roff man page on stdout                            |
+
+#### Installing shell completions
+
+```bash
+# fish
+cheni completion fish > ~/.config/fish/completions/cheni.fish
+
+# zsh (make sure ~/.zfunc is in your $fpath)
+cheni completion zsh > ~/.zfunc/_cheni
+
+# bash
+cheni completion bash > /etc/bash_completion.d/cheni    # or ~/.bash_completion
+```
+
+#### Installing the man page
+
+```bash
+cheni man > ~/.local/share/man/man1/cheni.1
+# then: man cheni
+```
 
 ### Short aliases
 
