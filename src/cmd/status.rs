@@ -25,10 +25,40 @@ pub fn run() -> Result<()> {
     } else {
         count_obsolete_pins(&lock_path, &current_pins)
     };
+    let active = read_active_generation();
+    let lock_newer_than_active = is_lock_newer_than_active(&lock_path, &active);
 
     println!("{}", "=== cheni status ===\n".bold());
+    print_config_section(&nix_config, &active);
+    print_flake_inputs_section(&lock_path);
+    print_pins_section(&current_pins, obsolete_count);
+    print_suggestions(
+        &nix_config,
+        obsolete_count,
+        lock_newer_than_active,
+        &current_pins,
+    );
+    println!();
+    Ok(())
+}
 
-    // ── Config ─────────────────────────────────────────────
+/// Compare flake.lock's mtime against the active generation's symlink
+/// mtime. True when the lock changed but no rebuild has happened yet —
+/// the typical "you ran `cheni pin --flakes`, now run `cheni build`" case.
+fn is_lock_newer_than_active(
+    lock_path: &Path,
+    active: &Option<(u32, String)>,
+) -> bool {
+    let lock_modified = lock_path.metadata().ok().and_then(|m| m.modified().ok());
+    let active_modified = active.as_ref().and_then(|(n, _)| {
+        std::fs::symlink_metadata(format!("/nix/var/nix/profiles/system-{}-link", n))
+            .ok()
+            .and_then(|m| m.modified().ok())
+    });
+    matches!((lock_modified, active_modified), (Some(l), Some(a)) if l > a)
+}
+
+fn print_config_section(nix_config: &config::NixConfig, active: &Option<(u32, String)>) {
     println!(
         "  {:<18} {}",
         "Config:".dimmed(),
@@ -40,10 +70,7 @@ pub fn run() -> Result<()> {
     if !categories.is_empty() {
         println!("  {:<18} {}", "Modules:".dimmed(), categories.join(", "));
     }
-
-    // ── Active generation ──────────────────────────────────
-    let active = read_active_generation();
-    if let Some((num, age)) = &active {
+    if let Some((num, age)) = active {
         println!(
             "  {:<18} #{} ({})",
             "Active generation:".dimmed(),
@@ -51,54 +78,48 @@ pub fn run() -> Result<()> {
             age
         );
     }
+}
 
-    // ── Flake inputs (all root inputs, sorted) ─────────────
+fn print_flake_inputs_section(lock_path: &Path) {
     println!();
     println!("  {}", "Flake inputs:".bold());
-    let inputs = read_all_root_inputs(&lock_path);
-    let lock_modified = lock_path.metadata().ok().and_then(|m| m.modified().ok());
-    let active_modified = active.as_ref().and_then(|(n, _)| {
-        std::fs::symlink_metadata(format!("/nix/var/nix/profiles/system-{}-link", n))
-            .ok()
-            .and_then(|m| m.modified().ok())
-    });
-
-    let lock_newer_than_active = match (lock_modified, active_modified) {
-        (Some(l), Some(a)) => l > a,
-        _ => false,
-    };
-
-    for (name, age, rev) in &inputs {
+    for (name, age, rev) in read_all_root_inputs(lock_path) {
         let rev_str = if rev.is_empty() { String::new() } else { format!(" ({})", rev) };
         println!("    {:<22} {}{}", name, age.dimmed(), rev_str.dimmed());
     }
+}
 
-    // ── Pins ───────────────────────────────────────────────
+fn print_pins_section(current_pins: &[String], obsolete_count: usize) {
     println!();
     if current_pins.is_empty() {
         println!("  {:<18} {}", "Pins:".bold(), "no active pins".dimmed());
-    } else {
-        let header = if obsolete_count > 0 {
-            format!(
-                "{} active ({} obsolete)",
-                current_pins.len(),
-                obsolete_count
-            )
+        return;
+    }
+    let header = if obsolete_count > 0 {
+        format!("{} active ({} obsolete)", current_pins.len(), obsolete_count)
             .red()
             .to_string()
-        } else {
-            format!("{} active", current_pins.len()).yellow().to_string()
-        };
-        println!("  {:<18} {}", "Pins:".bold(), header);
-        for name in &current_pins {
-            println!("    {} {}", "→".yellow(), name);
-        }
+    } else {
+        format!("{} active", current_pins.len()).yellow().to_string()
+    };
+    println!("  {:<18} {}", "Pins:".bold(), header);
+    for name in current_pins {
+        println!("    {} {}", "→".yellow(), name);
     }
+}
 
-    // ── Suggestions ────────────────────────────────────────
+/// Print the actionable next-step suggestions. Falls back to a green
+/// "everything clean" line when nothing matches — important so the
+/// user always sees a non-empty Suggestions block.
+fn print_suggestions(
+    nix_config: &config::NixConfig,
+    obsolete_count: usize,
+    lock_newer_than_active: bool,
+    current_pins: &[String],
+) {
     println!();
     println!("  {}", "Suggestions:".bold());
-    let mut any_suggestion = false;
+    let mut any = false;
 
     if !config::is_initialized(&nix_config.flake_dir) {
         println!(
@@ -106,9 +127,8 @@ pub fn run() -> Result<()> {
             "⚠".yellow(),
             "cheni init".bold()
         );
-        any_suggestion = true;
+        any = true;
     }
-
     if obsolete_count > 0 {
         println!(
             "    {} {} obsolete pin(s) — run '{}' to remove",
@@ -116,37 +136,31 @@ pub fn run() -> Result<()> {
             obsolete_count,
             "cheni clean".bold()
         );
-        any_suggestion = true;
+        any = true;
     }
-
     if lock_newer_than_active {
         println!(
             "    {} flake.lock is newer than the active generation — run '{}' to apply",
             "⚠".yellow(),
             "cheni build".bold()
         );
-        any_suggestion = true;
+        any = true;
     }
-
     if !current_pins.is_empty() && obsolete_count < current_pins.len() {
         println!(
             "    {} pinned packages waiting — run '{}' to refresh nixpkgs-latest + rebuild",
             "→".cyan(),
             "cheni update".bold()
         );
-        any_suggestion = true;
+        any = true;
     }
-
-    if !any_suggestion {
+    if !any {
         println!(
             "    {} everything looks clean — run '{}' to scan for new updates",
             "✓".green(),
             "cheni check".bold()
         );
     }
-
-    println!();
-    Ok(())
 }
 
 /// Look up the currently active generation number + a human-readable age.
