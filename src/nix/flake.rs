@@ -82,27 +82,21 @@ fn store_paths() -> Vec<String> {
 /// Excludes nixpkgs, home-manager, and other toolchain inputs.
 pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
     let lock_path = flake_dir.join("flake.lock");
-    let content = std::fs::read_to_string(&lock_path)
-        .context("Failed to read flake.lock")?;
+    let content = std::fs::read_to_string(&lock_path).context("Failed to read flake.lock")?;
+    let lock: serde_json::Value =
+        serde_json::from_str(&content).context("Failed to parse flake.lock")?;
 
-    let lock: serde_json::Value = serde_json::from_str(&content)
-        .context("Failed to parse flake.lock")?;
-
-    let nodes = lock.get("nodes")
+    let nodes = lock
+        .get("nodes")
         .and_then(|n| n.as_object())
         .context("No 'nodes' in flake.lock")?;
-
-    // The root node lists the direct inputs
-    let root_inputs = nodes.get("root")
+    let Some(root_inputs) = nodes
+        .get("root")
         .and_then(|r| r.get("inputs"))
-        .and_then(|i| i.as_object());
-
-    let root_input_names: Vec<String> = match root_inputs {
-        Some(inputs) => inputs.keys().cloned().collect(),
-        None => {
-            debug!("No root inputs found in flake.lock");
-            return Ok(Vec::new());
-        }
+        .and_then(|i| i.as_object())
+    else {
+        debug!("No root inputs found in flake.lock");
+        return Ok(Vec::new());
     };
 
     let now = std::time::SystemTime::now()
@@ -111,85 +105,86 @@ pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
         .as_secs();
 
     let mut result = Vec::new();
-
-    for input_name in &root_input_names {
-        // Skip infrastructure inputs
+    for input_name in root_inputs.keys() {
         if INFRASTRUCTURE_INPUTS.contains(&input_name.as_str()) {
             continue;
         }
-
-        // Get the locked info for this input
-        // Some inputs use indirection (the value in root.inputs might be
-        // a string pointing to another node)
-        let node_name = root_inputs
-            .and_then(|i| i.get(input_name))
-            .and_then(|v| v.as_str())
-            .unwrap_or(input_name);
-
-        let node = match nodes.get(node_name) {
-            Some(n) => n,
-            None => {
-                debug!("Input '{}' not found in nodes", input_name);
-                continue;
-            }
-        };
-
-        let locked = match node.get("locked") {
-            Some(l) => l,
-            None => {
-                debug!("Input '{}' has no locked info", input_name);
-                continue;
-            }
-        };
-
-        let last_modified = locked.get("lastModified")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(0);
-
-        let rev = locked.get("rev")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .chars()
-            .take(12)
-            .collect::<String>();
-
-        let days_old = now.saturating_sub(last_modified) / 86400;
-
-        // Try to find the installed version from the store
-        let installed_version = find_store_version(input_name);
-
-        // Extract repo info from the "original" field
-        let original = node.get("original");
-        let repo_type = original.and_then(|o| o.get("type")).and_then(|v| v.as_str()).map(|s| s.to_string());
-        let repo_owner = original.and_then(|o| o.get("owner")).and_then(|v| v.as_str()).map(|s| s.to_string());
-        let repo_name = original.and_then(|o| o.get("repo")).and_then(|v| v.as_str()).map(|s| s.to_string());
-
-        debug!(
-            "Flake input: {} v{} ({}d old, rev {}, {}/{})",
-            input_name,
-            installed_version.as_deref().unwrap_or("?"),
-            days_old,
-            rev,
-            repo_owner.as_deref().unwrap_or("?"),
-            repo_name.as_deref().unwrap_or("?"),
-        );
-
-        result.push(FlakeInput {
-            name: input_name.clone(),
-            last_modified,
-            rev,
-            days_old,
-            installed_version,
-            repo_type,
-            repo_owner,
-            repo_name,
-            has_update: None,
-            remote_age: None,
-        });
+        if let Some(input) = read_one_input(input_name, root_inputs, nodes, now) {
+            result.push(input);
+        }
     }
-
     result.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(result)
+}
+
+/// Build a `FlakeInput` for a single root input.
+///
+/// Returns None when the lock entry is missing or malformed (logged at
+/// debug level — these aren't errors, just non-trivial inputs we don't
+/// have anything useful to report on, e.g. inlined `path:` inputs).
+///
+/// `root_inputs` is the `nodes.root.inputs` map; the value at
+/// `root_inputs[name]` may be a string pointing to another node (the
+/// flake.lock indirection format), so we resolve through it before
+/// looking the node up in `nodes`.
+fn read_one_input(
+    input_name: &str,
+    root_inputs: &serde_json::Map<String, serde_json::Value>,
+    nodes: &serde_json::Map<String, serde_json::Value>,
+    now: u64,
+) -> Option<FlakeInput> {
+    let node_name = root_inputs
+        .get(input_name)
+        .and_then(|v| v.as_str())
+        .unwrap_or(input_name);
+
+    let node = nodes.get(node_name).or_else(|| {
+        debug!("Input '{}' not found in nodes", input_name);
+        None
+    })?;
+    let locked = node.get("locked").or_else(|| {
+        debug!("Input '{}' has no locked info", input_name);
+        None
+    })?;
+
+    let last_modified = locked.get("lastModified").and_then(|v| v.as_u64()).unwrap_or(0);
+    let rev: String = locked
+        .get("rev")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .chars()
+        .take(12)
+        .collect();
+    let days_old = now.saturating_sub(last_modified) / 86400;
+    let installed_version = find_store_version(input_name);
+
+    let original = node.get("original");
+    let repo_type = original.and_then(|o| o.get("type")).and_then(|v| v.as_str()).map(String::from);
+    let repo_owner = original.and_then(|o| o.get("owner")).and_then(|v| v.as_str()).map(String::from);
+    let repo_name = original.and_then(|o| o.get("repo")).and_then(|v| v.as_str()).map(String::from);
+
+    debug!(
+        "Flake input: {} v{} ({}d old, rev {}, {}/{})",
+        input_name,
+        installed_version.as_deref().unwrap_or("?"),
+        days_old,
+        rev,
+        repo_owner.as_deref().unwrap_or("?"),
+        repo_name.as_deref().unwrap_or("?"),
+    );
+
+    Some(FlakeInput {
+        name: input_name.to_string(),
+        last_modified,
+        rev,
+        days_old,
+        installed_version,
+        repo_type,
+        repo_owner,
+        repo_name,
+        has_update: None,
+        remote_age: None,
+    })
 }
 
 /// Try to find the installed version of a flake input from the nix store.
@@ -261,14 +256,12 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
     // Use the same configurable timeout as the Repology client — on a
     // slow link the GitHub/GitLab API commits call can be just as slow
     // as Repology, and a 5s hard cap frequently tripped in practice.
-    let client = reqwest::blocking::Client::builder()
+    let Ok(client) = reqwest::blocking::Client::builder()
         .user_agent("cheni/0.1")
         .timeout(crate::api::net::http_timeout())
-        .build();
-
-    let client = match client {
-        Ok(c) => c,
-        Err(_) => return,
+        .build()
+    else {
+        return;
     };
 
     // Spawn one thread per input — APIs are independent, so we can fan out.
@@ -281,67 +274,7 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
                 let repo_owner = input.repo_owner.clone();
                 let repo_name = input.repo_name.clone();
                 let local_rev = input.rev.clone();
-
-                scope.spawn(move || -> (Option<bool>, Option<String>) {
-                    let (repo_type, owner, repo) = match (repo_type, repo_owner, repo_name) {
-                        (Some(t), Some(o), Some(r)) => (t, o, r),
-                        _ => return (None, None),
-                    };
-
-                    let info = match repo_type.as_str() {
-                        "github" => {
-                            let url = format!(
-                                "https://api.github.com/repos/{}/{}/commits?per_page=1",
-                                owner, repo
-                            );
-                            fetch_commit_info(&client, &url, |json| {
-                                let commit = json.as_array()?.first()?;
-                                let rev = commit.get("sha")?.as_str().map(short_hash)?;
-                                let date = commit.get("commit")
-                                    .and_then(|c| c.get("committer"))
-                                    .and_then(|c| c.get("date"))
-                                    .and_then(|d| d.as_str())
-                                    .map(short_date);
-                                Some(RemoteCommitInfo { rev, date })
-                            })
-                        }
-                        "gitlab" => {
-                            let url = format!(
-                                "https://gitlab.com/api/v4/projects/{}%2F{}/repository/commits?per_page=1",
-                                owner, repo
-                            );
-                            fetch_commit_info(&client, &url, |json| {
-                                let commit = json.as_array()?.first()?;
-                                let rev = commit.get("id")?.as_str().map(short_hash)?;
-                                let date = commit.get("committed_date")
-                                    .and_then(|d| d.as_str())
-                                    .map(short_date);
-                                Some(RemoteCommitInfo { rev, date })
-                            })
-                        }
-                        _ => None,
-                    };
-
-                    match info {
-                        Some(info) => {
-                            // Compare the two truncated revs by char count, not
-                            // by byte. Git hashes are hex so this is equivalent
-                            // in practice but the explicit form avoids a
-                            // mid-codepoint slice if the API ever returns
-                            // something unexpected.
-                            let prefix_len = info.rev.chars().count().min(local_rev.chars().count());
-                            let local_prefix: String = local_rev.chars().take(prefix_len).collect();
-                            let is_outdated = info.rev != local_prefix;
-                            let age = if is_outdated {
-                                info.date.map(|d| format!("latest: {}", d))
-                            } else {
-                                None
-                            };
-                            (Some(is_outdated), age)
-                        }
-                        None => (None, None),
-                    }
-                })
+                scope.spawn(move || check_one_input(&client, repo_type, repo_owner, repo_name, &local_rev))
             })
             .collect();
 
@@ -355,6 +288,81 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
             }
         }
     });
+}
+
+/// Single-input update check. Returns (has_update, remote_age):
+/// - `(None, None)` when we can't query (missing repo info, network error).
+/// - `(Some(false), None)` when the input is up to date.
+/// - `(Some(true), Some("latest: YYYY-MM-DD"))` when the remote is ahead.
+fn check_one_input(
+    client: &reqwest::blocking::Client,
+    repo_type: Option<String>,
+    repo_owner: Option<String>,
+    repo_name: Option<String>,
+    local_rev: &str,
+) -> (Option<bool>, Option<String>) {
+    let (Some(repo_type), Some(owner), Some(repo)) = (repo_type, repo_owner, repo_name) else {
+        return (None, None);
+    };
+    let Some(info) = fetch_remote_info(client, &repo_type, &owner, &repo) else {
+        return (None, None);
+    };
+    let is_outdated = is_revision_outdated(&info.rev, local_rev);
+    let age = is_outdated.then(|| info.date.map(|d| format!("latest: {}", d))).flatten();
+    (Some(is_outdated), age)
+}
+
+/// Dispatch to the right host API and parse the latest commit metadata.
+fn fetch_remote_info(
+    client: &reqwest::blocking::Client,
+    repo_type: &str,
+    owner: &str,
+    repo: &str,
+) -> Option<RemoteCommitInfo> {
+    match repo_type {
+        "github" => {
+            let url = format!(
+                "https://api.github.com/repos/{}/{}/commits?per_page=1",
+                owner, repo
+            );
+            fetch_commit_info(client, &url, |json| {
+                let commit = json.as_array()?.first()?;
+                let rev = commit.get("sha")?.as_str().map(short_hash)?;
+                let date = commit
+                    .get("commit")
+                    .and_then(|c| c.get("committer"))
+                    .and_then(|c| c.get("date"))
+                    .and_then(|d| d.as_str())
+                    .map(short_date);
+                Some(RemoteCommitInfo { rev, date })
+            })
+        }
+        "gitlab" => {
+            let url = format!(
+                "https://gitlab.com/api/v4/projects/{}%2F{}/repository/commits?per_page=1",
+                owner, repo
+            );
+            fetch_commit_info(client, &url, |json| {
+                let commit = json.as_array()?.first()?;
+                let rev = commit.get("id")?.as_str().map(short_hash)?;
+                let date = commit
+                    .get("committed_date")
+                    .and_then(|d| d.as_str())
+                    .map(short_date);
+                Some(RemoteCommitInfo { rev, date })
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Compare two truncated git revs. Char-based slicing so a malformed
+/// API response (anything not pure-hex) can't trigger a mid-codepoint
+/// panic — git hashes are hex in practice, so this is equivalent.
+fn is_revision_outdated(remote_rev: &str, local_rev: &str) -> bool {
+    let prefix_len = remote_rev.chars().count().min(local_rev.chars().count());
+    let local_prefix: String = local_rev.chars().take(prefix_len).collect();
+    remote_rev != local_prefix
 }
 
 /// Fetch commit info from a Git hosting API.
