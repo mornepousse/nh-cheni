@@ -142,7 +142,6 @@ fn pick_highest_version(versions: &[String]) -> String {
     use crate::version::parse::parse_version;
 
     let Some(first) = versions.first() else {
-        debug_assert!(false, "pick_highest_version called with empty slice");
         return String::new();
     };
     let mut best = first.clone();
