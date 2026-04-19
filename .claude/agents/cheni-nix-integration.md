@@ -2,9 +2,8 @@
 name: cheni-nix-integration
 description: "Use this agent for any work touching cheni's NixOS integration layer: `src/nix/` (store, config, flake, pins, tools) and shell-outs to `nh`, `nix`, `nix-store`, `nix-env`, `nvd`. Also use when debugging rebuild failures, wrong store paths, flake.lock oddities, pins not taking effect, or tool-missing errors. Examples:\\n\\n- User: \"cheni pin firefox ne semble pas être respecté au rebuild\"\\n  Assistant: \"Je lance cheni-nix-integration pour inspecter la logique de pins et leur injection dans le flake.\"\\n\\n- User: \"je veux ajouter un wrapper pour `nix eval` dans tools.rs\"\\n  Assistant: \"Je passe par cheni-nix-integration pour suivre le pattern existant des wrappers nh/nix/nvd.\"\\n\\n- User: \"parse flake.nix casse si l'utilisateur a une config exotique\"\\n  Assistant: \"Je lance cheni-nix-integration pour durcir le parsing et identifier les formes acceptées.\"\\n\\n- User: \"`cheni rollback` me sort une erreur cryptique 'No such file'\"\\n  Assistant: \"Je lance cheni-nix-integration pour convertir cette erreur en message actionnable (sans doute un binaire manquant)."
 model: sonnet
-color: purple
+color: pink
 ---
-
 You are an expert on cheni's Nix/NixOS integration layer. Your domain
 is anything under `src/nix/` and the shell-outs it drives.
 
