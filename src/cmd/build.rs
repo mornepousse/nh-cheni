@@ -30,19 +30,42 @@ struct ParsedError {
 /// to provide human-readable error messages and fix suggestions.
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
-    let config_path = nix_config.flake_dir.to_str()
+    let config_path = nix_config
+        .flake_dir
+        .to_str()
         .context("Config path is not valid UTF-8")?;
 
-    println!(
-        "{}\n",
-        "=== cheni build ===".bold()
-    );
-
-    // nh sends everything (progress + errors) to stderr.
-    // We capture stderr while letting it pass through to the terminal via tee,
-    // so the user sees progress AND we can parse errors.
+    println!("{}\n", "=== cheni build ===".bold());
     println!("{}", "Building...".dimmed());
 
+    let (status, captured_stderr) = run_nh_capturing_stderr(config_path)?;
+
+    if status.success() {
+        println!("\n{} Build successful!", "✓".green());
+        return Ok(());
+    }
+
+    debug!("Parsing {} bytes of captured stderr", captured_stderr.len());
+    let errors = parse_errors(&captured_stderr);
+
+    if errors.is_empty() {
+        // Couldn't parse the error — show raw output as a fallback.
+        println!("\n{} Build failed.\n", "✗".red());
+        eprintln!("{}", captured_stderr);
+        return Ok(());
+    }
+
+    print_parsed_errors(&errors);
+    Ok(())
+}
+
+/// Spawn `nh os switch <flake>`, stream stderr to the user line-by-line
+/// (so they see progress on a long rebuild), and capture every line for
+/// the error parser. UTF-8 read errors on stderr are logged at DEBUG and
+/// skipped — losing one weird line is better than truncating the rest.
+fn run_nh_capturing_stderr(
+    config_path: &str,
+) -> Result<(std::process::ExitStatus, String)> {
     use std::io::{BufRead, BufReader};
 
     let mut child = Command::new("nh")
@@ -52,27 +75,20 @@ pub fn run() -> Result<()> {
         .spawn()
         .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
 
-    // Read stderr in real time: display to user AND capture for parsing.
-    // stderr was piped above, so this is always Some — expect() makes the
-    // invariant explicit for any future reader.
+    // stderr was piped above, so .take() is guaranteed to return Some.
     let stderr_pipe = child
         .stderr
         .take()
         .expect("stderr was set to piped, must be Some");
     let reader = BufReader::new(stderr_pipe);
-    let mut captured_stderr = String::new();
+    let mut captured = String::new();
 
-    // Stream line-by-line so the user sees nh output as it happens
-    // (long rebuilds would otherwise print nothing until completion).
-    // On a read/UTF-8 error we log + skip the line instead of breaking,
-    // so a single bad byte in an embedded build log doesn't silently
-    // truncate the captured stderr and break the error parser below.
     for line in reader.lines() {
         match line {
             Ok(line) => {
                 eprintln!("{}", line);
-                captured_stderr.push_str(&line);
-                captured_stderr.push('\n');
+                captured.push_str(&line);
+                captured.push('\n');
             }
             Err(e) => {
                 tracing::debug!("skipped unreadable stderr line: {}", e);
@@ -81,29 +97,19 @@ pub fn run() -> Result<()> {
         }
     }
 
-    let status = child.wait()
+    let status = child
+        .wait()
         .context("Failed to wait for build process")?;
+    Ok((status, captured))
+}
 
-    if status.success() {
-        println!("\n{} Build successful!", "✓".green());
-        return Ok(());
-    }
-
-    let stderr = &captured_stderr;
-    debug!("Parsing {} bytes of captured stderr", stderr.len());
-
-    let errors = parse_errors(stderr);
-
-    if errors.is_empty() {
-        // Couldn't parse the error — show raw output
-        println!("\n{} Build failed.\n", "✗".red());
-        eprintln!("{}", stderr);
-        return Ok(());
-    }
-
-    // Show parsed errors
-    println!("\n{} Build failed with {} error(s):\n", "✗".red(), errors.len());
-
+/// Render the parsed error list as the human-readable failure summary.
+fn print_parsed_errors(errors: &[ParsedError]) {
+    println!(
+        "\n{} Build failed with {} error(s):\n",
+        "✗".red(),
+        errors.len()
+    );
     for (i, error) in errors.iter().enumerate() {
         println!(
             "  {}  {} — {}",
@@ -117,8 +123,6 @@ pub fn run() -> Result<()> {
         }
         println!();
     }
-
-    Ok(())
 }
 
 /// Strip ANSI escape codes from a string.
@@ -195,134 +199,179 @@ fn find_source_context(lines: &[&str], idx: usize) -> Option<String> {
     }
 }
 
+/// One row of the dispatch table used by `parse_errors`. `matches`
+/// is a quick substring test on the current line; `handle` extracts
+/// a structured ParsedError when the match is positive.
+struct ErrorPattern {
+    matches: fn(&str) -> bool,
+    handle: fn(&[&str], usize) -> Option<ParsedError>,
+}
+
+/// Specific patterns we recognise, in priority order. Each one is
+/// independent — a single nh stderr line can trigger several patterns
+/// (e.g. cargoHash + a generic eval error around it).
+const ERROR_PATTERNS: &[ErrorPattern] = &[
+    ErrorPattern {
+        matches: |l| l.contains("hash mismatch") || l.contains("sha256 mismatch"),
+        handle: parse_hash_mismatch,
+    },
+    ErrorPattern {
+        matches: |l| l.contains("is not free") || (l.contains("unfree") && l.contains("refused")),
+        handle: parse_unfree,
+    },
+    ErrorPattern {
+        matches: |l| l.contains("is marked as broken"),
+        handle: parse_broken,
+    },
+    ErrorPattern {
+        matches: |l| l.contains("undefined variable"),
+        handle: parse_undefined_var,
+    },
+    ErrorPattern {
+        matches: |l| l.contains("infinite recursion"),
+        handle: parse_infinite_recursion,
+    },
+    ErrorPattern {
+        matches: |l| l.contains("path") && l.contains("does not exist"),
+        handle: parse_path_not_found,
+    },
+    ErrorPattern {
+        matches: |l| l.contains("builder for") && l.contains("failed"),
+        handle: parse_builder_failed,
+    },
+    ErrorPattern {
+        matches: |l| {
+            l.contains("collision between")
+                || (l.contains("collides with") && l.contains("nix/store"))
+        },
+        handle: parse_collision,
+    },
+    ErrorPattern {
+        matches: |l| l.contains("cargoHash") && l.contains("out of date"),
+        handle: parse_cargo_hash,
+    },
+    ErrorPattern {
+        matches: |l| l.contains("not supported for interpreter"),
+        handle: parse_python_interpreter,
+    },
+];
+
 /// Parse Nix build errors from stderr output.
+///
+/// Two-pass strategy:
+///   1. Scan every line against the specific ERROR_PATTERNS table.
+///   2. If nothing matched, fall back to a single "generic eval error"
+///      grabbed from the first `error:` line — better than printing
+///      a wall of raw nh output when the pattern is one we haven't
+///      taught cheni about yet.
 fn parse_errors(stderr: &str) -> Vec<ParsedError> {
+    let clean_stderr = strip_ansi(stderr);
+    let lines: Vec<&str> = clean_stderr.lines().collect();
     let mut errors = Vec::new();
 
-    // Strip ANSI codes for pattern matching
-    let clean_stderr = strip_ansi(stderr);
-
-    // Process line by line, looking for error patterns
-    let lines: Vec<&str> = clean_stderr.lines().collect();
-
     for (i, line) in lines.iter().enumerate() {
-        // Pattern 1: Hash mismatch
-        if line.contains("hash mismatch") || line.contains("sha256 mismatch") {
-            if let Some(error) = parse_hash_mismatch(&lines, i) {
-                errors.push(error);
-            }
-        }
-
-        // Pattern 2: Unfree package
-        if line.contains("is not free") || line.contains("unfree") && line.contains("refused") {
-            if let Some(error) = parse_unfree(&lines, i) {
-                errors.push(error);
-            }
-        }
-
-        // Pattern 3: Broken package
-        if line.contains("is marked as broken") {
-            if let Some(error) = parse_broken(&lines, i) {
-                errors.push(error);
-            }
-        }
-
-        // Pattern 4: Eval error — undefined variable
-        if line.contains("undefined variable") {
-            if let Some(error) = parse_undefined_var(&lines, i) {
-                errors.push(error);
-            }
-        }
-
-        // Pattern 5: Eval error — infinite recursion
-        if line.contains("infinite recursion") {
-            errors.push(ParsedError {
-                what: "Nix evaluation".to_string(),
-                category: "Infinite recursion",
-                message: "The configuration caused an infinite recursion during evaluation.".to_string(),
-                hint: Some("Check overlays for circular references. Use '--show-trace' for details.".to_string()),
-            });
-        }
-
-        // Pattern 6: File not found (git staging)
-        if line.contains("path") && line.contains("does not exist") {
-            if let Some(error) = parse_path_not_found(&lines, i) {
-                errors.push(error);
-            }
-        }
-
-        // Pattern 7: Builder failed
-        if line.contains("builder for") && line.contains("failed") {
-            if let Some(error) = parse_builder_failed(&lines, i) {
-                errors.push(error);
-            }
-        }
-
-        // Pattern 8: Collision between packages
-        if line.contains("collision between") || (line.contains("collides with") && line.contains("nix/store")) {
-            if let Some(error) = parse_collision(&lines, i) {
-                errors.push(error);
-            }
-        }
-
-        // Pattern 9: cargoHash out of date
-        if line.contains("cargoHash") && line.contains("out of date") {
-            errors.push(ParsedError {
-                what: "Cargo hash".to_string(),
-                category: "Hash mismatch",
-                message: "Cargo.lock changed but cargoHash in the derivation is outdated.".to_string(),
-                hint: Some("Set cargoHash = \"\" in the derivation, rebuild to get the new hash, then update it.".to_string()),
-            });
-        }
-
-        // Pattern 10: "not supported for interpreter" (Python version mismatch)
-        if line.contains("not supported for interpreter") {
-            // Extract the actual error message (strip prefixes like "error:", "┃", etc.)
-            let clean_msg = line.trim()
-                .trim_start_matches("error:")
-                .trim_start_matches('┃')
-                .trim();
-            // Extract package name: "sphinx-9.1.0 not supported..." → "sphinx-9.1.0"
-            let pkg_name = clean_msg.split_whitespace().next().unwrap_or("?");
-            // Only add once (skip if we already have this exact package)
-            if !errors.iter().any(|e| e.category == "Incompatible package" && e.what == pkg_name) {
-                errors.push(ParsedError {
-                    what: pkg_name.to_string(),
-                    category: "Incompatible package",
-                    message: clean_msg.to_string(),
-                    hint: Some("Use a different Python version, or remove this package.".to_string()),
-                });
-            }
-        }
-
-        // Pattern 11: Generic "error:" line not caught by other patterns
-        // (fallback — only if no other errors were found yet for this line)
-        if line.trim().starts_with("error:") && errors.is_empty() {
-            let msg = line.trim().strip_prefix("error:").unwrap_or(line).trim();
-            // Skip if it's just "error:" with nothing useful
-            if !msg.is_empty() && msg.len() > 5 {
-                let location = find_location(&lines, i);
-                let context = find_source_context(&lines, i);
-                let mut full_msg = msg.to_string();
-                if let Some(loc) = &location {
-                    full_msg.push_str(&format!("\n      File: {}", humanize_path(loc)));
+        for pattern in ERROR_PATTERNS {
+            if (pattern.matches)(line) {
+                if let Some(err) = (pattern.handle)(&lines, i) {
+                    push_unique(&mut errors, err);
                 }
-                if let Some(ctx) = &context {
-                    full_msg.push_str(&format!("\n{}", ctx));
-                }
-                errors.push(ParsedError {
-                    what: "Nix evaluation".to_string(),
-                    category: "Eval error",
-                    message: full_msg,
-                    hint: None,
-                });
             }
         }
     }
 
-    // Deduplicate by category + what
+    if errors.is_empty() {
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(err) = parse_generic_error(&lines, i, line) {
+                errors.push(err);
+                break; // one fallback is enough
+            }
+        }
+    }
+
     errors.dedup_by(|a, b| a.category == b.category && a.what == b.what);
     errors
+}
+
+/// Push an error into the list only if no entry with the same
+/// (category, what) already exists. Several patterns can fire on the
+/// same root cause (e.g. one line of "Python 3.13 not supported for
+/// sphinx" repeated across nh's retry output).
+fn push_unique(errors: &mut Vec<ParsedError>, err: ParsedError) {
+    if !errors
+        .iter()
+        .any(|e| e.category == err.category && e.what == err.what)
+    {
+        errors.push(err);
+    }
+}
+
+fn parse_infinite_recursion(_lines: &[&str], _idx: usize) -> Option<ParsedError> {
+    Some(ParsedError {
+        what: "Nix evaluation".to_string(),
+        category: "Infinite recursion",
+        message: "The configuration caused an infinite recursion during evaluation."
+            .to_string(),
+        hint: Some(
+            "Check overlays for circular references. Use '--show-trace' for details."
+                .to_string(),
+        ),
+    })
+}
+
+fn parse_cargo_hash(_lines: &[&str], _idx: usize) -> Option<ParsedError> {
+    Some(ParsedError {
+        what: "Cargo hash".to_string(),
+        category: "Hash mismatch",
+        message: "Cargo.lock changed but cargoHash in the derivation is outdated."
+            .to_string(),
+        hint: Some(
+            "Set cargoHash = \"\" in the derivation, rebuild to get the new hash, then update it."
+                .to_string(),
+        ),
+    })
+}
+
+fn parse_python_interpreter(lines: &[&str], idx: usize) -> Option<ParsedError> {
+    let line = lines.get(idx)?;
+    let clean_msg = line
+        .trim()
+        .trim_start_matches("error:")
+        .trim_start_matches('┃')
+        .trim();
+    let pkg_name = clean_msg.split_whitespace().next().unwrap_or("?");
+    Some(ParsedError {
+        what: pkg_name.to_string(),
+        category: "Incompatible package",
+        message: clean_msg.to_string(),
+        hint: Some("Use a different Python version, or remove this package.".to_string()),
+    })
+}
+
+/// Last-resort matcher: anything starting with `error:` that the
+/// specific patterns missed. We prefer a generic message with the
+/// nearby file location to a raw stderr dump.
+fn parse_generic_error(lines: &[&str], idx: usize, line: &str) -> Option<ParsedError> {
+    let trimmed = line.trim();
+    if !trimmed.starts_with("error:") {
+        return None;
+    }
+    let msg = trimmed.strip_prefix("error:").unwrap_or(line).trim();
+    if msg.is_empty() || msg.len() <= 5 {
+        return None;
+    }
+    let mut full_msg = msg.to_string();
+    if let Some(loc) = find_location(lines, idx) {
+        full_msg.push_str(&format!("\n      File: {}", humanize_path(&loc)));
+    }
+    if let Some(ctx) = find_source_context(lines, idx) {
+        full_msg.push_str(&format!("\n{}", ctx));
+    }
+    Some(ParsedError {
+        what: "Nix evaluation".to_string(),
+        category: "Eval error",
+        message: full_msg,
+        hint: None,
+    })
 }
 
 /// Parse a hash mismatch error.
