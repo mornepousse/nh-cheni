@@ -36,74 +36,68 @@ struct CheckResult {
 /// Runs a series of health checks and reports issues with severity levels.
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
+    print_doctor_header(&nix_config);
 
+    let checks = run_all_checks(&nix_config.flake_dir)?;
+    let (ok, warn, err) = tally_severities(&checks);
+    for check in &checks {
+        print_check(check);
+    }
+    print_summary(ok, warn, err);
+    Ok(())
+}
+
+fn print_doctor_header(nix_config: &config::NixConfig) {
     println!("{}\n", "=== cheni doctor ===".bold());
     println!("  Config:   {}", nix_config.flake_dir.display());
     println!("  Hostname: {}\n", nix_config.hostname);
+}
 
+/// Run every health check in declared order. Most return one result;
+/// a couple (`check_pins_valid`, `check_flake_input_freshness`) fan out
+/// to multiple results and use `extend` instead of `push`.
+fn run_all_checks(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
     let mut checks = Vec::new();
-
-    // Check 1: nixpkgs-latest input exists in flake.nix
-    checks.push(check_nixpkgs_latest_input(&nix_config.flake_dir));
-
-    // Check 2: package-pins.json exists
-    checks.push(check_pins_file_exists(&nix_config.flake_dir));
-
-    // Check 3: pins reference packages that exist in the store
-    checks.extend(check_pins_valid(&nix_config.flake_dir)?);
-
-    // Check 4: flake inputs freshness
-    checks.extend(check_flake_input_freshness(&nix_config.flake_dir));
-
-    // Check 5: obsolete pins (nixpkgs caught up)
-    checks.push(check_obsolete_pins(&nix_config.flake_dir));
-
-    // Check 6: nix store size
+    checks.push(check_nixpkgs_latest_input(flake_dir));
+    checks.push(check_pins_file_exists(flake_dir));
+    checks.extend(check_pins_valid(flake_dir)?);
+    checks.extend(check_flake_input_freshness(flake_dir));
+    checks.push(check_obsolete_pins(flake_dir));
     checks.push(check_store_size());
-
-    // Check 7: number of system generations
     checks.push(check_generations());
-
-    // Check 8: nh is installed (required for cheni build / update)
     checks.push(check_nh_installed());
-
-    // Check 9: Repology cache health
     checks.push(check_cache());
+    checks.push(check_overlay_resilience(flake_dir));
+    Ok(checks)
+}
 
-    // Check 10: overlay is resilient to a missing pins file
-    checks.push(check_overlay_resilience(&nix_config.flake_dir));
-
-    // Print results
-    let mut ok_count = 0;
-    let mut warn_count = 0;
-    let mut err_count = 0;
-
-    for check in &checks {
-        let (symbol, color) = match check.severity {
-            Severity::Ok => ("✓", "green"),
-            Severity::Warning => ("!", "yellow"),
-            Severity::Error => ("✗", "red"),
-        };
-
-        let colored_symbol = match color {
-            "green" => symbol.green(),
-            "yellow" => symbol.yellow(),
-            "red" => symbol.red(),
-            _ => symbol.normal(),
-        };
-
-        println!("  {}  {} — {}", colored_symbol, check.name.bold(), check.message);
-        if let Some(hint) = &check.hint {
-            println!("     {} {}", "Hint:".cyan(), hint);
-        }
-
-        match check.severity {
-            Severity::Ok => ok_count += 1,
-            Severity::Warning => warn_count += 1,
-            Severity::Error => err_count += 1,
+fn tally_severities(checks: &[CheckResult]) -> (usize, usize, usize) {
+    let mut ok = 0;
+    let mut warn = 0;
+    let mut err = 0;
+    for c in checks {
+        match c.severity {
+            Severity::Ok => ok += 1,
+            Severity::Warning => warn += 1,
+            Severity::Error => err += 1,
         }
     }
+    (ok, warn, err)
+}
 
+fn print_check(check: &CheckResult) {
+    let symbol = match check.severity {
+        Severity::Ok => "✓".green(),
+        Severity::Warning => "!".yellow(),
+        Severity::Error => "✗".red(),
+    };
+    println!("  {}  {} — {}", symbol, check.name.bold(), check.message);
+    if let Some(hint) = &check.hint {
+        println!("     {} {}", "Hint:".cyan(), hint);
+    }
+}
+
+fn print_summary(ok_count: usize, warn_count: usize, err_count: usize) {
     println!();
     println!(
         "{} {} passed | {} {} warning(s) | {} {} error(s)",
@@ -111,8 +105,6 @@ pub fn run() -> Result<()> {
         "●".yellow(), warn_count,
         "●".red(), err_count,
     );
-
-    Ok(())
 }
 
 /// Check that nixpkgs-latest is declared as a flake input.
