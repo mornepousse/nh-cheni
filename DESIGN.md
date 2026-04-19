@@ -184,13 +184,30 @@ Hostname is detected via `hostname` command and matched against
 
 ## Package Name Resolution
 
-Store path names don't always match Repology names. Resolution cascade:
+Store names don't always map cleanly to Repology projects, and Repology
+projects can contain many entries for the same nixpkgs channel. Two
+related problems, two distinct passes:
 
-1. Try the store name directly on Repology (fast, works ~80%)
-2. If not found → `nix eval nixpkgs#<name>.name` to get the real attr (slow, cached)
-3. If still not found → show "unknown"
+**Project lookup** — picking the right Repology project URL:
+1. Apply the small `NAME_MAPPINGS` table for known oddballs (Qt 6
+   sub-packages → `qt`, terminal emulator name conflicts, etc.)
+2. Otherwise try the store name directly. ~80% of packages just work.
+3. On 404 → classified as "Unknown" (visible with `--details`).
 
-Results are cached on disk (~/.cache/cheni/versions.json, 1h TTL).
+**Entry selection** — once we've fetched the project page, picking the
+right nix entry from it. The page can contain firefox + firefox-esr +
+firefox-bin + firefox-mobile (all `visiblename: "firefox"`), or
+`kdePackages.breeze-icons` + `libsForQt5.breeze-icons`. Cascade:
+1. If the caller passed an installed-version hint, prefer the entry
+   whose version matches exactly, then by major.
+2. Otherwise, name-match by `srcname` → `binname` → `visiblename`.
+3. Filter pre-release versions (`3.15.0a7`, `2.0-beta1`, ...) when
+   the installed version is stable — Repology often returns the
+   alpha/rc as "latest" otherwise.
+
+Results are cached on disk (`~/.cache/cheni/versions.json`, 1h TTL,
+written atomically). `cheni check --refresh` wipes the cache to force
+re-fetch.
 
 ## Pin Auto-Cleanup
 

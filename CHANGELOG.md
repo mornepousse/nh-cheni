@@ -97,6 +97,43 @@ semver.
   "what replaced my old `update` shell alias").
 
 ### Fixed
+- **Pre-release "available" versions** — Repology returns the latest
+  known version of a project including alpha/beta/rc pre-releases.
+  The version parser stripped the suffix so `python 3.15.0a7` was
+  comparing as `[3,15,0]` against an installed `3.14.3` and showing
+  up as a "minor update". New `is_prerelease()` helper recognises
+  PEP440 (`a7`/`b1`/`rc3`), dash suffixes (`-alpha`, `-beta`, `-rc`,
+  `-pre`, `-dev`, `-unstable`, `-snapshot`) and bare `alpha`/`beta`,
+  while explicitly NOT flagging calver dates or false-friend strings
+  like `1.0-build42`. When the available version is a pre-release and
+  the installed version isn't, cheni classifies the package as up-to-date.
+- **Noto fonts mapping removed** — `noto-fonts-cjk-sans` /
+  `noto-fonts-color-emoji` were mapped to Repology's `fonts:noto`
+  meta-bundle, which uses calver (`2026.04.01`) while the sub-packages
+  ship per-script versions (`2.004`, `2.051`). Result was a phantom
+  "minor update" every time the bundle got tagged. Mapping dropped;
+  the sub-packages now fall through to "Unknown" instead of producing
+  bogus updates.
+- **Source archives shadowing real packages** — the displaylink driver
+  landed three derivations in the store: a script, the upstream `.zip`
+  source download (parsed as version "620.zip"), and the actual
+  `displaylink-6.2.0-30`. `pick_highest_version` selected the source
+  download because `[620] > [6, 2, 0]` numerically. Added `.zip`,
+  `.tar.gz`/`.tar.bz2`/`.tar.xz`/`.tar.zst`, `.tgz`/`.tbz2`/`.txz` to
+  the IGNORED_SUFFIXES filter so source files are skipped and the real
+  derivation wins.
+- **Repology project namespace collisions** — a single Repology project
+  page contains every nix entry that maps to it. For `firefox` that
+  means firefox, firefox-esr (visiblename "firefox"!), firefox-mobile,
+  firefox-bin, etc. — picking the first nix_unstable entry showed
+  `firefox 149 > 140` (the ESR version). Same for `breeze-icons`
+  (kdePackages 6.x vs libsForQt5 5.x) and the `exo` collision (Xfce
+  file manager 4.20 vs LLM tool 1.0). New version-aware entry picker
+  in `lookup_versions_with_installed`: when the caller provides the
+  installed version, cheni prefers entries whose version matches
+  (exact > major), then falls back to srcname/binname/visiblename.
+  Cuts the typical "Newer than nixpkgs" list from ~7 entries to the
+  2-3 that are genuinely ahead (flake-input pins, Repology lag).
 - **Store version resolution** — when the store contains several
   derivations for the same package (e.g. `mesa-26.0.4` alongside
   `mesa-24.3.2-osmesa`), cheni now picks the highest semantic version
