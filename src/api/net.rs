@@ -30,25 +30,33 @@ const MIN_TIMEOUT_SECS: u64 = 5;
 /// Resolve the per-request HTTP timeout, respecting the
 /// `CHENI_HTTP_TIMEOUT` environment variable if set to a valid value.
 pub fn http_timeout() -> Duration {
-    match std::env::var("CHENI_HTTP_TIMEOUT") {
-        Ok(s) => match s.trim().parse::<u64>() {
-            Ok(n) if n >= MIN_TIMEOUT_SECS => Duration::from_secs(n),
-            Ok(n) => {
-                debug!(
-                    "CHENI_HTTP_TIMEOUT={} too small (min={}), using default {}s",
-                    n, MIN_TIMEOUT_SECS, DEFAULT_TIMEOUT_SECS
-                );
-                Duration::from_secs(DEFAULT_TIMEOUT_SECS)
-            }
-            Err(_) => {
-                debug!(
-                    "CHENI_HTTP_TIMEOUT={:?} not a number, using default {}s",
-                    s, DEFAULT_TIMEOUT_SECS
-                );
-                Duration::from_secs(DEFAULT_TIMEOUT_SECS)
-            }
-        },
-        Err(_) => Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+    resolve_timeout(std::env::var("CHENI_HTTP_TIMEOUT").ok().as_deref())
+}
+
+/// Pure core of `http_timeout` — split out so tests don't race on the
+/// shared CHENI_HTTP_TIMEOUT env var (cargo test runs in parallel and
+/// `set_var` leaks across threads). Takes what the env *would* say;
+/// returns the resolved duration.
+pub(crate) fn resolve_timeout(env_value: Option<&str>) -> Duration {
+    let Some(s) = env_value else {
+        return Duration::from_secs(DEFAULT_TIMEOUT_SECS);
+    };
+    match s.trim().parse::<u64>() {
+        Ok(n) if n >= MIN_TIMEOUT_SECS => Duration::from_secs(n),
+        Ok(n) => {
+            debug!(
+                "CHENI_HTTP_TIMEOUT={} too small (min={}), using default {}s",
+                n, MIN_TIMEOUT_SECS, DEFAULT_TIMEOUT_SECS
+            );
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS)
+        }
+        Err(_) => {
+            debug!(
+                "CHENI_HTTP_TIMEOUT={:?} not a number, using default {}s",
+                s, DEFAULT_TIMEOUT_SECS
+            );
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS)
+        }
     }
 }
 
