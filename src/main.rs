@@ -244,6 +244,17 @@ enum Commands {
     /// Print a diagnostic report to paste into a GitLab issue
     #[command(name = "bug-report")]
     BugReport,
+
+    /// Emit shell completions for bash / zsh / fish / elvish / powershell
+    ///
+    /// Pipe to your shell's completion dir, e.g.
+    ///   cheni completion zsh  > ~/.zfunc/_cheni
+    ///   cheni completion fish > ~/.config/fish/completions/cheni.fish
+    Completion {
+        /// Target shell
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
 }
 
 /// Install a panic hook that converts unexpected crashes into a friendly
@@ -426,6 +437,23 @@ async fn main() -> Result<()> {
 
         Commands::BugReport => {
             cmd::bug_report::run()?;
+        }
+
+        Commands::Completion { shell } => {
+            use clap::CommandFactory;
+            use std::io::Write;
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            // Generate into a buffer first so we can handle BrokenPipe
+            // gracefully when the output is piped into `head`, etc. The
+            // upstream `generate()` would panic otherwise.
+            let mut buf = Vec::new();
+            clap_complete::generate(shell, &mut cmd, bin_name, &mut buf);
+            if let Err(e) = std::io::stdout().write_all(&buf) {
+                if e.kind() != std::io::ErrorKind::BrokenPipe {
+                    return Err(e.into());
+                }
+            }
         }
     }
 
