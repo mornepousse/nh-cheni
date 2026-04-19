@@ -3,6 +3,16 @@
 > **Granular package updates for NixOS.**
 > (_cheni_ — Swiss-French for "mess/clutter". This tool tidies up the clutter of Nix updates.)
 
+<!--
+  This repository may be viewed on GitHub as a read-only mirror.
+  Primary development happens on GitLab — please file issues and
+  merge requests there: https://gitlab.com/harrael/cheni
+-->
+
+> [!NOTE]
+> Primary repo: **https://gitlab.com/harrael/cheni**
+> Issues and merge requests are tracked there. The GitHub copy is an automated mirror.
+
 On NixOS, updating one package means updating everything. `cheni` fixes
 this: check, select, and apply updates **per-package** — fully integrated
 with your flake configuration.
