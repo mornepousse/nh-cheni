@@ -420,59 +420,63 @@ pub fn extract_package_names_with_files(
 
     let mut by_name: std::collections::HashMap<String, Vec<PathBuf>> =
         std::collections::HashMap::new();
-
-    let pkgs_re = &*PKGS_RE;
-    let pkg_line_re = &*PKG_LINE_RE;
-
     for file_path in nix_files {
-        let content = match std::fs::read_to_string(file_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+        let Ok(content) = std::fs::read_to_string(file_path) else { continue };
+        scan_one_file(&content, file_path, &PKGS_RE, &PKG_LINE_RE, &mut by_name);
+    }
+    by_name
+}
 
-        let in_packages_block = content.contains("systemPackages")
-            || content.contains("home.packages")
-            || content.contains("plugins");
+/// Extract every package reference from a single .nix file. Two passes:
+/// `pkgs.NAME` everywhere, plus bare names inside package blocks
+/// (`systemPackages` / `home.packages` / `plugins`). The latter is
+/// gated because outside those blocks bare identifiers can be anything
+/// (option names, function args, …).
+fn scan_one_file(
+    content: &str,
+    file_path: &Path,
+    pkgs_re: &regex::Regex,
+    pkg_line_re: &regex::Regex,
+    by_name: &mut std::collections::HashMap<String, Vec<PathBuf>>,
+) {
+    let in_packages_block = content.contains("systemPackages")
+        || content.contains("home.packages")
+        || content.contains("plugins");
 
-        let mut record = |name: String| {
-            let entry = by_name.entry(name).or_default();
-            if !entry.contains(file_path) {
-                entry.push(file_path.clone());
-            }
-        };
-
-        // Extract pkgs.name references
-        for cap in pkgs_re.captures_iter(&content) {
-            let name = &cap[1];
-            if !is_nix_keyword(name) {
-                trace!("Found pkgs.{} in {}", name, file_path.display());
-                record(name.to_string());
-            }
+    let mut record = |name: String| {
+        let entry = by_name.entry(name).or_default();
+        if !entry.contains(&file_path.to_path_buf()) {
+            entry.push(file_path.to_path_buf());
         }
+    };
 
-        // Extract bare package names in package blocks
-        if in_packages_block {
-            for cap in pkg_line_re.captures_iter(&content) {
-                let name = &cap[1];
-                if is_nix_keyword(name) || name.contains("..") {
-                    continue;
-                }
-
-                // Handle namespaced names (kdePackages.elisa → elisa)
-                let final_name = match name.rfind('.') {
-                    Some(pos) => &name[pos + 1..],
-                    None => name,
-                };
-
-                if !final_name.is_empty() && !is_nix_keyword(final_name) {
-                    trace!("Found {} in {}", final_name, file_path.display());
-                    record(final_name.to_string());
-                }
-            }
+    for cap in pkgs_re.captures_iter(content) {
+        let name = &cap[1];
+        if !is_nix_keyword(name) {
+            trace!("Found pkgs.{} in {}", name, file_path.display());
+            record(name.to_string());
         }
     }
 
-    by_name
+    if !in_packages_block {
+        return;
+    }
+    for cap in pkg_line_re.captures_iter(content) {
+        let name = &cap[1];
+        if is_nix_keyword(name) || name.contains("..") {
+            continue;
+        }
+        // Namespaced names (kdePackages.elisa → elisa) so the package-DB
+        // lookup hits on the leaf name the user actually installed.
+        let final_name = match name.rfind('.') {
+            Some(pos) => &name[pos + 1..],
+            None => name,
+        };
+        if !final_name.is_empty() && !is_nix_keyword(final_name) {
+            trace!("Found {} in {}", final_name, file_path.display());
+            record(final_name.to_string());
+        }
+    }
 }
 
 /// Check if a word is a Nix keyword or builtin (not a package name).
