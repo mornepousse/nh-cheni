@@ -156,12 +156,20 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
 
     let mut names_with_files = config::extract_package_names_with_files(&nix_files);
     if let Some(active) = &active_set {
+        // Pre-canonicalise once per unique path. The same .nix file is
+        // typically referenced by dozens of packages — without this cache
+        // we'd hit the canonicalize syscall hundreds of times for the
+        // same handful of paths.
+        let mut canon_cache: std::collections::HashMap<std::path::PathBuf, bool> =
+            std::collections::HashMap::new();
         for paths in names_with_files.values_mut() {
             paths.retain(|p| {
-                p.canonicalize()
-                    .ok()
-                    .map(|c| active.contains(&c))
-                    .unwrap_or(false)
+                *canon_cache.entry(p.clone()).or_insert_with(|| {
+                    p.canonicalize()
+                        .ok()
+                        .map(|c| active.contains(&c))
+                        .unwrap_or(false)
+                })
             });
         }
         // Drop entries whose only declarations were in inactive files.

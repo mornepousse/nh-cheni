@@ -121,8 +121,13 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
     ];
 
     let mut insert_after_line = None;
+    // Collect lines once; the original code called `content.lines().count()`
+    // inside the outer loop and `content.lines().nth(j)` inside the inner
+    // loop, which made each iteration walk the whole content again — O(n³)
+    // overall on a file with N lines.
+    let lines: Vec<&str> = content.lines().collect();
 
-    for (i, line) in content.lines().enumerate() {
+    for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim();
         for pattern in &nixpkgs_patterns {
             if trimmed.contains(pattern) {
@@ -133,8 +138,7 @@ fn add_nixpkgs_latest(flake_path: &Path, content: &str) -> Result<()> {
                     insert_after_line = Some(i);
                 } else {
                     // Multi-line: scan forward for the closing
-                    for j in (i + 1)..content.lines().count() {
-                        let next_line = content.lines().nth(j).unwrap_or("");
+                    for (j, next_line) in lines.iter().enumerate().skip(i + 1) {
                         if next_line.trim().starts_with("};") || next_line.trim() == "};" {
                             insert_after_line = Some(j);
                             break;
