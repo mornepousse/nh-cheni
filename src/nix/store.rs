@@ -59,73 +59,78 @@ const IGNORED_PREFIXES: &[&str] = &[
 /// filters out noise, and returns deduplicated packages.
 pub fn read_installed_packages() -> Result<Vec<StorePackage>> {
     debug!("Reading installed packages from nix store");
+    let stdout = query_store_paths()?;
+    let versions = aggregate_versions(&stdout);
+    let result = resolve_to_packages(versions);
+    debug!("Found {} packages in store", result.len());
+    Ok(result)
+}
 
+/// Shell out to `nix-store -qR` and return its stdout. Two distinct error
+/// paths (process spawn vs non-zero exit) so a failing /run/current-system
+/// link surfaces clearly in a bug report.
+fn query_store_paths() -> Result<String> {
     let output = Command::new("nix-store")
         .args(["-qR", "/run/current-system/sw"])
         .output()
         .map_err(|e| crate::nix::tools::tool_error("nix-store", e))?;
-
     if !output.status.success() {
         anyhow::bail!("nix-store exited with status {}", output.status);
     }
+    String::from_utf8(output.stdout).context("nix-store output is not valid UTF-8")
+}
 
-    let stdout = String::from_utf8(output.stdout)
-        .context("nix-store output is not valid UTF-8")?;
-
-    // Same package name may appear in the store under several derivations
-    // (e.g. mesa shows up as `mesa-24.3.2-osmesa` AND `mesa-26.0.4` when
-    // an older variant is still pulled by another closure). We collect
-    // every version we see and pick the highest below — otherwise the
-    // first one encountered (driven by store iteration order) could be
-    // a stale or sub-variant entry, leading to bogus "update available"
-    // reports against the wrong installed version.
+/// Group every parsed (name, version) pair by lowercased name so we keep
+/// every version we observe per package.
+///
+/// The same package name often appears under several derivations — e.g.
+/// mesa shows up as `mesa-24.3.2-osmesa` *and* `mesa-26.0.4` when an
+/// older variant is still pulled by another closure. Collecting all
+/// versions lets the next step pick the highest; using the first one
+/// would be driven by store iteration order and could land on a stale
+/// or sub-variant entry, producing bogus "update available" reports.
+fn aggregate_versions(stdout: &str) -> HashMap<String, (String, Vec<String>)> {
     let mut versions: HashMap<String, (String, Vec<String>)> = HashMap::new();
-
     for line in stdout.lines() {
         let path = line.trim();
         if path.is_empty() {
             continue;
         }
-
-        let store_name = match extract_store_name(path) {
-            Some(name) => name,
-            None => {
-                trace!("Skipping malformed store path: {}", path);
-                continue;
-            }
+        let Some(store_name) = extract_store_name(path) else {
+            trace!("Skipping malformed store path: {}", path);
+            continue;
         };
-
-        let (name, version) = match split_name_version(store_name) {
-            Some(pair) => pair,
-            None => continue,
+        let Some((name, version)) = split_name_version(store_name) else {
+            continue;
         };
-
         if is_ignored(&name) {
             trace!("Filtered out: {}", name);
             continue;
         }
-
         let lower_name = name.to_lowercase();
-        let entry = versions
+        versions
             .entry(lower_name)
-            .or_insert_with(|| (name.clone(), Vec::new()));
-        entry.1.push(version);
+            .or_insert_with(|| (name.clone(), Vec::new()))
+            .1
+            .push(version);
     }
+    versions
+}
 
+/// Collapse the per-name version map into the public `StorePackage` list,
+/// resolving multi-version entries with `pick_highest_version` and sorting
+/// the output alphabetically (case-insensitive) for predictable display.
+fn resolve_to_packages(
+    versions: HashMap<String, (String, Vec<String>)>,
+) -> Vec<StorePackage> {
     let mut result: Vec<StorePackage> = Vec::with_capacity(versions.len());
     for (_, (display_name, vers)) in versions {
         let chosen = pick_highest_version(&vers);
         debug!("Resolved {}: {:?} → {}", display_name, vers, chosen);
-        result.push(StorePackage {
-            name: display_name,
-            version: chosen,
-        });
+        result.push(StorePackage { name: display_name, version: chosen });
     }
-
-    let count = result.len();
-    debug!("Found {} packages in store", count);
     result.sort_by_key(|a| a.name.to_lowercase());
-    Ok(result)
+    result
 }
 
 /// Pick the "highest" version from a list of candidates for the same
