@@ -48,24 +48,49 @@ const INFRASTRUCTURE_INPUTS: &[&str] = &[
     "cheni",
 ];
 
+/// Validate that a username is safe to splice into a filesystem path.
+///
+/// Accepts the POSIX-compatible character set (ASCII alphanumerics,
+/// `_`, `-`) with a length cap. Rejects anything that would let
+/// `$USER=../foo` escape the `/etc/profiles/per-user/` prefix or
+/// otherwise point at something we shouldn't be reading.
+fn sanitize_username(raw: &str) -> Option<String> {
+    if raw.is_empty() || raw.len() > 32 {
+        return None;
+    }
+    if raw
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        Some(raw.to_string())
+    } else {
+        None
+    }
+}
+
 /// Build the list of store paths to scan for installed versions.
 ///
 /// Always includes the system profile. The user profile path depends on
 /// the current user — $USER (set by most login shells) or $LOGNAME, then
-/// $HOME as a last resort. Without a known username we fall back to the
-/// glob-less `~` and rely on the system profile alone.
+/// $HOME as a last resort. Without a known, valid username we fall back
+/// to the system profile alone.
 fn store_paths() -> Vec<String> {
     let mut paths = vec!["/run/current-system/sw".to_string()];
 
-    if let Some(user) = std::env::var("USER")
+    let username = std::env::var("USER")
         .ok()
         .or_else(|| std::env::var("LOGNAME").ok())
-    {
+        .or_else(|| {
+            dirs::home_dir()
+                .as_ref()
+                .and_then(|h| h.file_name())
+                .and_then(|n| n.to_str())
+                .map(String::from)
+        })
+        .and_then(|raw| sanitize_username(&raw));
+
+    if let Some(user) = username {
         paths.push(format!("/etc/profiles/per-user/{}", user));
-    } else if let Some(home) = dirs::home_dir() {
-        if let Some(name) = home.file_name().and_then(|n| n.to_str()) {
-            paths.push(format!("/etc/profiles/per-user/{}", name));
-        }
     }
 
     paths

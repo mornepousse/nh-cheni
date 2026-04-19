@@ -78,3 +78,41 @@ fn is_revision_outdated_survives_non_ascii() {
     // Char-based slicing: mustn't panic on a multi-byte codepoint.
     assert!(is_revision_outdated("é🦀x000000", "abc000000000"));
 }
+
+#[test]
+fn sanitize_username_accepts_typical_forms() {
+    assert_eq!(sanitize_username("mae").as_deref(), Some("mae"));
+    assert_eq!(sanitize_username("user_42").as_deref(), Some("user_42"));
+    assert_eq!(sanitize_username("dev-box").as_deref(), Some("dev-box"));
+    assert_eq!(sanitize_username("CamelCase").as_deref(), Some("CamelCase"));
+}
+
+#[test]
+fn sanitize_username_rejects_path_traversal() {
+    // The whole point of the helper: `/etc/profiles/per-user/{user}`
+    // must not let `..` or `/` out of the prefix.
+    assert_eq!(sanitize_username(".."), None);
+    assert_eq!(sanitize_username("../etc"), None);
+    assert_eq!(sanitize_username("foo/bar"), None);
+    assert_eq!(sanitize_username("a\\b"), None);
+}
+
+#[test]
+fn sanitize_username_rejects_special_chars() {
+    assert_eq!(sanitize_username("foo bar"), None);
+    assert_eq!(sanitize_username("foo$bar"), None);
+    assert_eq!(sanitize_username("foo\0bar"), None);
+    assert_eq!(sanitize_username("foo\nbar"), None);
+    assert_eq!(sanitize_username("foo.bar"), None);
+}
+
+#[test]
+fn sanitize_username_rejects_empty_and_oversized() {
+    assert_eq!(sanitize_username(""), None);
+    // POSIX usernames traditionally cap at 32; anything longer is a
+    // signal something is wrong (env injection, corrupted state).
+    let long = "a".repeat(33);
+    assert_eq!(sanitize_username(&long), None);
+    let boundary = "a".repeat(32);
+    assert_eq!(sanitize_username(&boundary).as_deref(), Some(boundary.as_str()));
+}
