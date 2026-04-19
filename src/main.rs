@@ -6,6 +6,7 @@
 mod api;
 mod cmd;
 mod nix;
+mod release;
 mod util;
 mod version;
 
@@ -60,7 +61,8 @@ Discovery:\n  \
 Maintenance:\n  \
   cheni clean                  Remove obsolete pins (caught up by nixpkgs)\n  \
   cheni doctor                 Health checks on the cheni setup\n  \
-  cheni self-update            Update cheni itself\n\
+  cheni self-update            Update cheni itself\n  \
+  cheni verify                 Check the installed cheni against a signed release\n\
 \n\
 Environment:\n  \
   CHENI_CONFIG=<path>          Override the NixOS flake directory\n  \
@@ -169,6 +171,13 @@ enum Commands {
         /// from a broken release, a key rotation, or for local testing.
         #[arg(long)]
         allow_unsigned: bool,
+    },
+
+    /// Verify that the installed cheni matches a signed release
+    Verify {
+        /// Tag to verify (defaults to the installed version).
+        #[arg(long)]
+        tag: Option<String>,
     },
 
     /// List system generations (or selectively delete them with --prune/--delete/--keep)
@@ -371,7 +380,8 @@ async fn dispatch(command: Commands) -> Result<()> {
         }
         Commands::Build => cmd::build::run(),
         Commands::Doctor => cmd::doctor::run(),
-        Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned),
+        Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned).await,
+        Commands::Verify { tag } => cmd::verify::run(cmd::verify::VerifyOptions { tag }).await,
         Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes } => {
             cmd::history::run(cmd::history::HistoryOptions {
                 diff, full, limit, delete, prune, keep, older_than, gc, yes,

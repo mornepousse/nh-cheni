@@ -91,38 +91,3 @@ fn errors_on_malformed_json() {
     let err = extract_cheni_tag("not json at all").unwrap_err().to_string();
     assert!(err.contains("parsing flake.lock"));
 }
-
-#[test]
-fn tarball_url_matches_gitlab_auto_archive_pattern() {
-    assert_eq!(
-        tarball_url("v0.2.0"),
-        "https://gitlab.com/harrael/cheni/-/archive/v0.2.0/cheni-v0.2.0.tar.gz"
-    );
-}
-
-#[test]
-fn signature_url_matches_gitlab_release_download_pattern() {
-    assert_eq!(
-        signature_url("v0.2.0"),
-        "https://gitlab.com/harrael/cheni/-/releases/v0.2.0/downloads/cheni-v0.2.0.tar.gz.minisig"
-    );
-}
-
-#[test]
-fn verify_accepts_the_bundled_public_key_format() {
-    // The constant embedded at build time must parse as a valid
-    // minisign public key, or every self-update fails at startup.
-    assert!(minisign_verify::PublicKey::decode(RELEASE_PUBKEY.trim()).is_ok());
-}
-
-#[test]
-fn verify_rejects_tampered_payload() {
-    // Hand-crafted invalid signature (wrong base64, wrong length).
-    // We only need to confirm verify_bytes surfaces a typed error
-    // rather than panicking.
-    let bad_sig = "untrusted comment: test\n\
-                   AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\n\
-                   trusted comment: test\n\
-                   BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB==\n";
-    assert!(verify_bytes(RELEASE_PUBKEY, b"some payload", bad_sig).is_err());
-}

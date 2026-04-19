@@ -5,26 +5,15 @@
 
 use std::path::Path;
 use std::process::Command;
-use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
-use minisign_verify::{PublicKey, Signature};
-use tracing::debug;
 
 use crate::nix::config;
-
-/// The trusted minisign public key for cheni releases.
-///
-/// Loaded at compile time from `public-keys/cheni-release.pub`. A new
-/// build of cheni ships with whatever key was checked in at the time;
-/// rotations are handled by releasing a new cheni that trusts the new
-/// key (users update through the signed old key, which signs the new
-/// binary, which trusts the new key for the next rotation).
-const RELEASE_PUBKEY: &str = include_str!("../../public-keys/cheni-release.pub");
+use crate::release;
 
 /// Run `cheni self-update`.
-pub fn run(allow_unsigned: bool) -> Result<()> {
+pub async fn run(allow_unsigned: bool) -> Result<()> {
     let nix_config = config::detect()?;
     let config_path = nix_config
         .flake_dir
@@ -37,7 +26,7 @@ pub fn run(allow_unsigned: bool) -> Result<()> {
     run_flake_update(&nix_config.flake_dir)?;
 
     println!("\n{} Verifying release signature...", "[2/3]".dimmed());
-    enforce_signature(&nix_config.flake_dir, allow_unsigned)?;
+    enforce_signature(&nix_config.flake_dir, allow_unsigned).await?;
 
     println!("\n{} Rebuilding system to install new cheni...\n", "[3/3]".dimmed());
     run_nh_switch(config_path)?;
@@ -67,12 +56,11 @@ fn run_flake_update(flake_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Step 2 — enforce that the new release is signed by `RELEASE_PUBKEY`.
-///
-/// Returns `Ok(())` when the signature verifies or the user explicitly
-/// opted out with `--allow-unsigned`. Any other outcome bails so we
-/// never reach the `nh os switch` with an unverified release.
-fn enforce_signature(flake_dir: &Path, allow_unsigned: bool) -> Result<()> {
+/// Step 2 — enforce that the new release is signed. Returns `Ok(())`
+/// when the signature verifies or the user explicitly opted out with
+/// `--allow-unsigned`. Any other outcome bails so we never reach the
+/// `nh os switch` with an unverified release.
+async fn enforce_signature(flake_dir: &Path, allow_unsigned: bool) -> Result<()> {
     let tag = match read_cheni_tag(flake_dir) {
         Ok(t) => t,
         Err(e) if allow_unsigned => {
@@ -92,9 +80,14 @@ fn enforce_signature(flake_dir: &Path, allow_unsigned: bool) -> Result<()> {
         }
     };
 
-    match verify_release_signature(&tag) {
-        Ok(()) => {
-            println!("  {} Signature verified for {}", "✓".green(), tag.bold());
+    match release::verify_release(&tag).await {
+        Ok(report) => {
+            println!(
+                "  {} Signature verified for {} ({})",
+                "✓".green(),
+                report.tag.bold(),
+                report.trusted_comment.dimmed()
+            );
             Ok(())
         }
         Err(e) if allow_unsigned => {
@@ -130,8 +123,7 @@ fn run_nh_switch(config_path: &str) -> Result<()> {
 }
 
 /// Parse the user's `flake.lock` and return the `ref` (tag) pinned for
-/// the `cheni` input. Errors if the input is absent or has no `ref`
-/// (user pinned to a raw branch / commit, not to a tagged release).
+/// the `cheni` input.
 fn read_cheni_tag(flake_dir: &Path) -> Result<String> {
     let lock_path = flake_dir.join("flake.lock");
     let content = std::fs::read_to_string(&lock_path)
@@ -139,10 +131,9 @@ fn read_cheni_tag(flake_dir: &Path) -> Result<String> {
     extract_cheni_tag(&content)
 }
 
-/// Pure core of `read_cheni_tag` — takes the flake.lock contents as
-/// a string and extracts the `ref` under the `cheni` node's `locked`
-/// section. Pulled out of the IO so it can be unit-tested against
-/// hand-written fixtures without touching disk.
+/// Pure core of `read_cheni_tag` — takes the flake.lock contents and
+/// extracts the `ref` under the `cheni` node. Pulled out of the IO so
+/// it can be tested against hand-written fixtures.
 pub(crate) fn extract_cheni_tag(flake_lock: &str) -> Result<String> {
     let lock: serde_json::Value =
         serde_json::from_str(flake_lock).context("parsing flake.lock as JSON")?;
@@ -162,87 +153,6 @@ pub(crate) fn extract_cheni_tag(flake_lock: &str) -> Result<String> {
             )
         })?;
     Ok(tag.to_string())
-}
-
-/// Download the release tarball + signature for `tag` and verify them
-/// against the embedded `RELEASE_PUBKEY`.
-fn verify_release_signature(tag: &str) -> Result<()> {
-    let tarball_url = tarball_url(tag);
-    let signature_url = signature_url(tag);
-
-    debug!("fetching tarball: {}", tarball_url);
-    debug!("fetching signature: {}", signature_url);
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(crate::api::net::http_timeout())
-        .user_agent(concat!("cheni/", env!("GIT_DESCRIBE")))
-        .build()
-        .context("building HTTP client")?;
-
-    let tarball = fetch_bounded(&client, &tarball_url)
-        .with_context(|| format!("fetching {}", tarball_url))?;
-    let signature_text = fetch_signature(&client, &signature_url)
-        .with_context(|| format!("fetching {}", signature_url))?;
-
-    verify_bytes(RELEASE_PUBKEY, &tarball, &signature_text)
-}
-
-/// Pure verification core — decodes the embedded public key and the
-/// `.minisig` text, checks the signature against `payload`. All IO
-/// happens in the caller, so tests can pass hand-made fixtures.
-pub(crate) fn verify_bytes(pubkey_text: &str, payload: &[u8], signature_text: &str) -> Result<()> {
-    let pubkey = PublicKey::decode(pubkey_text.trim())
-        .map_err(|e| anyhow!("decoding embedded public key: {}", e))?;
-    let signature = Signature::decode(signature_text.trim())
-        .map_err(|e| anyhow!("decoding signature file: {}", e))?;
-    pubkey
-        .verify(payload, &signature, false)
-        .map_err(|e| anyhow!("signature check: {}", e))?;
-    Ok(())
-}
-
-/// GitLab auto-archive URL for a tagged release. This is the same URL
-/// Nix uses under the hood when the flake input is
-/// `gitlab:harrael/cheni/<tag>`, which is exactly what we signed.
-pub(crate) fn tarball_url(tag: &str) -> String {
-    format!(
-        "https://gitlab.com/harrael/cheni/-/archive/{tag}/cheni-{tag}.tar.gz",
-        tag = tag
-    )
-}
-
-/// URL of the `.minisig` release asset on GitLab. Matches what
-/// `glab release create <tag> ...minisig` publishes.
-pub(crate) fn signature_url(tag: &str) -> String {
-    format!(
-        "https://gitlab.com/harrael/cheni/-/releases/{tag}/downloads/cheni-{tag}.tar.gz.minisig",
-        tag = tag
-    )
-}
-
-/// Download bytes with the shared HTTP body cap from `api::net`.
-fn fetch_bounded(client: &reqwest::blocking::Client, url: &str) -> Result<Vec<u8>> {
-    let response = client
-        .get(url)
-        .timeout(Duration::from_secs(60))
-        .send()
-        .context("HTTP send")?;
-    if !response.status().is_success() {
-        anyhow::bail!("HTTP {} fetching {}", response.status(), url);
-    }
-    crate::api::net::check_content_length(
-        response.content_length(),
-        crate::api::net::MAX_BODY_BYTES,
-    )?;
-    let body = response.bytes().context("reading body")?;
-    crate::api::net::verify_body_size(body.len(), crate::api::net::MAX_BODY_BYTES)?;
-    Ok(body.to_vec())
-}
-
-/// Download the `.minisig` file as UTF-8 text.
-fn fetch_signature(client: &reqwest::blocking::Client, url: &str) -> Result<String> {
-    let bytes = fetch_bounded(client, url)?;
-    String::from_utf8(bytes).context("signature file is not valid UTF-8")
 }
 
 #[cfg(test)]
