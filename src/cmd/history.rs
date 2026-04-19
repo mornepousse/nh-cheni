@@ -80,91 +80,98 @@ pub fn run(opts: HistoryOptions) -> Result<()> {
     let displayed: Vec<&Generation> = generations.iter().rev().take(to_show).collect();
 
     for (i, gen) in displayed.iter().enumerate() {
-        let marker = if gen.is_current {
-            "●".green().to_string()
-        } else {
-            "○".dimmed().to_string()
-        };
-
-        let label = if gen.is_current {
-            format!("Generation {} (current)", gen.number).bold().green().to_string()
-        } else {
-            format!("Generation {}", gen.number).bold().to_string()
-        };
-
-        // Compact NixOS label: extract just date + commit
-        // e.g. "26.05.20260414.4bd9165" → "20260414.4bd9165"
-        let label_short = gen.nixos_label.as_deref().map(|l| {
-            let parts: Vec<&str> = l.splitn(3, '.').collect();
-            if parts.len() == 3 {
-                parts[2].to_string()
-            } else {
-                l.to_string()
-            }
-        }).unwrap_or_else(|| "?".to_string());
-
-        println!(
-            "  {} {}  {}  {}",
-            marker,
-            label,
-            gen.date.dimmed(),
-            label_short.cyan(),
-        );
-
-        // Show summary diff vs previous generation (always, not just with --diff)
+        print_generation_header(gen);
         if i + 1 < displayed.len() {
             let previous = displayed[i + 1];
-
-            if opts.diff {
-                // Full diff requested
-                match get_diff(&previous.store_path, &gen.store_path) {
-                    Ok(diff_text) if !diff_text.is_empty() => {
-                        for line in diff_text.lines() {
-                            println!("      {}", line.dimmed());
-                        }
-                    }
-                    Ok(_) => {
-                        println!("      {}", "(no version changes)".dimmed());
-                    }
-                    Err(_) => {
-                        println!("      {}", "(diff unavailable)".dimmed());
-                    }
-                }
-            } else {
-                // Compact summary. Default truncates to terminal width;
-                // --full keeps the whole thing.
-                if let Some(summary) = get_diff_summary(&previous.store_path, &gen.store_path) {
-                    let display = if opts.full {
-                        summary
-                    } else {
-                        truncate_to_terminal(&summary, 6) // 6 = "      " indent
-                    };
-                    println!("      {}", display.dimmed());
-                }
-            }
+            print_generation_diff(previous, gen, opts.diff, opts.full);
         }
     }
 
     println!();
+    print_history_footer(total, to_show, opts.full);
+    Ok(())
+}
 
-    if total > to_show {
+/// One-line header per generation: marker, label, date, short nixpkgs commit.
+fn print_generation_header(gen: &Generation) {
+    let marker = if gen.is_current {
+        "●".green().to_string()
+    } else {
+        "○".dimmed().to_string()
+    };
+    let label = if gen.is_current {
+        format!("Generation {} (current)", gen.number)
+            .bold()
+            .green()
+            .to_string()
+    } else {
+        format!("Generation {}", gen.number).bold().to_string()
+    };
+    // "26.05.20260414.4bd9165" → "20260414.4bd9165"
+    let label_short = gen
+        .nixos_label
+        .as_deref()
+        .map(|l| {
+            let parts: Vec<&str> = l.splitn(3, '.').collect();
+            if parts.len() == 3 { parts[2].to_string() } else { l.to_string() }
+        })
+        .unwrap_or_else(|| "?".to_string());
+    println!(
+        "  {} {}  {}  {}",
+        marker,
+        label,
+        gen.date.dimmed(),
+        label_short.cyan(),
+    );
+}
+
+/// Indented diff block under a generation header. With `--diff`, prints
+/// the full nvd / diff-closures output; otherwise the one-line compact
+/// summary, truncated to the terminal width unless `--full`.
+fn print_generation_diff(previous: &Generation, current: &Generation, full_diff: bool, full_summary: bool) {
+    if full_diff {
+        match get_diff(&previous.store_path, &current.store_path) {
+            Ok(diff_text) if !diff_text.is_empty() => {
+                for line in diff_text.lines() {
+                    println!("      {}", line.dimmed());
+                }
+            }
+            Ok(_) => println!("      {}", "(no version changes)".dimmed()),
+            Err(_) => println!("      {}", "(diff unavailable)".dimmed()),
+        }
+        return;
+    }
+    if let Some(summary) = get_diff_summary(&previous.store_path, &current.store_path) {
+        let display = if full_summary {
+            summary
+        } else {
+            truncate_to_terminal(&summary, 6) // 6 = "      " indent
+        };
+        println!("      {}", display.dimmed());
+    }
+}
+
+/// Bottom note: "showing N of M" + the --full / --diff tip.
+fn print_history_footer(total: usize, shown: usize, full: bool) {
+    if total > shown {
         println!(
             "{}",
-            format!("Showing {} most recent of {} generations. Use --limit N to see more.", to_show, total).dimmed()
+            format!(
+                "Showing {} most recent of {} generations. Use --limit N to see more.",
+                shown, total
+            )
+            .dimmed()
         );
     } else {
         println!("{}", format!("{} generation(s) total", total).dimmed());
     }
-
-    if !opts.full {
+    if !full {
         println!(
             "{}",
             "Tip: pass --full to see the complete summary, --diff for the per-package nvd output."
                 .dimmed()
         );
     }
-
-    Ok(())
 }
 
 /// Truncate `s` so that, prefixed by `indent` spaces, it fits the terminal
@@ -199,28 +206,53 @@ fn truncate_to_terminal(s: &str, indent: usize) -> String {
     out
 }
 
-/// Resolve which generations to delete from the user's flags, then run
-/// `nix-env --delete-generations` (with sudo) for the chosen numbers.
+/// Top-level dispatcher for `cheni history --prune/--delete/--keep/--older-than`.
+/// Reads as four phases: collect targets, guard the active gen, confirm,
+/// then apply.
 fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
     println!("{}\n", "=== cheni history (prune) ===".bold());
 
-    let all: Vec<u32> = generations.iter().map(|g| g.number).collect();
     let current = generations.iter().find(|g| g.is_current).map(|g| g.number);
+    let to_delete = collect_delete_targets(opts, generations, current)?;
+    if to_delete.is_empty() {
+        println!("{}", "Nothing to delete.".dimmed());
+        return Ok(());
+    }
+    if !confirm_targets(&to_delete, opts.yes)? {
+        return Ok(());
+    }
+    apply_deletion(&to_delete)?;
+    if opts.gc {
+        run_gc()?;
+    } else {
+        println!(
+            "{}",
+            "  (store paths kept until next GC — pass --gc to reclaim disk now)".dimmed()
+        );
+    }
+    Ok(())
+}
 
+/// Resolve every selection flag into a deduplicated list of generation
+/// numbers. Bails if the active generation ends up in the set —
+/// deleting it would brick `cheni rollback`.
+fn collect_delete_targets(
+    opts: &HistoryOptions,
+    generations: &[Generation],
+    current: Option<u32>,
+) -> Result<Vec<u32>> {
+    let all: Vec<u32> = generations.iter().map(|g| g.number).collect();
     let mut to_delete: Vec<u32> = Vec::new();
 
     if opts.prune {
         to_delete.extend(pick_interactively(generations, current)?);
     }
-
     for spec in &opts.delete {
         to_delete.extend(parse_target_spec(spec, &all)?);
     }
-
     if let Some(k) = opts.keep {
         to_delete.extend(pick_oldest_beyond(&all, k));
     }
-
     if let Some(spec) = opts.older_than.as_deref() {
         let days = parse_duration_days(spec)
             .with_context(|| format!("Invalid --older-than value: '{}'", spec))?;
@@ -230,7 +262,6 @@ fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
     to_delete.sort_unstable();
     to_delete.dedup();
 
-    // Refuse to delete the active generation — it would brick rollback.
     if let Some(c) = current {
         if to_delete.contains(&c) {
             anyhow::bail!(
@@ -240,32 +271,37 @@ fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
             );
         }
     }
+    Ok(to_delete)
+}
 
-    if to_delete.is_empty() {
-        println!("{}", "Nothing to delete.".dimmed());
-        return Ok(());
-    }
-
+/// Print the list of targets and ask for confirmation. Returns `false`
+/// when the user aborts (or `true` immediately when `yes` is set).
+fn confirm_targets(to_delete: &[u32], yes: bool) -> Result<bool> {
     println!(
         "Will delete {} generation(s):",
         to_delete.len().to_string().bold()
     );
-    for n in &to_delete {
+    for n in to_delete {
         println!("  {} {}", "-".red(), n.to_string().bold());
     }
     println!();
 
-    if !opts.yes {
-        let confirm = Confirm::with_theme(&ColorfulTheme::default())
-            .with_prompt("Proceed?")
-            .default(false)
-            .interact()?;
-        if !confirm {
-            println!("{}", "Aborted.".dimmed());
-            return Ok(());
-        }
+    if yes {
+        return Ok(true);
     }
 
+    let confirm = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Proceed?")
+        .default(false)
+        .interact()?;
+    if !confirm {
+        println!("{}", "Aborted.".dimmed());
+    }
+    Ok(confirm)
+}
+
+/// Shell out to `sudo nix-env --delete-generations N M …`.
+fn apply_deletion(to_delete: &[u32]) -> Result<()> {
     let mut args: Vec<String> = vec![
         "/run/current-system/sw/bin/nix-env".to_string(),
         "-p".to_string(),
@@ -279,34 +315,28 @@ fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
         .args(&args)
         .status()
         .context("Failed to run nix-env --delete-generations")?;
-
     if !status.success() {
         anyhow::bail!("Generation deletion failed");
     }
-
     println!(
         "\n{} {} generation(s) removed.",
         "✓".green(),
         to_delete.len()
     );
+    Ok(())
+}
 
-    if opts.gc {
-        println!("\n{}", "Running garbage collection...".bold());
-        let gc_status = Command::new("sudo")
-            .args(["/run/current-system/sw/bin/nix-collect-garbage"])
-            .status()
-            .context("Failed to run nix-collect-garbage")?;
-        if !gc_status.success() {
-            anyhow::bail!("Garbage collection failed");
-        }
-        println!("\n{} Disk space reclaimed.", "✓".green());
-    } else {
-        println!(
-            "{}",
-            "  (store paths kept until next GC — pass --gc to reclaim disk now)".dimmed()
-        );
+/// Optional `--gc` follow-up.
+fn run_gc() -> Result<()> {
+    println!("\n{}", "Running garbage collection...".bold());
+    let gc_status = Command::new("sudo")
+        .args(["/run/current-system/sw/bin/nix-collect-garbage"])
+        .status()
+        .context("Failed to run nix-collect-garbage")?;
+    if !gc_status.success() {
+        anyhow::bail!("Garbage collection failed");
     }
-
+    println!("\n{} Disk space reclaimed.", "✓".green());
     Ok(())
 }
 
@@ -462,92 +492,75 @@ fn pick_interactively(generations: &[Generation], current: Option<u32>) -> Resul
 /// Read all system generations by listing symlinks in /nix/var/nix/profiles.
 fn read_generations() -> Result<Vec<Generation>> {
     let profiles_dir = std::path::Path::new("/nix/var/nix/profiles");
-
-    // Find current generation (target of "system" symlink)
-    let current_target = std::fs::read_link(profiles_dir.join("system")).ok();
-    let current_num = current_target
-        .as_ref()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .and_then(|s| {
-            // "system-407-link" -> 407
-            s.strip_prefix("system-")?
-                .strip_suffix("-link")?
-                .parse::<u32>()
-                .ok()
-        });
+    let current_num = current_generation_number(profiles_dir);
 
     let entries = std::fs::read_dir(profiles_dir)
         .context("Cannot read /nix/var/nix/profiles")?;
 
-    let mut generations = Vec::new();
+    let mut generations: Vec<Generation> = entries
+        .flatten()
+        .filter_map(|entry| build_generation(&entry, current_num))
+        .collect();
 
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = match name.to_str() {
-            Some(s) => s,
-            None => continue,
-        };
-
-        // Match "system-<NUM>-link"
-        let number = match name_str
-            .strip_prefix("system-")
-            .and_then(|s| s.strip_suffix("-link"))
-            .and_then(|s| s.parse::<u32>().ok())
-        {
-            Some(n) => n,
-            None => continue,
-        };
-
-        // Get the modification time of the symlink for the date
-        let metadata = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-
-        let date = metadata
-            .modified()
-            .ok()
-            .and_then(|t| {
-                let secs = t.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-                Some(format_unix_date(secs))
-            })
-            .unwrap_or_else(|| "?".to_string());
-
-        let store_path = entry.path().to_string_lossy().to_string();
-
-        // Read the symlink target to extract the NixOS label
-        // Target looks like: /nix/store/abc-nixos-system-morthinkpad-26.05.20260414.4bd9165
-        let nixos_label = std::fs::read_link(entry.path())
-            .ok()
-            .and_then(|target| {
-                let target_str = target.to_string_lossy().to_string();
-                // Extract the version part after "nixos-system-<hostname>-"
-                target_str
-                    .rsplit('/')
-                    .next()
-                    .and_then(|name| name.split_once("nixos-system-"))
-                    .and_then(|(_, rest)| {
-                        // rest = "morthinkpad-26.05.20260414.4bd9165"
-                        rest.split_once('-')
-                            .map(|(_, version)| version.to_string())
-                    })
-            });
-
-        generations.push(Generation {
-            number,
-            date,
-            is_current: current_num == Some(number),
-            store_path,
-            nixos_label,
-        });
-    }
-
-    // Sort by generation number
     generations.sort_by_key(|g| g.number);
-
     debug!("Found {} generations", generations.len());
     Ok(generations)
+}
+
+/// Resolve `/nix/var/nix/profiles/system` → "system-407-link" → 407.
+fn current_generation_number(profiles_dir: &std::path::Path) -> Option<u32> {
+    let target = std::fs::read_link(profiles_dir.join("system")).ok()?;
+    let name = target.file_name()?.to_str()?;
+    parse_generation_number(name)
+}
+
+/// "system-407-link" → Some(407); anything else → None.
+fn parse_generation_number(filename: &str) -> Option<u32> {
+    filename
+        .strip_prefix("system-")?
+        .strip_suffix("-link")?
+        .parse::<u32>()
+        .ok()
+}
+
+/// Turn a single `system-N-link` directory entry into a Generation.
+/// Returns None for entries that don't match the expected shape — keeps
+/// the caller's iterator a clean filter_map chain.
+fn build_generation(
+    entry: &std::fs::DirEntry,
+    current_num: Option<u32>,
+) -> Option<Generation> {
+    let name = entry.file_name();
+    let number = parse_generation_number(name.to_str()?)?;
+    let metadata = entry.metadata().ok()?;
+    let date = metadata
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| format_unix_date(d.as_secs()))
+        .unwrap_or_else(|| "?".to_string());
+    let store_path = entry.path().to_string_lossy().to_string();
+    let nixos_label = read_nixos_label(&entry.path());
+    Some(Generation {
+        number,
+        date,
+        is_current: current_num == Some(number),
+        store_path,
+        nixos_label,
+    })
+}
+
+/// Pull the NixOS version label out of a generation symlink target.
+/// `/nix/store/abc-nixos-system-morthinkpad-26.05.20260414.4bd9165`
+/// → `Some("26.05.20260414.4bd9165")`.
+fn read_nixos_label(symlink: &std::path::Path) -> Option<String> {
+    let target = std::fs::read_link(symlink).ok()?;
+    let target_str = target.to_string_lossy().to_string();
+    let last = target_str.rsplit('/').next()?;
+    let (_, rest) = last.split_once("nixos-system-")?;
+    // rest = "morthinkpad-26.05.20260414.4bd9165"
+    let (_, version) = rest.split_once('-')?;
+    Some(version.to_string())
 }
 
 /// Format a unix timestamp as "YYYY-MM-DD HH:MM" (UTC).
