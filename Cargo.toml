@@ -38,5 +38,9 @@ regex = "1"
 anyhow = "1"
 dirs = "6"
 
+# CLI utilities (clap_mangen for man-page generation in `cheni man`)
+[dependencies.clap_mangen]
+version = "0.2"
+
 [dev-dependencies]
 tempfile = "3"

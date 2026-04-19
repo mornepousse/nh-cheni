@@ -255,6 +255,10 @@ enum Commands {
         #[arg(value_enum)]
         shell: clap_complete::Shell,
     },
+
+    /// Emit a roff (groff) man page on stdout — pipe to a file, e.g.
+    ///   cheni man > /usr/local/share/man/man1/cheni.1
+    Man,
 }
 
 /// Install a panic hook that converts unexpected crashes into a friendly
@@ -449,6 +453,19 @@ async fn main() -> Result<()> {
             // upstream `generate()` would panic otherwise.
             let mut buf = Vec::new();
             clap_complete::generate(shell, &mut cmd, bin_name, &mut buf);
+            if let Err(e) = std::io::stdout().write_all(&buf) {
+                if e.kind() != std::io::ErrorKind::BrokenPipe {
+                    return Err(e.into());
+                }
+            }
+        }
+
+        Commands::Man => {
+            use clap::CommandFactory;
+            use std::io::Write;
+            let cmd = Cli::command();
+            let mut buf = Vec::new();
+            clap_mangen::Man::new(cmd).render(&mut buf)?;
             if let Err(e) = std::io::stdout().write_all(&buf) {
                 if e.kind() != std::io::ErrorKind::BrokenPipe {
                     return Err(e.into());

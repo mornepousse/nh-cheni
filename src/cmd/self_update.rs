@@ -50,8 +50,8 @@ pub fn run() -> Result<()> {
 
     println!("\n{} cheni updated successfully!", "✓".green());
     println!(
-        "  New version: {}",
-        env!("CARGO_PKG_VERSION").dimmed()
+        "  Open a new shell, then run '{}' to see the new build.",
+        "cheni --version".bold()
     );
 
     Ok(())
