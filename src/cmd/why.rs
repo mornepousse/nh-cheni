@@ -3,6 +3,7 @@
 //! Shows which NixOS module declares a given package, so the user
 //! knows where to go to add, remove, or modify it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -11,44 +12,51 @@ use regex::Regex;
 
 use crate::nix::config;
 
+/// Tree of grouped matches: category → file → its matches.
+type GroupedMatches<'a> = BTreeMap<String, BTreeMap<PathBuf, Vec<&'a Match>>>;
+
 /// Run `cheni why <package>`.
 ///
 /// Searches the user's NixOS config for a package reference and reports
 /// the file(s) where it's declared.
 pub fn run(package: &str) -> Result<()> {
     let nix_config = config::detect()?;
+    println!("{} {}\n", "Searching for".dimmed(), package.bold());
 
-    println!(
-        "{} {}\n",
-        "Searching for".dimmed(),
-        package.bold()
-    );
-
-    // Collect all .nix files in the config
     let mut nix_files = Vec::new();
     collect_nix_files(&nix_config.flake_dir, &mut nix_files);
 
-    // Build a regex that matches the package name as a word boundary
-    // (avoids matching "python3" inside "python311Packages")
+    let matches = find_matches(&nix_files, package)?;
+
+    if matches.is_empty() {
+        print_no_matches(package, &nix_config.flake_dir);
+        return Ok(());
+    }
+
+    let by_category = group_by_category(&matches, &nix_config.flake_dir);
+    print_grouped_matches(&by_category, &nix_config.flake_dir, package);
+    print_summary_footer(&by_category, matches.len());
+    Ok(())
+}
+
+/// Scan every collected file for word-boundary references to `package`.
+///
+/// The regex anchors on a leading separator (start-of-line or one of
+/// `[whitespace, [, (, .]`) so 'python3' doesn't false-match inside
+/// 'python311Packages', and lets a trailing dot match attribute access
+/// like 'pkgs.python3.withPackages'.
+fn find_matches(nix_files: &[PathBuf], package: &str) -> Result<Vec<Match>> {
     let pattern = format!(r"(^|[\s\[(.]){}(\b|\.)", regex::escape(package));
     let re = Regex::new(&pattern)?;
-
-    let mut matches = Vec::new();
-
-    for file in &nix_files {
-        let content = match std::fs::read_to_string(file) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
+    let mut out = Vec::new();
+    for file in nix_files {
+        let Ok(content) = std::fs::read_to_string(file) else { continue };
         for (line_num, line) in content.lines().enumerate() {
-            // Skip comments
             if line.trim_start().starts_with('#') {
                 continue;
             }
-
             if re.is_match(line) {
-                matches.push(Match {
+                out.push(Match {
                     file: file.clone(),
                     line_num: line_num + 1,
                     line: line.trim().to_string(),
@@ -56,38 +64,38 @@ pub fn run(package: &str) -> Result<()> {
             }
         }
     }
+    Ok(out)
+}
 
-    if matches.is_empty() {
-        println!("{}", "No references found.".dimmed());
-        println!(
-            "\n  Package '{}' is not referenced in any .nix file under {}.",
-            package,
-            nix_config.flake_dir.display()
-        );
-        return Ok(());
-    }
+fn print_no_matches(package: &str, flake_dir: &Path) {
+    println!("{}", "No references found.".dimmed());
+    println!(
+        "\n  Package '{}' is not referenced in any .nix file under {}.",
+        package,
+        flake_dir.display()
+    );
+}
 
-    // Group by (category, file) — categories come from the top-level
-    // directory under the flake (modules/<cat>, home/, hosts/, ...).
-    let mut by_category: std::collections::BTreeMap<String, std::collections::BTreeMap<PathBuf, Vec<&Match>>> =
-        std::collections::BTreeMap::new();
-    for m in &matches {
-        let relative = m.file.strip_prefix(&nix_config.flake_dir)
-            .unwrap_or(m.file.as_path());
-        let category = categorize(relative);
-        by_category
-            .entry(category)
+/// Group matches by (category, file). Categories come from the top-level
+/// directory under the flake (`modules/<cat>`, `home/`, `hosts/<host>`).
+fn group_by_category<'a>(matches: &'a [Match], flake_dir: &Path) -> GroupedMatches<'a> {
+    let mut out: GroupedMatches<'a> = BTreeMap::new();
+    for m in matches {
+        let relative = m.file.strip_prefix(flake_dir).unwrap_or(m.file.as_path());
+        out.entry(categorize(relative))
             .or_default()
             .entry(m.file.clone())
             .or_default()
             .push(m);
     }
+    out
+}
 
-    for (category, files) in &by_category {
+fn print_grouped_matches(by_category: &GroupedMatches<'_>, flake_dir: &Path, package: &str) {
+    for (category, files) in by_category {
         println!("  {}", category.bold().cyan());
         for (file, file_matches) in files {
-            let relative = file.strip_prefix(&nix_config.flake_dir)
-                .unwrap_or(file.as_path());
+            let relative = file.strip_prefix(flake_dir).unwrap_or(file.as_path());
             println!("    {}", relative.display().to_string().bold());
             for m in file_matches {
                 println!(
@@ -99,22 +107,22 @@ pub fn run(package: &str) -> Result<()> {
         }
         println!();
     }
+}
 
+fn print_summary_footer(by_category: &GroupedMatches<'_>, match_count: usize) {
     let file_count: usize = by_category.values().map(|f| f.len()).sum();
-    let match_count = matches.len();
+    let cat_count = by_category.len();
     println!(
         "{}",
         format!(
             "{} match(es) in {} file(s) across {} categor{}",
             match_count,
             file_count,
-            by_category.len(),
-            if by_category.len() == 1 { "y" } else { "ies" }
+            cat_count,
+            if cat_count == 1 { "y" } else { "ies" }
         )
         .dimmed()
     );
-
-    Ok(())
 }
 
 /// Map a path (relative to the flake root) to a human-readable category.
