@@ -10,9 +10,20 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
+      # Derive the Nix version from the flake's own git metadata so the
+      # derivation name matches what `cheni --version` prints at runtime:
+      #   self.revCount   → commit count from git rev-list (patch number)
+      #   self.shortRev   → 7-char hash of HEAD (falls back to dirty one)
+      # Dirty trees don't have revCount, so we default to 0 and mark as
+      # "dirty" so it's obvious in `nix store --references` output.
+      cheniVersion =
+        if self ? revCount
+        then "0.1.${toString self.revCount}-alpha+${self.shortRev}"
+        else "0.1.0-alpha+${self.dirtyShortRev or "dirty"}";
+
       cheni = pkgs.rustPlatform.buildRustPackage {
         pname = "cheni";
-        version = "0.1.0";
+        version = cheniVersion;
         src = ./.;
 
         # Derive the vendored-deps hash from Cargo.lock directly — no manual
