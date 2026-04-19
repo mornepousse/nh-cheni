@@ -144,11 +144,37 @@ fn find_home_manager_user(flake_dir: &Path) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
+/// Maximum recursion depth for `walk_imports`.
+///
+/// `canonicalize` + the `visited` HashSet already make a true cycle
+/// terminate at the second visit. This bound exists for the rarer
+/// pathological case where a hand-crafted (or generated) flake nests
+/// imports really deeply through ever-changing canonical paths.
+/// 64 is well above any realistic NixOS config (typical: 5–10).
+const MAX_IMPORT_DEPTH: usize = 64;
+
 /// Recursively follow `imports = [...]` from a starting `.nix` file,
 /// inserting each visited file into `visited`. Commented-out lines are
 /// skipped, and only relative paths (`./foo.nix`, `../bar`) are followed
 /// — `inputs.something.nixosModules.x` is opaque so we leave it alone.
 fn walk_imports(file: &Path, visited: &mut std::collections::HashSet<PathBuf>) {
+    walk_imports_inner(file, visited, 0);
+}
+
+fn walk_imports_inner(
+    file: &Path,
+    visited: &mut std::collections::HashSet<PathBuf>,
+    depth: usize,
+) {
+    if depth >= MAX_IMPORT_DEPTH {
+        debug!(
+            "walk_imports: depth limit ({}) reached at {}",
+            MAX_IMPORT_DEPTH,
+            file.display()
+        );
+        return;
+    }
+
     let canon = match file.canonicalize() {
         Ok(c) => c,
         Err(_) => return,
@@ -183,7 +209,7 @@ fn walk_imports(file: &Path, visited: &mut std::collections::HashSet<PathBuf>) {
                 continue;
             }
         };
-        walk_imports(&target, visited);
+        walk_imports_inner(&target, visited, depth + 1);
     }
 }
 

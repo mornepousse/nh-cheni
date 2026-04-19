@@ -66,7 +66,18 @@ pub fn write(config_dir: &Path, pins: &[String]) -> Result<()> {
 /// Add packages to the pin list.
 ///
 /// Returns the names that were actually added (excludes duplicates).
+///
+/// Validates each name before storing — package names with control
+/// characters, newlines, or extreme length are rejected. They'd
+/// serialize fine into JSON but then break Nix attr-set lookup
+/// (`pkgs-latest.${name}`) or pollute log output. The valid character
+/// set follows nixpkgs convention: ASCII letters, digits, plus the
+/// few separators used in package names (`-`, `_`, `.`, `+`).
 pub fn add(config_dir: &Path, names: &[String]) -> Result<Vec<String>> {
+    for name in names {
+        validate_package_name(name)?;
+    }
+
     let mut pins = read(config_dir)?;
     let mut added = Vec::new();
 
@@ -82,6 +93,37 @@ pub fn add(config_dir: &Path, names: &[String]) -> Result<Vec<String>> {
     pins.sort();
     write(config_dir, &pins)?;
     Ok(added)
+}
+
+/// Reject obviously bogus package names before storing them.
+fn validate_package_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("Package name is empty");
+    }
+    if name.len() > 128 {
+        anyhow::bail!(
+            "Package name '{}…' is suspiciously long ({} chars, max 128)",
+            &name.chars().take(20).collect::<String>(),
+            name.len()
+        );
+    }
+    if let Some(bad) = name.chars().find(|c| {
+        c.is_control()
+            || *c == '\n'
+            || *c == '\r'
+            || *c == '/'
+            || *c == '\\'
+            || *c == '"'
+            || *c == '\''
+    }) {
+        anyhow::bail!(
+            "Package name '{}' contains an invalid character ({:?}). \
+             Nix package names use letters, digits, '-', '_', '.', '+'.",
+            name,
+            bad
+        );
+    }
+    Ok(())
 }
 
 /// Remove packages from the pin list.

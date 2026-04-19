@@ -84,6 +84,59 @@ fn whitespace_only_file_is_treated_as_no_pins() {
 }
 
 #[test]
+fn add_rejects_empty_name() {
+    let dir = setup_temp_dir();
+    let err = add(dir.path(), &["".to_string()]).unwrap_err();
+    assert!(format!("{:#}", err).contains("empty"));
+}
+
+#[test]
+fn add_rejects_control_chars() {
+    let dir = setup_temp_dir();
+    let err = add(dir.path(), &["foo\nbar".to_string()]).unwrap_err();
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("invalid character"), "got: {}", msg);
+}
+
+#[test]
+fn add_rejects_path_traversal() {
+    let dir = setup_temp_dir();
+    let err = add(dir.path(), &["../../etc/passwd".to_string()]).unwrap_err();
+    assert!(format!("{:#}", err).contains("invalid character"));
+}
+
+#[test]
+fn add_rejects_quote_injection() {
+    let dir = setup_temp_dir();
+    let err = add(dir.path(), &["foo\"; rm -rf /".to_string()]).unwrap_err();
+    assert!(format!("{:#}", err).contains("invalid character"));
+}
+
+#[test]
+fn add_rejects_overlong_name() {
+    let dir = setup_temp_dir();
+    let huge = "a".repeat(256);
+    let err = add(dir.path(), &[huge]).unwrap_err();
+    assert!(format!("{:#}", err).contains("suspiciously long"));
+}
+
+#[test]
+fn add_accepts_valid_special_chars() {
+    // Real nixpkgs names that use the separator characters we allow.
+    let dir = setup_temp_dir();
+    add(
+        dir.path(),
+        &[
+            "gtk+3".to_string(),
+            "python3.13".to_string(),
+            "kdePackages.breeze-icons".to_string(),
+            "noto-fonts-cjk-sans".to_string(),
+        ],
+    )
+    .unwrap();
+}
+
+#[test]
 fn corrupt_file_gives_actionable_error() {
     // Garbage-in-file produces an error whose message contains the
     // path and the reset command — not just a raw serde error.
