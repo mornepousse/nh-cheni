@@ -38,123 +38,16 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
 
     println!("{}\n", "=== cheni upgrade ===".bold());
 
-    // Step 1: Update all flake inputs
-    println!("{} Updating all flake inputs...", "[1/4]".dimmed());
+    update_flake_inputs(&nix_config.flake_dir)?;
 
-    let update_status = Command::new("nix")
-        .args(["flake", "update"])
-        .current_dir(&nix_config.flake_dir)
-        .status()
-        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
-
-    if !update_status.success() {
-        anyhow::bail!("nix flake update failed");
+    if !opts.yes && !preview_and_confirm(config_path, &nix_config.hostname)? {
+        return Ok(());
     }
 
-    // Step 1.5: Preview changes (build the new system without activating)
-    if !opts.yes {
-        println!("\n{} Evaluating changes (no download)...\n", "[preview]".dimmed());
-
-        let hostname = &nix_config.hostname;
-        let flake_ref = format!(
-            "{}#nixosConfigurations.{}.config.system.build.toplevel",
-            config_path, hostname
-        );
-
-        // --dry-run evaluates what would be built/fetched without doing it
-        let preview_output = Command::new("nix")
-            .args(["build", &flake_ref, "--dry-run", "--no-link", "--print-build-logs"])
-            .stderr(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .output()
-            .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
-
-        if !preview_output.status.success() {
-            let stderr = String::from_utf8_lossy(&preview_output.stderr);
-            eprintln!("{}", stderr);
-            anyhow::bail!("Preview evaluation failed. Run 'cheni build' to see details.");
-        }
-
-        // nix --dry-run prints its summary to stderr
-        let stderr = String::from_utf8_lossy(&preview_output.stderr);
-        let (to_build, to_fetch) = parse_dry_run_summary(&stderr);
-
-        if to_build.is_empty() && to_fetch.is_empty() {
-            println!("  {}", "Nothing to build or download — already up to date.".green());
-            println!("\n{}", "No changes to apply.".dimmed());
-            return Ok(());
-        }
-
-        if !to_fetch.is_empty() {
-            println!("  {} {} package(s) to download:", "↓".cyan(), to_fetch.len());
-            for pkg in to_fetch.iter().take(20) {
-                println!("    {}", pkg.dimmed());
-            }
-            if to_fetch.len() > 20 {
-                println!("    {} and {} more...", "...".dimmed(), to_fetch.len() - 20);
-            }
-        }
-
-        if !to_build.is_empty() {
-            println!("\n  {} {} package(s) to build locally:", "⚒".yellow(), to_build.len());
-            for pkg in to_build.iter().take(10) {
-                println!("    {}", pkg.dimmed());
-            }
-            if to_build.len() > 10 {
-                println!("    {} and {} more...", "...".dimmed(), to_build.len() - 10);
-            }
-        }
-
-        println!();
-        if !confirm("Download and apply these changes?")? {
-            println!("\n{}", "Upgrade cancelled. Flake is already updated.".yellow());
-            println!(
-                "  Use '{}' to rebuild later.",
-                "cheni upgrade --yes".bold()
-            );
-            return Ok(());
-        }
-    }
-
-    // Step 2: Rebuild the system
-    println!("\n{} Rebuilding system...\n", "[2/4]".dimmed());
-
-    let rebuild_status = Command::new("nh")
-        .args(["os", "switch", config_path])
-        .status()
-        .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
-
-    if !rebuild_status.success() {
-        anyhow::bail!("System rebuild failed. Fix the issue and run 'cheni build' again.");
-    }
-
-    // Step 3: Clean obsolete pins
-    if !opts.no_clean_pins {
-        println!("\n{} Checking for obsolete pins...", "[3/4]".dimmed());
-        clean_obsolete_pins(&nix_config.flake_dir)?;
-    } else {
-        println!("\n{} {}", "[3/4]".dimmed(), "Skipping pin cleanup (--no-clean-pins)".dimmed());
-    }
-
-    // Step 4: Garbage collect (only with --gc flag — keeps rollback safety)
+    rebuild_system(config_path)?;
+    run_pin_cleanup_step(&nix_config.flake_dir, opts.no_clean_pins)?;
     if opts.gc {
-        println!(
-            "\n{} {}",
-            "[4/4]".dimmed(),
-            "Collecting garbage (generations > 30 days)...".yellow()
-        );
-        println!(
-            "  {} This will delete old generations — rollback won't work past this point!",
-            "!".yellow()
-        );
-        let gc_status = Command::new("sudo")
-            .args(["nix-collect-garbage", "--delete-older-than", "30d"])
-            .status()
-            .context("Failed to run nix-collect-garbage")?;
-
-        if !gc_status.success() {
-            println!("{}", "  (garbage collection skipped or failed)".dimmed());
-        }
+        run_gc_step()?;
     }
 
     println!("\n{} Upgrade complete!", "✓".green());
@@ -163,6 +56,134 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
             "{}",
             "Old generations kept for rollback. Use --gc to reclaim disk space later.".dimmed()
         );
+    }
+    Ok(())
+}
+
+/// Step 1: refresh every flake input. Bails if `nix flake update` fails.
+fn update_flake_inputs(flake_dir: &Path) -> Result<()> {
+    println!("{} Updating all flake inputs...", "[1/4]".dimmed());
+    let status = Command::new("nix")
+        .args(["flake", "update"])
+        .current_dir(flake_dir)
+        .status()
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
+    if !status.success() {
+        anyhow::bail!("nix flake update failed");
+    }
+    Ok(())
+}
+
+/// Step 1.5: evaluate pending changes via `nix build --dry-run`, show a
+/// human summary, then ask for confirmation.
+///
+/// Returns Ok(true) if the caller should proceed with the rebuild,
+/// Ok(false) if the user either cancelled or there's nothing to do.
+fn preview_and_confirm(config_path: &str, hostname: &str) -> Result<bool> {
+    println!("\n{} Evaluating changes (no download)...\n", "[preview]".dimmed());
+
+    let flake_ref = format!(
+        "{}#nixosConfigurations.{}.config.system.build.toplevel",
+        config_path, hostname
+    );
+    let preview_output = Command::new("nix")
+        .args(["build", &flake_ref, "--dry-run", "--no-link", "--print-build-logs"])
+        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .output()
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
+
+    if !preview_output.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&preview_output.stderr));
+        anyhow::bail!("Preview evaluation failed. Run 'cheni build' to see details.");
+    }
+
+    // nix --dry-run prints its summary on stderr.
+    let stderr = String::from_utf8_lossy(&preview_output.stderr);
+    let (to_build, to_fetch) = parse_dry_run_summary(&stderr);
+
+    if to_build.is_empty() && to_fetch.is_empty() {
+        println!("  {}", "Nothing to build or download — already up to date.".green());
+        println!("\n{}", "No changes to apply.".dimmed());
+        return Ok(false);
+    }
+
+    print_preview_lists(&to_build, &to_fetch);
+
+    println!();
+    if !confirm("Download and apply these changes?")? {
+        println!("\n{}", "Upgrade cancelled. Flake is already updated.".yellow());
+        println!("  Use '{}' to rebuild later.", "cheni upgrade --yes".bold());
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Print the "to fetch" and "to build" lists, each truncated so the
+/// terminal doesn't get flooded on a big update.
+fn print_preview_lists(to_build: &[String], to_fetch: &[String]) {
+    if !to_fetch.is_empty() {
+        println!("  {} {} package(s) to download:", "↓".cyan(), to_fetch.len());
+        for pkg in to_fetch.iter().take(20) {
+            println!("    {}", pkg.dimmed());
+        }
+        if to_fetch.len() > 20 {
+            println!("    {} and {} more...", "...".dimmed(), to_fetch.len() - 20);
+        }
+    }
+    if !to_build.is_empty() {
+        println!("\n  {} {} package(s) to build locally:", "⚒".yellow(), to_build.len());
+        for pkg in to_build.iter().take(10) {
+            println!("    {}", pkg.dimmed());
+        }
+        if to_build.len() > 10 {
+            println!("    {} and {} more...", "...".dimmed(), to_build.len() - 10);
+        }
+    }
+}
+
+/// Step 2: invoke `nh os switch` with the activation step inline.
+fn rebuild_system(config_path: &str) -> Result<()> {
+    println!("\n{} Rebuilding system...\n", "[2/4]".dimmed());
+    let status = Command::new("nh")
+        .args(["os", "switch", config_path])
+        .status()
+        .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
+    if !status.success() {
+        anyhow::bail!("System rebuild failed. Fix the issue and run 'cheni build' again.");
+    }
+    Ok(())
+}
+
+/// Step 3: either clean obsolete pins or announce the skip — `no_clean`
+/// decides which branch is taken so the step label stays aligned.
+fn run_pin_cleanup_step(flake_dir: &Path, no_clean: bool) -> Result<()> {
+    if no_clean {
+        println!("\n{} {}", "[3/4]".dimmed(), "Skipping pin cleanup (--no-clean-pins)".dimmed());
+        return Ok(());
+    }
+    println!("\n{} Checking for obsolete pins...", "[3/4]".dimmed());
+    clean_obsolete_pins(flake_dir)
+}
+
+/// Step 4: GC generations older than 30 days (only when --gc is set —
+/// the rollback guarantee comes from keeping this off by default).
+fn run_gc_step() -> Result<()> {
+    println!(
+        "\n{} {}",
+        "[4/4]".dimmed(),
+        "Collecting garbage (generations > 30 days)...".yellow()
+    );
+    println!(
+        "  {} This will delete old generations — rollback won't work past this point!",
+        "!".yellow()
+    );
+    let status = Command::new("sudo")
+        .args(["nix-collect-garbage", "--delete-older-than", "30d"])
+        .status()
+        .context("Failed to run nix-collect-garbage")?;
+    if !status.success() {
+        println!("{}", "  (garbage collection skipped or failed)".dimmed());
     }
     Ok(())
 }
