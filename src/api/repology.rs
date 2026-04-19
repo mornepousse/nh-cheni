@@ -130,97 +130,120 @@ pub async fn lookup_versions(
     packages: &[(String, Option<String>)],
 ) -> Result<Vec<PackageLookup>> {
     let cache = cache::load();
-    let mut results = Vec::new();
-    let mut to_fetch: Vec<(String, Option<String>)> = Vec::new();
+    let (mut results, to_fetch) = split_cache_hits(packages, &cache);
+    if to_fetch.is_empty() {
+        debug!("All {} packages found in cache", packages.len());
+        return Ok(results);
+    }
+    debug!("Cache: {} hits, {} misses", results.len(), to_fetch.len());
 
-    // Check cache first — keyed by package name (cached entries don't
-    // depend on installed version since the picked entry was version-
-    // hinted at write time too).
+    let client = build_http_client()?;
+    let handles = spawn_lookups(&client, to_fetch);
+    let (fresh, updated_cache) = collect_and_merge(handles, &cache).await;
+    results.extend(fresh);
+    cache::save(&updated_cache);
+    Ok(results)
+}
+
+/// Partition `packages` into (already-known cached hits, names still
+/// needing an API query). The cache is keyed by package name — the
+/// picked entry was version-hinted at write time, so we don't need
+/// the installed version to look it up.
+fn split_cache_hits(
+    packages: &[(String, Option<String>)],
+    cache: &cache::Cache,
+) -> (Vec<PackageLookup>, Vec<(String, Option<String>)>) {
+    let mut hits = Vec::new();
+    let mut misses = Vec::new();
     for (name, installed) in packages {
         if let Some(cached) = cache.entries.get(name) {
             debug!("Cache hit: {}", name);
-            results.push(PackageLookup {
+            hits.push(PackageLookup {
                 name: name.clone(),
                 version: cached.version.clone(),
                 description: cached.description.clone(),
             });
         } else {
-            to_fetch.push((name.clone(), installed.clone()));
+            misses.push((name.clone(), installed.clone()));
         }
     }
+    (hits, misses)
+}
 
-    if to_fetch.is_empty() {
-        debug!("All {} packages found in cache", packages.len());
-        return Ok(results);
-    }
-
-    debug!("Cache: {} hits, {} misses", results.len(), to_fetch.len());
-
-    // Query the API for cache misses. Timeout is generous by default
-    // (30s) and overridable via $CHENI_HTTP_TIMEOUT for slow links.
-    let client = reqwest::Client::builder()
+/// Build the shared reqwest client. Timeout is generous by default
+/// (30s) and overridable via $CHENI_HTTP_TIMEOUT for slow links.
+fn build_http_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
         .user_agent("cheni/0.1")
         .timeout(super::net::http_timeout())
         .build()
-        .context("Failed to create HTTP client")?;
+        .context("Failed to create HTTP client")
+}
 
+/// Fan out one tokio task per package, throttled by a
+/// `MAX_CONCURRENT`-sized semaphore and staggered with jittered
+/// per-batch delay so Repology isn't thundered all at once.
+fn spawn_lookups(
+    client: &reqwest::Client,
+    to_fetch: Vec<(String, Option<String>)>,
+) -> Vec<tokio::task::JoinHandle<Result<PackageLookup>>> {
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
-    let mut handles = Vec::new();
-
+    let mut handles = Vec::with_capacity(to_fetch.len());
     for (i, (name, installed)) in to_fetch.into_iter().enumerate() {
         let client = client.clone();
         let sem = semaphore.clone();
 
-        // Stagger requests with jitter to avoid rate limiting and thundering herd
+        // Stagger requests with jitter to avoid rate limiting + thundering herd.
         let batch_index = i as u64 / MAX_CONCURRENT as u64;
-        let base_delay_ms = batch_index * BATCH_DELAY_MS;
-        let jitter_ms = simple_jitter(i as u64);
-        let delay_ms = base_delay_ms + jitter_ms;
+        let delay_ms = batch_index * BATCH_DELAY_MS + simple_jitter(i as u64);
 
-        let handle = tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             if delay_ms > 0 {
                 tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
             }
             let _permit = sem.acquire().await;
             query_one(&client, &name, installed.as_deref()).await
-        });
-
-        handles.push(handle);
+        }));
     }
+    handles
+}
 
-    // Collect results and update cache
+/// Await every handle, accumulate successful lookups, and build the
+/// updated cache snapshot.
+///
+/// Successful-with-version lookups replace/populate cache entries so
+/// next run gets a hit. Unknown-version results (and outright task /
+/// HTTP errors) are intentionally NOT cached — a 429 retry shouldn't
+/// poison the cache with a "null" that masks the real answer forever.
+async fn collect_and_merge(
+    handles: Vec<tokio::task::JoinHandle<Result<PackageLookup>>>,
+    prior: &cache::Cache,
+) -> (Vec<PackageLookup>, cache::Cache) {
+    let mut fresh = Vec::new();
     let mut new_cache = cache::new_with_timestamp();
-
-    // Preserve existing cache entries
-    for (name, entry) in &cache.entries {
+    for (name, entry) in &prior.entries {
         new_cache.entries.insert(name.clone(), entry.clone());
     }
-
     for handle in handles {
         match handle.await {
             Ok(Ok(lookup)) => {
-                // Only cache successful lookups — don't cache unknowns
-                // so they get retried next time (might have been rate-limited)
                 if lookup.version.is_some() {
-                    new_cache.entries.insert(lookup.name.clone(), CachedPackage {
-                        version: lookup.version.clone(),
-                        description: lookup.description.clone(),
-                    });
+                    new_cache.entries.insert(
+                        lookup.name.clone(),
+                        CachedPackage {
+                            version: lookup.version.clone(),
+                            description: lookup.description.clone(),
+                        },
+                    );
                 }
-                results.push(lookup);
+                fresh.push(lookup);
             }
-            Ok(Err(e)) => {
-                // Log at debug level — 429 retries are expected and noisy at WARN
-                debug!("API error: {}", e);
-            }
-            Err(e) => {
-                debug!("Task error: {}", e);
-            }
+            // Log at debug level — 429 retries are expected and noisy at WARN.
+            Ok(Err(e)) => debug!("API error: {}", e),
+            Err(e) => debug!("Task error: {}", e),
         }
     }
-
-    cache::save(&new_cache);
-    Ok(results)
+    (fresh, new_cache)
 }
 
 /// Look up the Repology name for a Nix package.
