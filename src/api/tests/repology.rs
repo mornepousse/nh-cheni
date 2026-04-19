@@ -177,3 +177,52 @@ fn pick_uses_visiblename_when_srcname_misses() {
     let picked = pick_nix_entry(&entries, &["foo"], "nix_unstable", None).unwrap();
     assert_eq!(picked.version.as_deref(), Some("1.0"));
 }
+
+#[test]
+fn split_cache_hits_partitions_correctly() {
+    let mut cache = cache::Cache::default();
+    cache.entries.insert(
+        "firefox".to_string(),
+        cache::CachedPackage {
+            version: Some("149.0.2".to_string()),
+            description: Some("Mozilla Firefox".to_string()),
+        },
+    );
+    let packages = vec![
+        ("firefox".to_string(), Some("149.0.2".to_string())),
+        ("kicad".to_string(), Some("8.0.5".to_string())),
+        ("alacritty".to_string(), None),
+    ];
+    let (hits, misses) = split_cache_hits(&packages, &cache);
+
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].name, "firefox");
+    assert_eq!(hits[0].version.as_deref(), Some("149.0.2"));
+
+    assert_eq!(misses.len(), 2);
+    let miss_names: Vec<&str> = misses.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(miss_names.contains(&"kicad"));
+    assert!(miss_names.contains(&"alacritty"));
+}
+
+#[test]
+fn split_cache_hits_all_miss_on_empty_cache() {
+    let cache = cache::Cache::default();
+    let packages = vec![
+        ("a".to_string(), None),
+        ("b".to_string(), Some("1.0".to_string())),
+    ];
+    let (hits, misses) = split_cache_hits(&packages, &cache);
+    assert_eq!(hits.len(), 0);
+    assert_eq!(misses.len(), 2);
+}
+
+#[test]
+fn split_cache_hits_preserves_installed_hint_on_miss() {
+    // The installed-version hint is carried forward to the API layer so
+    // pick_nix_entry can disambiguate Repology projects downstream.
+    let cache = cache::Cache::default();
+    let packages = vec![("firefox".to_string(), Some("149.0.2".to_string()))];
+    let (_hits, misses) = split_cache_hits(&packages, &cache);
+    assert_eq!(misses[0].1.as_deref(), Some("149.0.2"));
+}
