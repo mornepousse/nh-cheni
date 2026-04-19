@@ -11,15 +11,24 @@
       pkgs = nixpkgs.legacyPackages.${system};
 
       # Derive the Nix version from the flake's own git metadata so the
-      # derivation name matches what `cheni --version` prints at runtime:
-      #   self.revCount   → commit count from git rev-list (patch number)
-      #   self.shortRev   → 7-char hash of HEAD (falls back to dirty one)
-      # Dirty trees don't have revCount, so we default to 0 and mark as
-      # "dirty" so it's obvious in `nix store --references` output.
+      # derivation name is unique-per-commit rather than a static "0.1.0".
+      # Three cases, in order of preference:
+      #   1. git tree (revCount set)   → 0.1.{count}-alpha+{shortRev},
+      #      mirrors exactly what `cheni --version` prints at runtime.
+      #   2. tarball fetch (shortRev only, no revCount) — this is the
+      #      GitLab / GitHub flake-input path → 0.1.0-alpha+{shortRev}.
+      #   3. dirty local tree                          → +dirty-{hash}.
+      # Having the rev in the version helps `nvd` diff output and the
+      # /nix/store path carry the identity of the build.
       cheniVersion =
-        if self ? revCount
-        then "0.1.${toString self.revCount}-alpha+${self.shortRev}"
-        else "0.1.0-alpha+${self.dirtyShortRev or "dirty"}";
+        if self ? revCount then
+          "0.1.${toString self.revCount}-alpha+${self.shortRev}"
+        else if self ? shortRev then
+          "0.1.0-alpha+${self.shortRev}"
+        else
+          # dirtyShortRev already carries its own "-dirty" suffix
+          # (e.g. "835648d-dirty"), so we don't prepend another one.
+          "0.1.0-alpha+${self.dirtyShortRev or "unknown"}";
 
       cheni = pkgs.rustPlatform.buildRustPackage {
         pname = "cheni";
