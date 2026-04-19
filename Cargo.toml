@@ -1,6 +1,6 @@
 [package]
 name = "cheni"
-version = "0.1.0-alpha"
+version = "0.1.0-beta"
 edition = "2021"
 description = "Granular package updates for NixOS"
 license = "MIT"
