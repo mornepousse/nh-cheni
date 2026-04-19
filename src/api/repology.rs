@@ -424,20 +424,44 @@ fn pick_nix_entry<'a>(
     let candidates: Vec<&RepologyEntry> =
         entries.iter().filter(|e| e.repo == repo).collect();
 
-    let name_matches = |e: &&RepologyEntry| entry_matches_any(e, &needles);
     let version_eq = |e: &&RepologyEntry, target: &str| e.version.as_deref() == Some(target);
 
+    // Field-specific name match — used to break ties between entries whose
+    // visiblename matches the query but whose srcname doesn't (e.g.
+    // firefox-mobile vs firefox both have visiblename "firefox" but only
+    // firefox's srcname exactly matches).
+    let by_field = |entries: &[&'a RepologyEntry],
+                    pred: &dyn Fn(&&RepologyEntry) -> bool|
+     -> Option<&'a RepologyEntry> { entries.iter().copied().find(pred) };
+
+    let by_srcname = |e: &&RepologyEntry| {
+        needles.iter().any(|n| field_matches(&e.srcname, n))
+    };
+    let by_binname = |e: &&RepologyEntry| {
+        needles.iter().any(|n| field_matches(&e.binname, n))
+    };
+    let by_visible = |e: &&RepologyEntry| {
+        needles.iter().any(|n| field_matches(&e.visiblename, n))
+    };
+
     if let Some(installed) = installed {
-        if let Some(e) = candidates
+        // 1. exact version match, ordered by name-field specificity so
+        //    `srcname=firefox` wins over `visiblename=firefox` from
+        //    siblings (firefox-mobile, firefox-bin) at the same version.
+        let same_ver: Vec<&RepologyEntry> = candidates
             .iter()
             .copied()
-            .find(|e| name_matches(e) && version_eq(e, installed))
+            .filter(|e| version_eq(e, installed))
+            .collect();
+        if let Some(e) = by_field(&same_ver, &by_srcname)
+            .or_else(|| by_field(&same_ver, &by_binname))
+            .or_else(|| by_field(&same_ver, &by_visible))
+            .or_else(|| same_ver.first().copied())
         {
             return Some(e);
         }
-        if let Some(e) = candidates.iter().copied().find(|e| version_eq(e, installed)) {
-            return Some(e);
-        }
+        // 2. major version match alone (handles namespaced srcnames
+        //    like kdePackages.breeze-icons that the bare name misses).
         if let Some(major) = parse_major(installed) {
             if let Some(e) = candidates
                 .iter()
@@ -449,10 +473,11 @@ fn pick_nix_entry<'a>(
         }
     }
 
-    candidates
-        .iter()
-        .copied()
-        .find(name_matches)
+    // No installed-version hint or no version-based winner: name match
+    // alone, again in srcname > binname > visiblename order.
+    by_field(&candidates, &by_srcname)
+        .or_else(|| by_field(&candidates, &by_binname))
+        .or_else(|| by_field(&candidates, &by_visible))
         .or_else(|| candidates.first().copied())
 }
 
@@ -481,3 +506,7 @@ fn entry_matches_any(entry: &RepologyEntry, needles: &[String]) -> bool {
 fn entry_name_matches(entry: &RepologyEntry, name: &str) -> bool {
     entry_matches_any(entry, &[name.to_lowercase()])
 }
+
+#[cfg(test)]
+#[path = "tests/repology.rs"]
+mod tests;
