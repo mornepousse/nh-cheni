@@ -41,10 +41,13 @@ const NAME_MAPPINGS: &[(&str, &str)] = &[
     // Terminal emulators / tools with different Repology names
     ("kitty", "kitty-terminal"),
     ("mako", "mako-notifier"),
-    // Fonts — Repology uses "fonts:" category prefix
-    ("noto-fonts", "fonts:noto"),
-    ("noto-fonts-cjk-sans", "fonts:noto"),
-    ("noto-fonts-color-emoji", "fonts:noto"),
+    // Fonts — Repology's `fonts:noto` tracks the meta-bundle (calver,
+    // e.g. "2026.04.01"), but the noto-fonts-* sub-packages in nixpkgs
+    // ship with their own per-script versions ("2.004", "2.051", ...).
+    // Mapping the sub-packages to fonts:noto produced phantom updates
+    // every time the bundle was tagged. Removed — they fall through to
+    // the input-name lookup, which simply doesn't exist on Repology
+    // for these specific sub-packages, classified as "Unknown".
     // Qt 6 — split across many sub-modules in nixpkgs but tracked under "qt"
     ("qtbase", "qt"),
     ("qtcharts", "qt"),

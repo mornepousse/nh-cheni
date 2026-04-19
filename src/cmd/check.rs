@@ -15,7 +15,7 @@ use serde::Serialize;
 use crate::api::repology;
 use crate::nix::{config, flake, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
-use crate::version::parse::parse_version;
+use crate::version::parse::{is_prerelease, parse_version};
 
 use super::obsolete::count_obsolete_pins;
 
@@ -266,6 +266,15 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
                 continue;
             }
         };
+
+        // Skip pre-release "available" versions when the user is on a
+        // stable release. Otherwise Repology's "latest" — which can
+        // include alpha/beta/rc — would surface as a misleading
+        // "minor update" (e.g. python 3.14.3 → 3.15.0a7).
+        if is_prerelease(available) && !is_prerelease(installed_version) {
+            up_to_date += 1;
+            continue;
+        }
 
         let installed_parts = parse_version(installed_version);
         let available_parts = parse_version(available);
