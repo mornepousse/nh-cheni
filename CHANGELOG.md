@@ -8,6 +8,37 @@ semver.
 ## Unreleased
 
 ### Added
+- **`cheni completion <shell>`** — emit bash / zsh / fish / elvish /
+  powershell completion scripts on stdout. Pipe into your shell's
+  completion dir (e.g. `cheni completion fish > ~/.config/fish/completions/cheni.fish`).
+- **`cheni man`** — emit a roff man page on stdout. Pipe into a
+  `man1/` directory to get `man cheni` working.
+- **Version reflects every commit** — `cheni --version` now displays
+  `0.1.{count}-alpha ({short-hash})` where `{count}` is
+  `git rev-list --count HEAD`. Computed at compile time from `build.rs`;
+  `Cargo.toml` stays at the static literal that Cargo requires.
+
+### Fixed
+- `cheni self-update` no longer claims "New version: <old version>"
+  — the in-flight binary is still the old one until the user opens a
+  new shell. Prints a hint to run `cheni --version` in a new shell
+  instead.
+
+### Internal
+- Readability pass across `run()` and other large functions in
+  `cmd/{check,history,build,pin,status,upgrade,init,update,bug_report,
+  why,search,doctor}.rs`, `nix/{flake,store,config}.rs`. Tests gained
+  coverage for the newly-extracted helpers (`aggregate_versions`,
+  `is_revision_outdated`, `find_nixpkgs_insert_line`,
+  `build_content_with_latest_input`, `parse_and_sort_results`,
+  `relevance_rank`). Test count 80 → 87.
+- `FlakeInput.last_modified` dropped (genuinely unused);
+  `FlakeInput.days_old` kept (read by `cheni doctor`).
+- `debug_assert!` removed from `pick_highest_version` — it
+  contradicted the documented empty-slice contract and broke
+  `cargo test`.
+
+### Added (earlier in this cycle)
 - **Interactive menu** — `cheni` with no subcommand opens a keyboard
   picker with all commands + a one-line status banner. Falls back to
   `--help` when stdout/stdin isn't a TTY.
