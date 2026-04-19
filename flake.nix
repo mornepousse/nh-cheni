@@ -10,31 +10,17 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
 
-      # Single-source-of-truth version string, mirroring what
-      # `git describe --tags --always --dirty` would print:
-      #   - `vX.Y.Z` when on an exact release tag
-      #   - `vX.Y.Z-N-gHASH` when N commits past the latest tag
-      #   - just the short rev when no tag exists yet
-      #   - +`-dirty` suffix on a working tree with uncommitted changes
-      #
-      # In pure Nix we can't reach the git tag history (especially on
-      # tarball fetches like `gitlab:` / `github:` shorthand), so we
-      # approximate with shortRev/dirtyShortRev. cargo build with .git
-      # available will compute the real `git describe` instead — the env
-      # var below only acts as a fallback for the Nix sandbox case.
-      cheniDescribe =
-        self.shortRev or self.dirtyShortRev or "unknown";
+      # Version read from the checked-in ./VERSION file — single source
+      # of truth shared with build.rs. Works identically on git+https,
+      # gitlab:/github: tarball fetches, and direct `nix build .` from a
+      # dirty tree: the file is always present in the source snapshot.
+      # The lib.fileContents call strips the trailing newline for us.
+      cheniVersion = pkgs.lib.fileContents ./VERSION;
 
       cheni = pkgs.rustPlatform.buildRustPackage {
         pname = "cheni";
-        version = cheniDescribe;
+        version = cheniVersion;
         src = ./.;
-        env = {
-          # Injected into build.rs so `cheni --version` matches the
-          # derivation name. The Nix sandbox has no .git/, so without
-          # this the binary would fall back to "unknown".
-          CHENI_GIT_DESCRIBE = cheniDescribe;
-        };
 
         # Derive the vendored-deps hash from Cargo.lock directly — no manual
         # bump needed when deps change (cheni relies on this for self-update
