@@ -36,6 +36,17 @@ fn split_terminfo_ignored() {
 }
 
 #[test]
+fn split_source_archives_ignored() {
+    // Source-file derivations land in the store alongside the real
+    // package — must be filtered or they get parsed as bogus
+    // versions ("620.zip") and shadow the real one.
+    assert_eq!(split_name_version("displaylink-620.zip"), None);
+    assert_eq!(split_name_version("foo-1.0.tar.gz"), None);
+    assert_eq!(split_name_version("bar-2.3.tar.xz"), None);
+    assert_eq!(split_name_version("baz-9.tgz"), None);
+}
+
+#[test]
 fn split_platform_ignored() {
     assert_eq!(
         split_name_version("cargo-1.94.1-x86_64-unknown-linux-gnu"),

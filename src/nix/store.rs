@@ -29,6 +29,12 @@ const IGNORED_SUFFIXES: &[&str] = &[
     "-x86_64-unknown-linux-gnu", "-aarch64-unknown-linux-gnu",
     "-init", "-host", "-man", "-doc", "-dev", "-info",
     ".svg", ".png", ".desktop",
+    // Source archive downloads — pulled into the store next to the
+    // real package, but they're not the package itself. Without this
+    // filter `displaylink-620.zip` was getting parsed as version
+    // "620.zip" and shadowing the actual `displaylink-6.2.0-30`.
+    ".zip", ".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst",
+    ".tgz", ".tbz2", ".txz",
 ];
 
 /// Prefixes that indicate an internal/system package.
