@@ -111,35 +111,7 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
         .collect();
 
     // 3. Get package names from the config (all or filtered by category)
-    let nix_files = match category {
-        Some(cat) => {
-            let files = config::list_module_files(&nix_config.flake_dir, cat);
-            if files.is_empty() {
-                anyhow::bail!(
-                    "No module category '{}' found.\nAvailable: {}",
-                    cat,
-                    config::list_module_categories(&nix_config.flake_dir).join(", ")
-                );
-            }
-            files
-        }
-        None => {
-            // All .nix files from all module directories + home/
-            let categories = config::list_module_categories(&nix_config.flake_dir);
-            let mut files = Vec::new();
-            for cat in &categories {
-                files.extend(config::list_module_files(&nix_config.flake_dir, cat));
-            }
-            // Also scan home/ for home-manager packages
-            let home_dir = nix_config.flake_dir.join("home");
-            if home_dir.exists() {
-                let home_parent = nix_config.flake_dir.join("home");
-                let base_dir = home_parent.parent().unwrap_or(&nix_config.flake_dir);
-                files.extend(config::list_module_files(base_dir, "home"));
-            }
-            files
-        }
-    };
+    let nix_files = gather_nix_files(&nix_config, category)?;
 
     // Limit "in <file>" attribution to files that are actually imported
     // by the active host configuration. Without this filter, packages
@@ -154,29 +126,12 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
                 .map(|v| v.into_iter().collect())
         };
 
-    let mut names_with_files = config::extract_package_names_with_files(&nix_files);
-    if let Some(active) = &active_set {
-        // Pre-canonicalise once per unique path. The same .nix file is
-        // typically referenced by dozens of packages — without this cache
-        // we'd hit the canonicalize syscall hundreds of times for the
-        // same handful of paths.
-        let mut canon_cache: std::collections::HashMap<std::path::PathBuf, bool> =
-            std::collections::HashMap::new();
-        for paths in names_with_files.values_mut() {
-            paths.retain(|p| {
-                *canon_cache.entry(p.clone()).or_insert_with(|| {
-                    p.canonicalize()
-                        .ok()
-                        .map(|c| active.contains(&c))
-                        .unwrap_or(false)
-                })
-            });
-        }
-        // Drop entries whose only declarations were in inactive files.
-        names_with_files.retain(|_, paths| !paths.is_empty());
-    }
-    debug!("Config declares {} package names (active filter applied: {})",
-        names_with_files.len(), active_set.is_some());
+    let names_with_files = build_active_names_map(&nix_files, active_set.as_ref());
+    debug!(
+        "Config declares {} package names (active filter applied: {})",
+        names_with_files.len(),
+        active_set.is_some()
+    );
 
     // 4. Cross-reference: keep only packages that are both in config AND store
     let mut packages_to_check: Vec<(String, String)> = Vec::new();
@@ -210,28 +165,7 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
         println!("{}", header.dimmed());
     }
 
-    // Spinner in background while API calls are running. Skip if stderr is
-    // not a TTY (piped/redirected), or in JSON mode — \r artifacts would
-    // clutter the output either way.
-    use std::io::IsTerminal;
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let done = Arc::new(AtomicBool::new(false));
-    let done_clone = done.clone();
-    let spinner_enabled = !json && std::io::stderr().is_terminal();
-    let spinner = std::thread::spawn(move || {
-        if !spinner_enabled {
-            return;
-        }
-        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-        let mut i = 0;
-        while !done_clone.load(Ordering::Relaxed) {
-            eprint!("\r  {} Querying remote APIs...", frames[i % frames.len()]);
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            i += 1;
-        }
-        eprint!("\r                              \r");
-    });
+    let spinner = start_spinner(!json);
 
     // Spawn flake check in a blocking thread (uses sync reqwest + std::thread::scope).
     // It runs in parallel with the async Repology lookups below.
@@ -248,9 +182,7 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
     let lookups = repology::lookup_versions(&names_with_installed).await?;
     let flake_inputs = flake_handle.await.unwrap_or_default();
 
-    // Stop spinner
-    done.store(true, Ordering::Relaxed);
-    let _ = spinner.join();
+    spinner.stop();
 
     println!();
     let lookup_map: HashMap<String, repology::PackageLookup> = lookups
@@ -259,71 +191,16 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
         .collect();
 
     // 6. Compare versions and build results
-    let mut minor_updates = Vec::new();
-    let mut major_updates = Vec::new();
-    let mut newer_results: Vec<CheckResult> = Vec::new();
-    let mut unknown_names: Vec<String> = Vec::new();
-    let mut up_to_date = 0;
+    let classification = classify_lookups(
+        &packages_to_check,
+        &lookup_map,
+        &names_with_files,
+        &nix_config.flake_dir,
+    );
 
-    for (name, installed_version) in &packages_to_check {
-        let lookup = match lookup_map.get(name) {
-            Some(l) => l,
-            None => {
-                unknown_names.push(name.clone());
-                continue;
-            }
-        };
-
-        let available = match &lookup.version {
-            Some(v) => v,
-            None => {
-                unknown_names.push(name.clone());
-                continue;
-            }
-        };
-
-        // Skip pre-release "available" versions when the user is on a
-        // stable release. Otherwise Repology's "latest" — which can
-        // include alpha/beta/rc — would surface as a misleading
-        // "minor update" (e.g. python 3.14.3 → 3.15.0a7).
-        if is_prerelease(available) && !is_prerelease(installed_version) {
-            up_to_date += 1;
-            continue;
-        }
-
-        let installed_parts = parse_version(installed_version);
-        let available_parts = parse_version(available);
-        let diff = compare_versions(&installed_parts, &available_parts);
-
-        let declared_in = names_with_files
-            .get(name)
-            .and_then(|files| files.first())
-            .and_then(|p| {
-                p.strip_prefix(&nix_config.flake_dir)
-                    .ok()
-                    .map(|r| r.display().to_string())
-            });
-
-        let result = CheckResult {
-            name: name.clone(),
-            installed: installed_version.clone(),
-            available: available.clone(),
-            declared_in,
-        };
-
-        match diff {
-            VersionDiff::Equal => up_to_date += 1,
-            VersionDiff::Minor => minor_updates.push(result),
-            VersionDiff::Major => major_updates.push(result),
-            VersionDiff::Newer => newer_results.push(result),
-        }
-    }
-    let newer = newer_results.len();
-    let unknown = unknown_names.len();
-
-    // 7. Display results — flake inputs FIRST (most actionable), then packages.
-    // Skip inputs that aren't referenced anywhere in the active modules
-    // (typical case: a `zen-browser` input declared but never wired up).
+    // 7. Filter flake inputs to the ones actually referenced. Avoids
+    // listing a declared-but-unused `zen-browser` input as if the user
+    // cared about its updates.
     let used_inputs: std::collections::HashSet<String> = if category.is_none() {
         find_used_flake_inputs(&nix_config.flake_dir, active_set.as_ref())
     } else {
@@ -334,165 +211,352 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
         .filter(|i| used_inputs.contains(&i.name))
         .collect();
 
-    // ── JSON short-circuit ────────────────────────────────────────
-    // Emit a single stable JSON document and return; no pretty print.
     if json {
-        let out = JsonOutput {
-            flake_inputs: visible_flake_inputs
-                .iter()
-                .map(|i| JsonFlakeInput {
-                    name: &i.name,
-                    installed: i.installed_version.as_deref(),
-                    has_update: i.has_update,
-                    latest_remote_date: i.remote_age.as_deref(),
-                })
-                .collect(),
-            minor_updates: &minor_updates,
-            major_updates: &major_updates,
-            newer: &newer_results,
-            unknown: &unknown_names,
-            summary: JsonSummary {
-                up_to_date,
-                minor: minor_updates.len(),
-                major: major_updates.len(),
-                newer,
-                unknown,
-            },
+        print_json(&classification, &visible_flake_inputs)?;
+    } else {
+        print_human(&classification, &visible_flake_inputs, category, details);
+    }
+    Ok(())
+}
+
+/// Bucketed result of running `compare_versions` over every queried
+/// package. Used as the single carry between the scanning phase and
+/// the rendering phase.
+struct Classification {
+    minor: Vec<CheckResult>,
+    major: Vec<CheckResult>,
+    newer: Vec<CheckResult>,
+    unknown: Vec<String>,
+    up_to_date: usize,
+}
+
+/// Compare each (name, installed_version) tuple against its Repology
+/// lookup and bucket the outcome. Pre-release "available" versions are
+/// treated as up-to-date when the installed version is stable —
+/// otherwise Repology's latest (e.g. python 3.15.0a7) would
+/// permanently surface as a minor update against 3.14.3.
+fn classify_lookups(
+    packages_to_check: &[(String, String)],
+    lookup_map: &HashMap<String, repology::PackageLookup>,
+    names_with_files: &HashMap<String, Vec<std::path::PathBuf>>,
+    flake_dir: &std::path::Path,
+) -> Classification {
+    let mut c = Classification {
+        minor: Vec::new(),
+        major: Vec::new(),
+        newer: Vec::new(),
+        unknown: Vec::new(),
+        up_to_date: 0,
+    };
+
+    for (name, installed_version) in packages_to_check {
+        let Some(lookup) = lookup_map.get(name) else {
+            c.unknown.push(name.clone());
+            continue;
         };
-        println!("{}", serde_json::to_string_pretty(&out)?);
-        return Ok(());
-    }
+        let Some(available) = &lookup.version else {
+            c.unknown.push(name.clone());
+            continue;
+        };
+        if is_prerelease(available) && !is_prerelease(installed_version) {
+            c.up_to_date += 1;
+            continue;
+        }
 
+        let diff = compare_versions(
+            &parse_version(installed_version),
+            &parse_version(available),
+        );
+        let declared_in = names_with_files
+            .get(name)
+            .and_then(|files| files.first())
+            .and_then(|p| {
+                p.strip_prefix(flake_dir)
+                    .ok()
+                    .map(|r| r.display().to_string())
+            });
+        let result = CheckResult {
+            name: name.clone(),
+            installed: installed_version.clone(),
+            available: available.clone(),
+            declared_in,
+        };
+
+        match diff {
+            VersionDiff::Equal => c.up_to_date += 1,
+            VersionDiff::Minor => c.minor.push(result),
+            VersionDiff::Major => c.major.push(result),
+            VersionDiff::Newer => c.newer.push(result),
+        }
+    }
+    c
+}
+
+/// Render the classification as the stable JSON document for scripts.
+fn print_json(
+    c: &Classification,
+    visible_flake_inputs: &[&flake::FlakeInput],
+) -> Result<()> {
+    let out = JsonOutput {
+        flake_inputs: visible_flake_inputs
+            .iter()
+            .map(|i| JsonFlakeInput {
+                name: &i.name,
+                installed: i.installed_version.as_deref(),
+                has_update: i.has_update,
+                latest_remote_date: i.remote_age.as_deref(),
+            })
+            .collect(),
+        minor_updates: &c.minor,
+        major_updates: &c.major,
+        newer: &c.newer,
+        unknown: &c.unknown,
+        summary: JsonSummary {
+            up_to_date: c.up_to_date,
+            minor: c.minor.len(),
+            major: c.major.len(),
+            newer: c.newer.len(),
+            unknown: c.unknown.len(),
+        },
+    };
+    println!("{}", serde_json::to_string_pretty(&out)?);
+    Ok(())
+}
+
+/// Render the classification as the colourful human report.
+fn print_human(
+    c: &Classification,
+    visible_flake_inputs: &[&flake::FlakeInput],
+    category: Option<&str>,
+    details: bool,
+) {
     if category.is_none() && !visible_flake_inputs.is_empty() {
-        let has_flake_updates = visible_flake_inputs.iter().any(|i| i.has_update == Some(true));
-        if has_flake_updates {
-            println!("{}:", "Flake inputs (updates available)".yellow().bold());
-        } else {
-            println!("{}:", "Flake inputs".bold());
-        }
-
-        for input in &visible_flake_inputs {
-            let version_str = input.installed_version
-                .as_deref()
-                .unwrap_or("?");
-
-            let status = match (&input.has_update, &input.remote_age) {
-                (Some(true), Some(date)) => {
-                    format!("{} ({})", "UPDATE".yellow(), date.dimmed())
-                }
-                (Some(true), None) => "UPDATE".yellow().to_string(),
-                (Some(false), _) => "ok".green().to_string(),
-                (None, _) => "?".dimmed().to_string(),
-            };
-
-            println!(
-                "  {:<24} {:<14} {}",
-                input.name,
-                version_str.dimmed(),
-                status,
-            );
-        }
-        println!();
+        print_flake_inputs_block(visible_flake_inputs);
     }
-
-    if !minor_updates.is_empty() {
-        println!("{}:", "Updates available".yellow().bold());
-        for r in &minor_updates {
-            println!(
-                "  {:<24} {:<14} {} {:<14} {} {}",
-                r.name,
-                r.installed.dimmed(),
-                "→".dimmed(),
-                r.available.green(),
-                "(minor)".dimmed(),
-                format_origin(r).dimmed(),
-            );
-        }
-        println!();
+    if !c.minor.is_empty() {
+        print_update_block("Updates available", &c.minor, "minor", true);
     }
-
-    if !major_updates.is_empty() {
-        println!(
-            "{} {}:",
-            "Major updates".red().bold(),
-            "(use 'cheni pin --force' to apply)".dimmed(),
+    if !c.major.is_empty() {
+        print_update_block(
+            "Major updates",
+            &c.major,
+            "major",
+            false,
         );
-        for r in &major_updates {
-            println!(
-                "  {:<24} {:<14} {} {:<14} {} {}",
-                r.name,
-                r.installed.dimmed(),
-                "→".dimmed(),
-                r.available.red(),
-                "(major)".red(),
-                format_origin(r).dimmed(),
-            );
-        }
-        println!();
     }
-
-    if minor_updates.is_empty() && major_updates.is_empty() {
-        println!("{}", "Everything is up to date!".green().bold());
-        println!();
+    if c.minor.is_empty() && c.major.is_empty() {
+        println!("{}\n", "Everything is up to date!".green().bold());
     }
-
-    // --details: list packages in the Newer/Unknown buckets so the user
-    // can spot mis-mappings, calver/semver clashes, or genuine pinned
-    // ahead-of-nixpkgs cases.
-    if details && !newer_results.is_empty() {
-        println!(
-            "{} {}",
-            "Newer than nixpkgs".cyan().bold(),
-            "(installed > available — usually fine, often a pinned package):".dimmed()
-        );
-        for r in &newer_results {
-            println!(
-                "  {:<24} {:<14} {} {:<14} {}",
-                r.name,
-                r.installed.cyan(),
-                ">".dimmed(),
-                r.available.dimmed(),
-                format_origin(r).dimmed(),
-            );
-        }
-        println!();
+    if details && !c.newer.is_empty() {
+        print_newer_block(&c.newer);
     }
-
-    if details && !unknown_names.is_empty() {
-        println!(
-            "{} {}",
-            "Unknown to Repology".dimmed().bold(),
-            "(no version data — may need a name mapping):".dimmed()
-        );
-        for name in &unknown_names {
-            println!("  {}", name);
-        }
-        println!();
+    if details && !c.unknown.is_empty() {
+        print_unknown_block(&c.unknown);
     }
-
-    if !details && (newer + unknown) > 0 {
+    if !details && (c.newer.len() + c.unknown.len()) > 0 {
         println!(
             "{}",
             "Tip: pass --details to list 'Newer' and 'Unknown' packages.".dimmed()
         );
     }
-
-    // Summary line
     println!(
         "{} {} | {} {} | {} {} | {} {} | {} {}",
         "Up to date:".dimmed(),
-        up_to_date.to_string().green(),
+        c.up_to_date.to_string().green(),
         "Minor:".dimmed(),
-        minor_updates.len().to_string().yellow(),
+        c.minor.len().to_string().yellow(),
         "Major:".dimmed(),
-        major_updates.len().to_string().red(),
+        c.major.len().to_string().red(),
         "Newer:".dimmed(),
-        newer.to_string().cyan(),
+        c.newer.len().to_string().cyan(),
         "Unknown:".dimmed(),
-        unknown.to_string().dimmed(),
+        c.unknown.len().to_string().dimmed(),
     );
+}
 
-    Ok(())
+fn print_flake_inputs_block(inputs: &[&flake::FlakeInput]) {
+    let has_updates = inputs.iter().any(|i| i.has_update == Some(true));
+    let header = if has_updates {
+        "Flake inputs (updates available)".yellow().bold()
+    } else {
+        "Flake inputs".bold()
+    };
+    println!("{}:", header);
+    for input in inputs {
+        let version = input.installed_version.as_deref().unwrap_or("?");
+        let status = match (&input.has_update, &input.remote_age) {
+            (Some(true), Some(date)) => format!("{} ({})", "UPDATE".yellow(), date.dimmed()),
+            (Some(true), None) => "UPDATE".yellow().to_string(),
+            (Some(false), _) => "ok".green().to_string(),
+            (None, _) => "?".dimmed().to_string(),
+        };
+        println!("  {:<24} {:<14} {}", input.name, version.dimmed(), status);
+    }
+    println!();
+}
+
+fn print_update_block(header: &str, updates: &[CheckResult], tag: &str, minor: bool) {
+    if minor {
+        println!("{}:", header.yellow().bold());
+    } else {
+        println!(
+            "{} {}:",
+            header.red().bold(),
+            "(use 'cheni pin --force' to apply)".dimmed()
+        );
+    }
+    let tag_label = if minor {
+        format!("({})", tag).dimmed()
+    } else {
+        format!("({})", tag).red()
+    };
+    for r in updates {
+        let new_ver = if minor {
+            r.available.green()
+        } else {
+            r.available.red()
+        };
+        println!(
+            "  {:<24} {:<14} {} {:<14} {} {}",
+            r.name,
+            r.installed.dimmed(),
+            "→".dimmed(),
+            new_ver,
+            tag_label,
+            format_origin(r).dimmed(),
+        );
+    }
+    println!();
+}
+
+fn print_newer_block(newer: &[CheckResult]) {
+    println!(
+        "{} {}",
+        "Newer than nixpkgs".cyan().bold(),
+        "(installed > available — usually fine, often a pinned package):".dimmed()
+    );
+    for r in newer {
+        println!(
+            "  {:<24} {:<14} {} {:<14} {}",
+            r.name,
+            r.installed.cyan(),
+            ">".dimmed(),
+            r.available.dimmed(),
+            format_origin(r).dimmed(),
+        );
+    }
+    println!();
+}
+
+fn print_unknown_block(unknown: &[String]) {
+    println!(
+        "{} {}",
+        "Unknown to Repology".dimmed().bold(),
+        "(no version data — may need a name mapping):".dimmed()
+    );
+    for name in unknown {
+        println!("  {}", name);
+    }
+    println!();
+}
+
+/// Collect every `.nix` file that the check should scan for package
+/// declarations. Either a single category (`-c dev` → modules/dev/) or
+/// the union of all module categories plus `home/`.
+fn gather_nix_files(
+    nix_config: &config::NixConfig,
+    category: Option<&str>,
+) -> Result<Vec<std::path::PathBuf>> {
+    if let Some(cat) = category {
+        let files = config::list_module_files(&nix_config.flake_dir, cat);
+        if files.is_empty() {
+            anyhow::bail!(
+                "No module category '{}' found.\nAvailable: {}",
+                cat,
+                config::list_module_categories(&nix_config.flake_dir).join(", ")
+            );
+        }
+        return Ok(files);
+    }
+
+    let mut files = Vec::new();
+    for cat in config::list_module_categories(&nix_config.flake_dir) {
+        files.extend(config::list_module_files(&nix_config.flake_dir, &cat));
+    }
+    let home_dir = nix_config.flake_dir.join("home");
+    if home_dir.exists() {
+        let base_dir = home_dir.parent().unwrap_or(&nix_config.flake_dir);
+        files.extend(config::list_module_files(base_dir, "home"));
+    }
+    Ok(files)
+}
+
+/// Build the package-name → declaring-files map, optionally restricted
+/// to files that are actually imported by the active host config.
+///
+/// `canonicalize` is called once per unique path (not per package),
+/// because the same .nix file is typically referenced by dozens of
+/// packages.
+fn build_active_names_map(
+    nix_files: &[std::path::PathBuf],
+    active_set: Option<&std::collections::HashSet<std::path::PathBuf>>,
+) -> std::collections::HashMap<String, Vec<std::path::PathBuf>> {
+    let mut names_with_files = config::extract_package_names_with_files(nix_files);
+    let Some(active) = active_set else {
+        return names_with_files;
+    };
+    let mut canon_cache: std::collections::HashMap<std::path::PathBuf, bool> =
+        std::collections::HashMap::new();
+    for paths in names_with_files.values_mut() {
+        paths.retain(|p| {
+            *canon_cache.entry(p.clone()).or_insert_with(|| {
+                p.canonicalize()
+                    .ok()
+                    .map(|c| active.contains(&c))
+                    .unwrap_or(false)
+            })
+        });
+    }
+    names_with_files.retain(|_, paths| !paths.is_empty());
+    names_with_files
+}
+
+/// Background spinner shown on stderr while remote APIs are queried.
+/// Auto-disabled on non-TTY stderr or when `enabled` is false (e.g.
+/// `--json` mode), so it never pollutes piped output.
+struct Spinner {
+    done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+impl Spinner {
+    fn stop(self) {
+        self.done.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = self.handle.join();
+    }
+}
+
+fn start_spinner(enabled: bool) -> Spinner {
+    use std::io::IsTerminal;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let done = Arc::new(AtomicBool::new(false));
+    let done_clone = done.clone();
+    let active = enabled && std::io::stderr().is_terminal();
+    let handle = std::thread::spawn(move || {
+        if !active {
+            return;
+        }
+        let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+        let mut i = 0;
+        while !done_clone.load(Ordering::Relaxed) {
+            eprint!("\r  {} Querying remote APIs...", frames[i % frames.len()]);
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            i += 1;
+        }
+        eprint!("\r                              \r");
+    });
+    Spinner { done, handle }
 }
 
 /// Format the "in:" origin column for a check result. Returns either
