@@ -20,21 +20,30 @@ pub fn run() -> Result<()> {
     // markdown unreadable in a GitLab/GitHub comment.
     colored::control::set_override(false);
 
-    let version = env!("CARGO_PKG_VERSION");
-    let git = env!("GIT_SHORT_HASH");
+    print_header();
+    print_environment_section();
+    print_config_section();
+    print_doctor_section();
+    print_cache_section();
+    print_what_happened_section();
+    Ok(())
+}
 
+fn print_header() {
     println!("# cheni bug report");
     println!();
-    println!(
-        "<!-- Paste this into https://gitlab.com/harrael/cheni/-/issues/new --> "
-    );
+    println!("<!-- Paste this into https://gitlab.com/harrael/cheni/-/issues/new --> ");
     println!("<!-- Then add a description of what you were trying to do below. -->");
     println!();
+}
 
-    // ── Environment ─────────────────────────────────────
+/// Versions, kernel, arch, plus any cheni-relevant env overrides — the
+/// minimal "where am I running" snapshot a maintainer needs first.
+fn print_environment_section() {
     println!("## Environment");
     println!();
-    println!("- **cheni**: `{} ({})`", version, git);
+    let version = format!("0.1.{}-alpha", env!("GIT_COMMIT_COUNT"));
+    println!("- **cheni**: `{} ({})`", version, env!("GIT_SHORT_HASH"));
     if let Some(os) = read_os_release() {
         println!("- **OS**: `{}`", os);
     }
@@ -47,16 +56,11 @@ pub fn run() -> Result<()> {
     if let Some(hn) = hostname() {
         println!("- **Hostname**: `{}`", hn);
     }
-    if let Some(nh) = program_version("nh", &["--version"]) {
-        println!("- **nh**: `{}`", nh);
+    for tool in &["nh", "nvd", "nix"] {
+        if let Some(v) = program_version(tool, &["--version"]) {
+            println!("- **{}**: `{}`", tool, v);
+        }
     }
-    if let Some(nvd) = program_version("nvd", &["--version"]) {
-        println!("- **nvd**: `{}`", nvd);
-    }
-    if let Some(nix) = program_version("nix", &["--version"]) {
-        println!("- **nix**: `{}`", nix);
-    }
-    // Environment overrides worth knowing when debugging a report
     let env_vars = ["CHENI_CONFIG", "CHENI_HTTP_TIMEOUT", "NO_COLOR"];
     let set_vars: Vec<String> = env_vars
         .iter()
@@ -66,52 +70,60 @@ pub fn run() -> Result<()> {
         println!("- **Env overrides**: {}", set_vars.join(", "));
     }
     println!();
+}
 
-    // ── Config overview ─────────────────────────────────
+/// Flake dir + hostname + init state + active pins + flake inputs.
+/// Falls back to a single italics line if config detection fails so
+/// the reader knows we tried.
+fn print_config_section() {
     println!("## Config overview");
     println!();
-    match crate::nix::config::detect() {
-        Ok(cfg) => {
-            println!("- **Flake dir**: `{}`", cfg.flake_dir.display());
-            println!("- **Hostname**: `{}`", cfg.hostname);
-            println!(
-                "- **Initialized**: `{}`",
-                crate::nix::config::is_initialized(&cfg.flake_dir)
-            );
-            let categories = crate::nix::config::list_module_categories(&cfg.flake_dir);
-            if !categories.is_empty() {
-                println!("- **Module categories**: `{}`", categories.join(", "));
-            }
-            match crate::nix::pins::read(&cfg.flake_dir) {
-                Ok(pins) => {
-                    println!("- **Active pins**: `{}`", pins.len());
-                    if !pins.is_empty() {
-                        println!("  - `{}`", pins.join("`, `"));
-                    }
-                }
-                Err(e) => println!("- **Active pins**: _error reading pins: {}_", e),
-            }
-            print_flake_inputs_summary(&cfg.flake_dir);
-        }
+    let cfg = match crate::nix::config::detect() {
+        Ok(c) => c,
         Err(e) => {
             println!("_Could not detect NixOS config: {}_", e);
+            println!();
+            return;
         }
+    };
+    println!("- **Flake dir**: `{}`", cfg.flake_dir.display());
+    println!("- **Hostname**: `{}`", cfg.hostname);
+    println!(
+        "- **Initialized**: `{}`",
+        crate::nix::config::is_initialized(&cfg.flake_dir)
+    );
+    let categories = crate::nix::config::list_module_categories(&cfg.flake_dir);
+    if !categories.is_empty() {
+        println!("- **Module categories**: `{}`", categories.join(", "));
     }
+    match crate::nix::pins::read(&cfg.flake_dir) {
+        Ok(pins) => {
+            println!("- **Active pins**: `{}`", pins.len());
+            if !pins.is_empty() {
+                println!("  - `{}`", pins.join("`, `"));
+            }
+        }
+        Err(e) => println!("- **Active pins**: _error reading pins: {}_", e),
+    }
+    print_flake_inputs_summary(&cfg.flake_dir);
     println!();
+}
 
-    // ── Doctor output ───────────────────────────────────
+/// Re-runs `cheni doctor` inside a code fence. doctor() prints to
+/// stdout itself, so we just bracket it with the fence markers — no
+/// capture buffer needed.
+fn print_doctor_section() {
     println!("## Doctor");
     println!();
     println!("```");
-    // Re-run doctor but capture output. Simpler: just re-call it.
-    // Its output goes to stdout which is what we want here.
     if let Err(e) = super::doctor::run() {
         println!("_cheni doctor failed: {}_", e);
     }
     println!("```");
     println!();
+}
 
-    // ── Cache state ─────────────────────────────────────
+fn print_cache_section() {
     let cache = crate::api::cache::stats();
     println!("## Repology cache");
     println!();
@@ -120,15 +132,12 @@ pub fn run() -> Result<()> {
     } else {
         println!("- **Entries**: {}", cache.total_entries);
         println!("- **Null entries**: {}", cache.null_entries);
-        println!(
-            "- **Age**: {}s ({}m)",
-            cache.age_secs,
-            cache.age_secs / 60
-        );
+        println!("- **Age**: {}s ({}m)", cache.age_secs, cache.age_secs / 60);
     }
     println!();
+}
 
-    // ── What happened ───────────────────────────────────
+fn print_what_happened_section() {
     println!("## What happened?");
     println!();
     println!("<!-- Describe: -->");
@@ -136,8 +145,6 @@ pub fn run() -> Result<()> {
     println!("<!-- 2. What you expected -->");
     println!("<!-- 3. What actually happened (paste the output if possible) -->");
     println!();
-
-    Ok(())
 }
 
 // ── helpers ────────────────────────────────────────────
