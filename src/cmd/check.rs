@@ -237,7 +237,7 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
         inputs
     });
 
-    let lookups = repology::lookup_versions_with_installed(&names_with_installed).await?;
+    let lookups = repology::lookup_versions(&names_with_installed).await?;
     let flake_inputs = flake_handle.await.unwrap_or_default();
 
     // Stop spinner

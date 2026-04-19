@@ -46,8 +46,14 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
     };
     let installed_version = &store_pkg.version;
 
-    // Check the available version on Repology
-    let lookups = repology::lookup_versions(&[name.to_string()]).await?;
+    // Check the available version on Repology. Pass installed_version
+    // as a hint so namespace collisions (kdePackages.X / xfce4-Y) get
+    // disambiguated even on a single-package lookup.
+    let lookups = repology::lookup_versions(&[(
+        name.to_string(),
+        Some(installed_version.clone()),
+    )])
+    .await?;
     let lookup = lookups.first();
 
     match lookup.and_then(|l| l.version.as_ref()) {
@@ -153,14 +159,18 @@ pub async fn pin_category(category: &str, force: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Query Repology
-    let names: Vec<String> = to_check.iter().map(|(n, _)| n.clone()).collect();
+    // Query Repology with installed-version hints (handles kdePackages
+    // / libsForQt5 / xfce4-* style namespace collisions).
+    let packages: Vec<(String, Option<String>)> = to_check
+        .iter()
+        .map(|(n, v)| (n.clone(), Some(v.clone())))
+        .collect();
     println!(
         "{}",
-        format!("Checking {} packages in modules/{}/...\n", names.len(), category).dimmed()
+        format!("Checking {} packages in modules/{}/...\n", packages.len(), category).dimmed()
     );
 
-    let lookups = repology::lookup_versions(&names).await?;
+    let lookups = repology::lookup_versions(&packages).await?;
     let lookup_map: HashMap<String, _> = lookups
         .into_iter()
         .map(|l| (l.name.clone(), l))

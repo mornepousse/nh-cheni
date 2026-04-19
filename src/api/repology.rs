@@ -113,27 +113,20 @@ struct RepologyEntry {
 
 /// Look up versions for a list of packages.
 ///
-/// Uses the cache for packages that were recently looked up.
-/// Queries the Repology API for the rest, with concurrency limiting.
+/// Uses the on-disk cache for packages that were recently looked up,
+/// queries the Repology API for the rest with concurrency limiting.
 ///
-/// Backwards-compat wrapper. Prefer `lookup_versions_with_installed`
-/// when you have the user's installed versions — it disambiguates
-/// Repology projects that contain multiple nix entries (e.g.
-/// `breeze-icons` has both `kdePackages.breeze-icons` 6.x and
-/// `libsForQt5.breeze-icons` 5.x).
-pub async fn lookup_versions(names: &[String]) -> Result<Vec<PackageLookup>> {
-    let with_hints: Vec<(String, Option<String>)> =
-        names.iter().map(|n| (n.clone(), None)).collect();
-    lookup_versions_with_installed(&with_hints).await
-}
-
-/// Same as `lookup_versions` but each input carries its installed
-/// version as a disambiguation hint. When Repology returns multiple
-/// nix entries for one project, the entry whose version matches the
-/// hint is preferred over a `srcname` exact match — handles the
+/// Each input is `(name, Option<installed_version>)`. The optional
+/// installed version is a disambiguation hint: when Repology returns
+/// multiple nix entries for one project, the entry whose version
+/// matches the hint wins over a `srcname` exact match. Handles the
 /// kdePackages/libsForQt5 namespace collisions and the unrelated
-/// "exo" packages (Xfce vs LLM tool) that share a project name.
-pub async fn lookup_versions_with_installed(
+/// "exo" packages (Xfce file manager vs LLM tool) that share a
+/// Repology project name.
+///
+/// Pass `None` for callers that don't have an installed version
+/// handy (e.g. a single-package lookup from `cheni pin <name>`).
+pub async fn lookup_versions(
     packages: &[(String, Option<String>)],
 ) -> Result<Vec<PackageLookup>> {
     let cache = cache::load();
