@@ -186,6 +186,13 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
     }
 
     // 5. Query Repology for package versions AND flake updates concurrently.
+    // Pass installed version as a hint so the matcher can disambiguate
+    // Repology projects with multiple nix entries (e.g. exo / xfce4-exo,
+    // libsForQt5.breeze-icons / kdePackages.breeze-icons).
+    let names_with_installed: Vec<(String, Option<String>)> = packages_to_check
+        .iter()
+        .map(|(n, v)| (n.clone(), Some(v.clone())))
+        .collect();
     let names: Vec<String> = packages_to_check.iter().map(|(n, _)| n.clone()).collect();
     let header = match category {
         Some(cat) => format!("Checking {} packages (modules/{}/) + flake inputs", names.len(), cat),
@@ -230,7 +237,7 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
         inputs
     });
 
-    let lookups = repology::lookup_versions(&names).await?;
+    let lookups = repology::lookup_versions_with_installed(&names_with_installed).await?;
     let flake_inputs = flake_handle.await.unwrap_or_default();
 
     // Stop spinner
