@@ -62,12 +62,51 @@ struct JsonSummary {
 ///
 /// If `category` is Some, only show packages from that module directory.
 pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: bool) -> Result<()> {
+    apply_early_flags(json, refresh);
+
+    let nix_config = config::detect()?;
+    if !handle_init_check(&nix_config.flake_dir, json) {
+        return Ok(());
+    }
+    warn_about_obsolete_pins(&nix_config.flake_dir)?;
+
+    let Some(scan) = gather_packages_to_check(&nix_config, category)? else {
+        println!("{}", "No packages found to check.".dimmed());
+        return Ok(());
+    };
+
+    print_check_header(&scan, category, json);
+    let (lookups, flake_inputs) = fetch_updates_concurrently(&nix_config, &scan, json).await?;
+
+    let lookup_map: HashMap<String, repology::PackageLookup> =
+        lookups.into_iter().map(|l| (l.name.clone(), l)).collect();
+
+    let classification = classify_lookups(
+        &scan.packages,
+        &lookup_map,
+        &scan.names_with_files,
+        &nix_config.flake_dir,
+    );
+
+    let visible_flake_inputs =
+        filter_visible_flake_inputs(&flake_inputs, &nix_config.flake_dir, scan.active_set.as_ref(), category);
+
+    if json {
+        print_json(&classification, &visible_flake_inputs)?;
+    } else {
+        print_human(&classification, &visible_flake_inputs, category, details);
+    }
+    Ok(())
+}
+
+/// Apply the two flags that affect the rest of the run before any
+/// work is done: `--json` disables colour, `--refresh` wipes the
+/// Repology cache so every lookup re-hits the API.
+fn apply_early_flags(json: bool, refresh: bool) {
     if json {
         colored::control::set_override(false);
     }
-
     if refresh {
-        // Nuke the on-disk cache so every lookup hits the API.
         // Useful after adjusting NAME_MAPPINGS, or when a package's
         // Repology entry just changed upstream.
         let _ = crate::api::cache::clear();
@@ -75,56 +114,82 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
             println!("{}", "(cache cleared — re-fetching every lookup)".dimmed());
         }
     }
+}
 
-    // 1. Detect the NixOS configuration
-    let nix_config = config::detect()?;
-
-    if !config::is_initialized(&nix_config.flake_dir) {
-        if json {
-            println!("{}", serde_json::json!({"error": "not initialized"}));
-            return Ok(());
-        }
+/// Returns true when the flake is initialised and the caller should
+/// proceed. Returns false (after printing the right message) otherwise.
+/// JSON mode gets a machine-readable `{"error": "not initialized"}`
+/// instead of the prose hint.
+fn handle_init_check(flake_dir: &std::path::Path, json: bool) -> bool {
+    if config::is_initialized(flake_dir) {
+        return true;
+    }
+    if json {
+        println!("{}", serde_json::json!({"error": "not initialized"}));
+    } else {
         print_first_run_hint();
+    }
+    false
+}
+
+/// Prints a single-line warning when there are obsolete pins in
+/// `package-pins.json` — packages pinned to nixpkgs-latest for which
+/// nixpkgs itself has since caught up, so the pin is now a no-op.
+fn warn_about_obsolete_pins(flake_dir: &std::path::Path) -> Result<()> {
+    let current_pins = pins::read(flake_dir)?;
+    if current_pins.is_empty() {
         return Ok(());
     }
-
-    // Automatic warning if any pins are obsolete
-    let current_pins = pins::read(&nix_config.flake_dir)?;
-    if !current_pins.is_empty() {
-        let lock_path = nix_config.flake_dir.join("flake.lock");
-        let obsolete = count_obsolete_pins(&lock_path, &current_pins);
-        if obsolete > 0 {
-            println!(
-                "{} {} obsolete pin(s) detected. Run '{}' to remove.\n",
-                "Note:".yellow(),
-                obsolete,
-                "cheni clean".bold()
-            );
-        }
+    let obsolete = count_obsolete_pins(&flake_dir.join("flake.lock"), &current_pins);
+    if obsolete > 0 {
+        println!(
+            "{} {} obsolete pin(s) detected. Run '{}' to remove.\n",
+            "Note:".yellow(),
+            obsolete,
+            "cheni clean".bold()
+        );
     }
+    Ok(())
+}
 
-    // 2. Get installed packages from the store
+/// Everything we need to drive the API query phase: the (name, version)
+/// pairs to check, the reverse map from name to declaring file(s), and
+/// the "active modules" filter that scopes the `in <file>` attribution.
+struct PackagesToCheck {
+    /// (name, installed version) pairs intersected with the store.
+    packages: Vec<(String, String)>,
+    /// name → declaring file(s), for the "in modules/.../foo.nix" hint.
+    names_with_files: std::collections::HashMap<String, Vec<std::path::PathBuf>>,
+    /// Set of `.nix` files actively imported by the host config, or
+    /// None when the user asked for a category (show everything).
+    active_set: Option<std::collections::HashSet<std::path::PathBuf>>,
+}
+
+/// Cross-reference the nix store with package references in the user's
+/// `.nix` config. Returns None when the intersection is empty (i.e.
+/// there's nothing worth querying the API about).
+fn gather_packages_to_check(
+    nix_config: &config::NixConfig,
+    category: Option<&str>,
+) -> Result<Option<PackagesToCheck>> {
     let store_packages = store::read_installed_packages()?;
     let store_map: HashMap<String, String> = store_packages
         .iter()
         .map(|p| (p.name.to_lowercase(), p.version.clone()))
         .collect();
 
-    // 3. Get package names from the config (all or filtered by category)
-    let nix_files = gather_nix_files(&nix_config, category)?;
+    let nix_files = gather_nix_files(nix_config, category)?;
 
-    // Limit "in <file>" attribution to files that are actually imported
-    // by the active host configuration. Without this filter, packages
-    // declared in commented-out or otherwise inactive modules would be
-    // misreported as the source.
-    let active_set: Option<std::collections::HashSet<std::path::PathBuf>> =
-        if category.is_some() {
-            // User explicitly asked for a category — show everything in it.
-            None
-        } else {
-            config::list_active_modules(&nix_config.flake_dir, &nix_config.hostname)
-                .map(|v| v.into_iter().collect())
-        };
+    // When the user explicitly picks a category, show everything inside
+    // it. Otherwise restrict attribution to files imported by the host
+    // config — commented-out or orphan modules would otherwise be
+    // reported as the source of the package reference.
+    let active_set: Option<std::collections::HashSet<std::path::PathBuf>> = if category.is_some() {
+        None
+    } else {
+        config::list_active_modules(&nix_config.flake_dir, &nix_config.hostname)
+            .map(|v| v.into_iter().collect())
+    };
 
     let names_with_files = build_active_names_map(&nix_files, active_set.as_ref());
     debug!(
@@ -133,47 +198,60 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
         active_set.is_some()
     );
 
-    // 4. Cross-reference: keep only packages that are both in config AND store
-    let mut packages_to_check: Vec<(String, String)> = Vec::new();
+    let mut packages: Vec<(String, String)> = Vec::new();
     let mut sorted_names: Vec<&String> = names_with_files.keys().collect();
     sorted_names.sort();
     for name in &sorted_names {
         if let Some(version) = store_map.get(&name.to_lowercase()) {
-            packages_to_check.push(((*name).clone(), version.clone()));
+            packages.push(((*name).clone(), version.clone()));
         }
     }
 
-    if packages_to_check.is_empty() {
-        println!("{}", "No packages found to check.".dimmed());
-        return Ok(());
+    if packages.is_empty() {
+        return Ok(None);
     }
+    Ok(Some(PackagesToCheck { packages, names_with_files, active_set }))
+}
 
-    // 5. Query Repology for package versions AND flake updates concurrently.
+fn print_check_header(scan: &PackagesToCheck, category: Option<&str>, json: bool) {
+    if json {
+        return;
+    }
+    let header = match category {
+        Some(cat) => format!(
+            "Checking {} packages (modules/{}/) + flake inputs",
+            scan.packages.len(),
+            cat
+        ),
+        None => format!("Checking {} packages + flake inputs...", scan.packages.len()),
+    };
+    println!("{}", header.dimmed());
+}
+
+/// Run the Repology lookups and the flake-input update probes
+/// concurrently — Repology is async-reqwest, flake checks fan out on
+/// a scoped OS thread pool via `spawn_blocking`. On return the
+/// spinner is stopped and a blank line printed so subsequent output
+/// starts cleanly.
+async fn fetch_updates_concurrently(
+    nix_config: &config::NixConfig,
+    scan: &PackagesToCheck,
+    json: bool,
+) -> Result<(Vec<repology::PackageLookup>, Vec<flake::FlakeInput>)> {
     // Pass installed version as a hint so the matcher can disambiguate
     // Repology projects with multiple nix entries (e.g. exo / xfce4-exo,
     // libsForQt5.breeze-icons / kdePackages.breeze-icons).
-    let names_with_installed: Vec<(String, Option<String>)> = packages_to_check
+    let names_with_installed: Vec<(String, Option<String>)> = scan
+        .packages
         .iter()
         .map(|(n, v)| (n.clone(), Some(v.clone())))
         .collect();
-    let names: Vec<String> = packages_to_check.iter().map(|(n, _)| n.clone()).collect();
-    let header = match category {
-        Some(cat) => format!("Checking {} packages (modules/{}/) + flake inputs", names.len(), cat),
-        None => format!("Checking {} packages + flake inputs...", names.len()),
-    };
-    if !json {
-        println!("{}", header.dimmed());
-    }
 
     let spinner = start_spinner(!json);
-
-    // Spawn flake check in a blocking thread (uses sync reqwest + std::thread::scope).
-    // It runs in parallel with the async Repology lookups below.
     let flake_dir = nix_config.flake_dir.clone();
     let flake_handle = tokio::task::spawn_blocking(move || {
-        let mut inputs = match flake::read_flake_inputs(&flake_dir) {
-            Ok(i) => i,
-            Err(_) => return Vec::new(),
+        let Ok(mut inputs) = flake::read_flake_inputs(&flake_dir) else {
+            return Vec::new();
         };
         flake::check_flake_updates(&mut inputs);
         inputs
@@ -181,42 +259,27 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
 
     let lookups = repology::lookup_versions(&names_with_installed).await?;
     let flake_inputs = flake_handle.await.unwrap_or_default();
-
     spinner.stop();
-
     println!();
-    let lookup_map: HashMap<String, repology::PackageLookup> = lookups
-        .into_iter()
-        .map(|l| (l.name.clone(), l))
-        .collect();
+    Ok((lookups, flake_inputs))
+}
 
-    // 6. Compare versions and build results
-    let classification = classify_lookups(
-        &packages_to_check,
-        &lookup_map,
-        &names_with_files,
-        &nix_config.flake_dir,
-    );
-
-    // 7. Filter flake inputs to the ones actually referenced. Avoids
-    // listing a declared-but-unused `zen-browser` input as if the user
-    // cared about its updates.
-    let used_inputs: std::collections::HashSet<String> = if category.is_none() {
-        find_used_flake_inputs(&nix_config.flake_dir, active_set.as_ref())
+/// Filter flake inputs to the ones actually referenced by the active
+/// host configuration. Avoids listing a declared-but-unused
+/// `zen-browser` input as if the user cared about its updates.
+/// In category mode, everything is shown (the user asked for it).
+fn filter_visible_flake_inputs<'a>(
+    flake_inputs: &'a [flake::FlakeInput],
+    flake_dir: &std::path::Path,
+    active_set: Option<&std::collections::HashSet<std::path::PathBuf>>,
+    category: Option<&str>,
+) -> Vec<&'a flake::FlakeInput> {
+    let used: std::collections::HashSet<String> = if category.is_none() {
+        find_used_flake_inputs(flake_dir, active_set)
     } else {
         flake_inputs.iter().map(|i| i.name.clone()).collect()
     };
-    let visible_flake_inputs: Vec<&flake::FlakeInput> = flake_inputs
-        .iter()
-        .filter(|i| used_inputs.contains(&i.name))
-        .collect();
-
-    if json {
-        print_json(&classification, &visible_flake_inputs)?;
-    } else {
-        print_human(&classification, &visible_flake_inputs, category, details);
-    }
-    Ok(())
+    flake_inputs.iter().filter(|i| used.contains(&i.name)).collect()
 }
 
 /// Bucketed result of running `compare_versions` over every queried
