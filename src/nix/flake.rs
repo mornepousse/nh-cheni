@@ -346,7 +346,13 @@ fn fetch_remote_info(
                 Some(RemoteCommitInfo { rev, date })
             })
         }
-        _ => None,
+        // No API client for other repo types (sourcehut, git+https:, tarball,
+        // path, ...). Log it so -v users can tell the difference between
+        // "the probe ran and got nothing" and "we skipped it entirely".
+        other => {
+            debug!("No remote-update probe for repo_type={:?} ({}/{})", other, owner, repo);
+            None
+        }
     }
 }
 

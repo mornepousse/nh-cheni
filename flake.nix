@@ -30,10 +30,23 @@
           # (e.g. "835648d-dirty"), so we don't prepend another one.
           "0.1.0-alpha+${self.dirtyShortRev or "unknown"}";
 
+      # Metadata injected into `build.rs` so the binary's --version output
+      # matches the Nix derivation name. Without this the Nix sandbox has
+      # no .git/ available, git calls fail, and 'cheni --version' reports
+      # '0.1.0-alpha (unknown)'.
+      cheniGitShortHash =
+        self.shortRev or self.dirtyShortRev or "unknown";
+      cheniGitCommitCount =
+        toString (self.revCount or 0);
+
       cheni = pkgs.rustPlatform.buildRustPackage {
         pname = "cheni";
         version = cheniVersion;
         src = ./.;
+        env = {
+          CHENI_GIT_SHORT_HASH = cheniGitShortHash;
+          CHENI_GIT_COMMIT_COUNT = cheniGitCommitCount;
+        };
 
         # Derive the vendored-deps hash from Cargo.lock directly — no manual
         # bump needed when deps change (cheni relies on this for self-update

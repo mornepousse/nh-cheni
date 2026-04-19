@@ -265,7 +265,9 @@ enum Commands {
 /// message pointing at `cheni bug-report`. The full backtrace is still
 /// available via RUST_BACKTRACE for anyone who sets it.
 fn install_panic_hook() {
-    let version = env!("CARGO_PKG_VERSION");
+    // Match the format 'cheni --version' prints — static CARGO_PKG_VERSION
+    // (0.1.0-alpha) would lie about which commit the crash came from.
+    let version = concat!("0.1.", env!("GIT_COMMIT_COUNT"), "-alpha");
     let git = env!("GIT_SHORT_HASH");
     std::panic::set_hook(Box::new(move |info| {
         let location = info

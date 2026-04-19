@@ -11,19 +11,34 @@
 //! at compile time and may differ — that's intentional.
 
 fn main() {
-    let short_hash = run_git(&["rev-parse", "--short", "HEAD"]).unwrap_or_else(|| "unknown".into());
-    let commit_count = run_git(&["rev-list", "--count", "HEAD"]).unwrap_or_else(|| "0".into());
+    // Allow the Nix build (sandbox, no .git) to inject values from flake.nix
+    // via its `env` attribute. If the vars are pre-set we take them as-is;
+    // otherwise we fall back to running git, and ultimately to placeholders
+    // so a tarball build (no git, no env injection) still compiles cleanly.
+    let short_hash = env_or_git("CHENI_GIT_SHORT_HASH", &["rev-parse", "--short", "HEAD"])
+        .unwrap_or_else(|| "unknown".into());
+    let commit_count = env_or_git("CHENI_GIT_COMMIT_COUNT", &["rev-list", "--count", "HEAD"])
+        .unwrap_or_else(|| "0".into());
 
     println!("cargo:rustc-env=GIT_SHORT_HASH={}", short_hash);
     println!("cargo:rustc-env=GIT_COMMIT_COUNT={}", commit_count);
 
-    // Recompiler quand le HEAD change : couvre les commits, switch de branche, rebase.
+    // Recompile when HEAD changes: covers commits, branch switches, rebases.
     println!("cargo:rerun-if-changed=.git/HEAD");
     println!("cargo:rerun-if-changed=.git/refs/heads/");
+    // Also re-run if the injected vars change (Nix eval gave us new values).
+    println!("cargo:rerun-if-env-changed=CHENI_GIT_SHORT_HASH");
+    println!("cargo:rerun-if-env-changed=CHENI_GIT_COMMIT_COUNT");
 }
 
-fn run_git(args: &[&str]) -> Option<String> {
-    let out = std::process::Command::new("git").args(args).output().ok()?;
+fn env_or_git(env_name: &str, git_args: &[&str]) -> Option<String> {
+    if let Ok(v) = std::env::var(env_name) {
+        let trimmed = v.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    let out = std::process::Command::new("git").args(git_args).output().ok()?;
     if !out.status.success() {
         return None;
     }
