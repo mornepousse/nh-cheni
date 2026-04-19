@@ -396,16 +396,24 @@ async fn parse_response(
 }
 
 /// Pick the best Repology entry for `name` from `entries`, scoped to one
-/// `repo`. Tries the most reliable fields first.
+/// `repo`. Tries the most reliable signals first.
 ///
-/// Why this ordering matters: for the `firefox` project on Repology,
-/// nix_unstable contributes ~8 entries — firefox (srcname=firefox,
-/// visiblename=firefox), firefox-esr (srcname=firefox-esr,
-/// visiblename=firefox), firefox-mobile (srcname=firefox-mobile,
-/// visiblename=firefox), and so on. visiblename matches several
-/// of them; only srcname disambiguates "the actual `firefox`
-/// derivation in nixpkgs" from "another entry that's tagged as
-/// firefox in the UI".
+/// Why this matters: for the `firefox` project on Repology, nix_unstable
+/// contributes ~8 entries — firefox (srcname=firefox, visiblename=firefox),
+/// firefox-esr (srcname=firefox-esr, visiblename=firefox),
+/// firefox-mobile (srcname=firefox-mobile, visiblename=firefox), etc.
+/// visiblename matches several of them; only srcname (or the installed
+/// version) disambiguates the actual nixpkgs `firefox` from siblings.
+///
+/// Cascade (when installed-version hint is provided):
+/// 1. name match AND exact version — almost certainly the right one
+/// 2. exact version alone — handles namespaced srcnames
+///    (kdePackages.breeze-icons) where the bare name can't match
+/// 3. major-version match alone — degraded fallback
+///
+/// Then (or when no hint):
+/// 4. name match alone (srcname/binname/visiblename, in that order)
+/// 5. first entry from the repo — last resort
 fn pick_nix_entry<'a>(
     entries: &'a [RepologyEntry],
     match_names: &[&str],
@@ -413,71 +421,63 @@ fn pick_nix_entry<'a>(
     installed: Option<&str>,
 ) -> Option<&'a RepologyEntry> {
     let needles: Vec<String> = match_names.iter().map(|n| n.to_lowercase()).collect();
-    let in_repo = || entries.iter().filter(|e| e.repo == repo);
+    let candidates: Vec<&RepologyEntry> =
+        entries.iter().filter(|e| e.repo == repo).collect();
 
-    let name_matches = |e: &RepologyEntry| {
-        let any = |f: &Option<String>| needles.iter().any(|n| field_matches(f, n));
-        any(&e.srcname) || any(&e.binname) || any(&e.visiblename)
-    };
+    let name_matches = |e: &&RepologyEntry| entry_matches_any(e, &needles);
+    let version_eq = |e: &&RepologyEntry, target: &str| e.version.as_deref() == Some(target);
 
-    // Disambiguation pass when we have an installed version. Repology's
-    // project pages often contain unrelated nix entries that share a
-    // visible/srcname (exo LLM vs xfce4-exo, kdePackages vs libsForQt5).
-    // Picking purely by srcname picks the wrong one in those cases.
     if let Some(installed) = installed {
-        // 1. Name-matched entry whose version equals installed exactly —
-        //    almost always the right package.
-        if let Some(e) = in_repo()
-            .filter(|e| name_matches(e))
-            .find(|e| e.version.as_deref() == Some(installed))
+        if let Some(e) = candidates
+            .iter()
+            .copied()
+            .find(|e| name_matches(e) && version_eq(e, installed))
         {
             return Some(e);
         }
-        // 2. Any entry whose version equals installed exactly. For
-        //    namespaced srcnames like "kdePackages.breeze-icons" the
-        //    bare-name match misses but the version is conclusive.
-        if let Some(e) = in_repo().find(|e| e.version.as_deref() == Some(installed)) {
+        if let Some(e) = candidates.iter().copied().find(|e| version_eq(e, installed)) {
             return Some(e);
         }
-        // 3. Any entry whose major version matches installed.
-        let installed_major = installed
-            .split('.')
-            .next()
-            .and_then(|s| s.parse::<u64>().ok());
-        if let Some(major) = installed_major {
-            if let Some(e) = in_repo().find(|e| {
-                e.version
-                    .as_deref()
-                    .and_then(|v| v.split('.').next())
-                    .and_then(|s| s.parse::<u64>().ok())
-                    == Some(major)
-            }) {
+        if let Some(major) = parse_major(installed) {
+            if let Some(e) = candidates
+                .iter()
+                .copied()
+                .find(|e| e.version.as_deref().and_then(parse_major) == Some(major))
+            {
                 return Some(e);
             }
         }
     }
 
-    // No installed-version hint or no version-based winner: name matching.
-    let any = |getter: fn(&RepologyEntry) -> &Option<String>| {
-        in_repo().find(|e| needles.iter().any(|n| field_matches(getter(e), n)))
-    };
-    any(|e| &e.srcname)
-        .or_else(|| any(|e| &e.binname))
-        .or_else(|| any(|e| &e.visiblename))
-        .or_else(|| in_repo().next())
+    candidates
+        .iter()
+        .copied()
+        .find(name_matches)
+        .or_else(|| candidates.first().copied())
 }
 
+/// Extract the major-version number from a version string ("3.14.3" → 3).
+fn parse_major(version: &str) -> Option<u64> {
+    version.split('.').next()?.parse().ok()
+}
+
+/// Case-insensitive equality between an Optional Repology field and a needle.
 fn field_matches(field: &Option<String>, needle: &str) -> bool {
-    field
-        .as_deref()
-        .map(|s| s.to_lowercase() == needle)
-        .unwrap_or(false)
+    field.as_deref().map(|s| s.to_lowercase()) == Some(needle.to_string())
 }
 
-/// Backwards-compat helper used by the nix_stable fallback path.
+/// True when any of the entry's name fields equals any of the needles.
+/// `needles` are expected to be already lowercase.
+fn entry_matches_any(entry: &RepologyEntry, needles: &[String]) -> bool {
+    needles.iter().any(|n| {
+        field_matches(&entry.srcname, n)
+            || field_matches(&entry.binname, n)
+            || field_matches(&entry.visiblename, n)
+    })
+}
+
+/// Wrapper kept for the nix_stable fallback in parse_response — takes a
+/// single name instead of pre-lowercased needles.
 fn entry_name_matches(entry: &RepologyEntry, name: &str) -> bool {
-    let needle = name.to_lowercase();
-    field_matches(&entry.srcname, &needle)
-        || field_matches(&entry.binname, &needle)
-        || field_matches(&entry.visiblename, &needle)
+    entry_matches_any(entry, &[name.to_lowercase()])
 }

@@ -56,40 +56,24 @@ pub fn parse_version(version: &str) -> Vec<u64> {
 /// assert!(!is_prerelease("2026.04.01"));
 /// ```
 pub fn is_prerelease(version: &str) -> bool {
-    let lower = version.to_lowercase();
+    /// PEP440-ish marker: a digit, then `a` / `b` / `rc`, then another digit.
+    /// "3.15.0a7" matches; "1.0-build42" doesn't (the `b` isn't preceded
+    /// by a digit), "alacritty-0.17.0" doesn't (the leading `a` isn't
+    /// preceded by a digit either).
+    static PEP440_RE: std::sync::LazyLock<regex::Regex> =
+        std::sync::LazyLock::new(|| regex::Regex::new(r"\d(a|b|rc)\d").expect("valid regex"));
 
-    // PEP440 / Python style: a digit immediately followed by a/b/rc.
-    // Captures "3.15.0a7", "2.0b1", "1.0rc3".
-    let mut chars = lower.chars().peekable();
-    let mut prev_digit = false;
-    while let Some(c) = chars.next() {
-        if prev_digit {
-            // Look at the current char and the following ones for a/b/rc.
-            if c == 'a' || c == 'b' {
-                // Make sure it's not "abi" or "build" — only accept if the
-                // very next char is a digit (real PEP440 alpha/beta marker).
-                if chars.peek().map(|n| n.is_ascii_digit()).unwrap_or(false) {
-                    return true;
-                }
-            } else if c == 'r' && chars.peek() == Some(&'c') {
-                return true;
-            }
-        }
-        prev_digit = c.is_ascii_digit();
-    }
-
-    // Common suffix words separated by - or _.
-    for marker in [
+    /// Word-style markers we look for as substrings. Both `-alpha` and
+    /// `_alpha` shapes are common; bare `alpha` / `beta` covers the rare
+    /// "1.0alpha" / "2.0beta" cases without needing a separator.
+    const SUFFIX_MARKERS: &[&str] = &[
         "-alpha", "-beta", "-rc", "-pre", "-dev", "-unstable", "-snapshot",
         "_alpha", "_beta", "_rc", "_pre", "_dev",
-        "alpha", "beta",  // bare suffixes (e.g. "1.0alpha")
-    ] {
-        if lower.contains(marker) {
-            return true;
-        }
-    }
+        "alpha", "beta",
+    ];
 
-    false
+    let lower = version.to_lowercase();
+    PEP440_RE.is_match(&lower) || SUFFIX_MARKERS.iter().any(|m| lower.contains(m))
 }
 
 #[cfg(test)]
