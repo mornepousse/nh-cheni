@@ -38,6 +38,10 @@ regex = "1"
 anyhow = "1"
 dirs = "6"
 
+# Release verification: minisign signature check for `cheni self-update`.
+# Pure-Rust crate, no FFI, no external `minisign` binary needed at runtime.
+minisign-verify = "0.2"
+
 # CLI utilities (clap_mangen for man-page generation in `cheni man`)
 [dependencies.clap_mangen]
 version = "0.2"

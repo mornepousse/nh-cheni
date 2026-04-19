@@ -226,7 +226,7 @@ async fn dispatch(action: Action) -> Result<()> {
         Action::Status => super::status::run()?,
         Action::Clean => super::clean::run()?,
         Action::Doctor => super::doctor::run()?,
-        Action::SelfUpdate => super::self_update::run()?,
+        Action::SelfUpdate => super::self_update::run(false)?,
         Action::Init => super::init::run()?,
         Action::Quit => {}
     }

@@ -164,7 +164,12 @@ enum Commands {
 
     /// Update cheni itself (refresh the cheni flake input and rebuild)
     #[command(name = "self-update")]
-    SelfUpdate,
+    SelfUpdate {
+        /// Skip the minisign signature check. Use only when recovering
+        /// from a broken release, a key rotation, or for local testing.
+        #[arg(long)]
+        allow_unsigned: bool,
+    },
 
     /// List system generations (or selectively delete them with --prune/--delete/--keep)
     #[command(alias = "h")]
@@ -366,7 +371,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         }
         Commands::Build => cmd::build::run(),
         Commands::Doctor => cmd::doctor::run(),
-        Commands::SelfUpdate => cmd::self_update::run(),
+        Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned),
         Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes } => {
             cmd::history::run(cmd::history::HistoryOptions {
                 diff, full, limit, delete, prune, keep, older_than, gc, yes,
