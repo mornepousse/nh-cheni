@@ -19,79 +19,98 @@ pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     let flake_dir = &nix_config.flake_dir;
 
-    println!("{}\n", "=== cheni init ===".bold());
-    println!("  Config:   {}", flake_dir.display());
-    println!("  Hostname: {}\n", nix_config.hostname);
+    print_init_header(flake_dir, &nix_config.hostname);
+    let _ = create_pins_file(flake_dir)?;
 
-    // Step 1: Create package-pins.json if missing
-    let _pins_created = create_pins_file(flake_dir)?;
-
-    // Step 2: Add nixpkgs-latest input to flake.nix
     let flake_path = flake_dir.join("flake.nix");
     let flake_content = std::fs::read_to_string(&flake_path)
         .context("Failed to read flake.nix")?;
 
-    // Check if already initialized
+    if !ensure_nixpkgs_latest_input(&flake_path, &flake_content, &nix_config.hostname)? {
+        return Ok(());
+    }
+    if !ensure_overlay(&flake_path, &nix_config.hostname)? {
+        return Ok(());
+    }
+
+    println!("\n{} cheni is ready! Try '{}'.", "✓".green(), "cheni check".bold());
+    Ok(())
+}
+
+fn print_init_header(flake_dir: &Path, hostname: &str) {
+    println!("{}\n", "=== cheni init ===".bold());
+    println!("  Config:   {}", flake_dir.display());
+    println!("  Hostname: {}\n", hostname);
+}
+
+/// Step 1: make sure the `nixpkgs-latest` input is declared.
+///
+/// Returns Ok(true) when the caller should proceed to the overlay step,
+/// Ok(false) when the flake was too exotic for auto-editing and we've
+/// already printed manual instructions.
+fn ensure_nixpkgs_latest_input(
+    flake_path: &Path,
+    flake_content: &str,
+    hostname: &str,
+) -> Result<bool> {
     if flake_content.contains("nixpkgs-latest") {
         println!("{} nixpkgs-latest already in flake.nix.", "[1/2]".dimmed());
-    } else {
-        match add_nixpkgs_latest(&flake_path, &flake_content) {
-            Ok(()) => {
-                println!(
-                    "{} Added nixpkgs-latest input to flake.nix.  {}",
-                    "[1/2]".dimmed(),
-                    "OK".green()
-                );
-            }
-            Err(e) => {
-                warn!("Auto-modification failed: {}", e);
-                println!(
-                    "{} Could not auto-modify flake.nix.  {}",
-                    "[1/2]".dimmed(),
-                    "MANUAL".yellow()
-                );
-                print_manual_instructions(&nix_config.hostname);
-                return Ok(());
-            }
+        return Ok(true);
+    }
+    match add_nixpkgs_latest(flake_path, flake_content) {
+        Ok(()) => {
+            println!(
+                "{} Added nixpkgs-latest input to flake.nix.  {}",
+                "[1/2]".dimmed(),
+                "OK".green()
+            );
+            Ok(true)
+        }
+        Err(e) => {
+            warn!("Auto-modification failed: {}", e);
+            println!(
+                "{} Could not auto-modify flake.nix.  {}",
+                "[1/2]".dimmed(),
+                "MANUAL".yellow()
+            );
+            print_manual_instructions(hostname);
+            Ok(false)
         }
     }
+}
 
-    // Check if overlay is present
+/// Step 2: make sure the pins overlay is wired into nixpkgs.overlays.
+///
+/// Re-reads the flake so we observe step 1's edit; same Ok(true)/Ok(false)
+/// contract as `ensure_nixpkgs_latest_input`.
+fn ensure_overlay(flake_path: &Path, hostname: &str) -> Result<bool> {
+    let flake_content = std::fs::read_to_string(flake_path)
+        .context("Failed to re-read flake.nix")?;
+
     if flake_content.contains("package-pins.json") {
         println!("{} Overlay already configured.", "[2/2]".dimmed());
-    } else {
-        // Re-read flake after step 1 modification
-        let flake_content = std::fs::read_to_string(&flake_path)
-            .context("Failed to re-read flake.nix")?;
-
-        match add_overlay(&flake_path, &flake_content, &nix_config.hostname) {
-            Ok(()) => {
-                println!(
-                    "{} Added cheni overlay to flake.nix.       {}",
-                    "[2/2]".dimmed(),
-                    "OK".green()
-                );
-            }
-            Err(e) => {
-                warn!("Overlay auto-modification failed: {}", e);
-                println!(
-                    "{} Could not add overlay automatically.  {}",
-                    "[2/2]".dimmed(),
-                    "MANUAL".yellow()
-                );
-                print_overlay_instructions(&nix_config.hostname);
-                return Ok(());
-            }
+        return Ok(true);
+    }
+    match add_overlay(flake_path, &flake_content, hostname) {
+        Ok(()) => {
+            println!(
+                "{} Added cheni overlay to flake.nix.       {}",
+                "[2/2]".dimmed(),
+                "OK".green()
+            );
+            Ok(true)
+        }
+        Err(e) => {
+            warn!("Overlay auto-modification failed: {}", e);
+            println!(
+                "{} Could not add overlay automatically.  {}",
+                "[2/2]".dimmed(),
+                "MANUAL".yellow()
+            );
+            print_overlay_instructions(hostname);
+            Ok(false)
         }
     }
-
-    println!(
-        "\n{} cheni is ready! Try '{}'.",
-        "✓".green(),
-        "cheni check".bold()
-    );
-
-    Ok(())
 }
 
 /// Create package-pins.json if it doesn't exist.
