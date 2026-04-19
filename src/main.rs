@@ -17,7 +17,7 @@ use tracing_subscriber::EnvFilter;
 #[derive(Parser)]
 #[command(
     name = "cheni",
-    version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_SHORT_HASH"), ")"),
+    version = concat!("0.1.", env!("GIT_COMMIT_COUNT"), "-alpha (", env!("GIT_SHORT_HASH"), ")"),
     about = "Granular package updates for NixOS",
     long_about = "Granular package updates for NixOS.\n\n\
         cheni lets you check, select, and apply updates per-package\n\
