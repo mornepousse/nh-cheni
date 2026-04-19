@@ -133,3 +133,7 @@ fn relevance_rank(name_lower: &str, query_lower: &str) -> u8 {
         3
     }
 }
+
+#[cfg(test)]
+#[path = "tests/search.rs"]
+mod tests;

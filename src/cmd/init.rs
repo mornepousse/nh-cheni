@@ -313,3 +313,7 @@ fn print_overlay_instructions(_hostname: &str) {
         "[]".cyan()
     );
 }
+
+#[cfg(test)]
+#[path = "tests/init.rs"]
+mod tests;

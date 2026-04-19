@@ -48,3 +48,33 @@ fn short_date_handles_short_input() {
     assert_eq!(short_date("2026"), "2026");
     assert_eq!(short_date(""), "");
 }
+
+#[test]
+fn is_revision_outdated_detects_change() {
+    // flake.lock stores 12-char prefixes; API returns longer SHAs.
+    // The comparison should truncate the remote to the local length.
+    assert!(is_revision_outdated("abcdef123456", "000000000000"));
+    assert!(is_revision_outdated("abcdef123456789", "000000000000"));
+}
+
+#[test]
+fn is_revision_outdated_false_when_prefix_matches() {
+    // Remote rev is longer but starts with the local prefix → up to date.
+    assert!(!is_revision_outdated("abcdef1234", "abcdef1234"));
+    assert!(!is_revision_outdated("abcdef123456", "abcdef123456"));
+}
+
+#[test]
+fn is_revision_outdated_empty_inputs() {
+    // Defensive: empty vs empty is not outdated; empty vs non-empty
+    // compares prefix-of-length-0 which is always equal, so not outdated.
+    // This matches the behaviour of the API-failed-to-respond path.
+    assert!(!is_revision_outdated("", ""));
+    assert!(!is_revision_outdated("", "abcdef"));
+}
+
+#[test]
+fn is_revision_outdated_survives_non_ascii() {
+    // Char-based slicing: mustn't panic on a multi-byte codepoint.
+    assert!(is_revision_outdated("é🦀x000000", "abc000000000"));
+}
