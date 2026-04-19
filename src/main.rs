@@ -297,182 +297,156 @@ fn install_panic_hook() {
 async fn main() -> Result<()> {
     install_panic_hook();
     let cli = Cli::parse();
+    configure_runtime(&cli);
 
-    // Respect NO_COLOR environment variable (https://no-color.org/)
+    let Some(command) = resolve_command(cli.command).await? else {
+        return Ok(());
+    };
+    dispatch(command).await
+}
+
+/// Apply the effects of the global flags (-v, --no-color, NO_COLOR env)
+/// and initialise tracing. Called exactly once at startup.
+fn configure_runtime(cli: &Cli) {
     if cli.no_color || std::env::var("NO_COLOR").is_ok() {
         colored::control::set_override(false);
     }
-
-    // Set up logging based on verbosity level
     let filter = match cli.verbose {
         0 => "warn",
         1 => "cheni=debug",
         _ => "cheni=trace",
     };
-
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new(filter)),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)),
         )
         .with_target(false)
         .without_time()
         .init();
+}
 
-    // No subcommand → launch the interactive menu (or print help if not a TTY).
-    let command = match cli.command {
-        Some(c) => c,
-        None => {
-            use std::io::IsTerminal;
-            if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-                cmd::interactive::run().await?;
-                return Ok(());
-            } else {
-                use clap::CommandFactory;
-                Cli::command().print_help()?;
-                println!();
-                return Ok(());
-            }
-        }
-    };
+/// Turn an optional `Commands` into the actual command to run, or None
+/// if the program already produced its output (interactive menu or a
+/// printed `--help`).
+///
+/// With no subcommand we drop into the interactive menu on a TTY and
+/// fall back to `--help` when piped/scripted — the latter is the
+/// behaviour users expect when they invoke cheni from a shell pipeline.
+async fn resolve_command(cmd: Option<Commands>) -> Result<Option<Commands>> {
+    if let Some(c) = cmd {
+        return Ok(Some(c));
+    }
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
+        cmd::interactive::run().await?;
+    } else {
+        use clap::CommandFactory;
+        Cli::command().print_help()?;
+        println!();
+    }
+    Ok(None)
+}
 
-    // Dispatch to the right command
+/// Dispatch a resolved `Commands` to the right subcommand module. Kept
+/// tight on purpose — it's the one-line-per-branch table of contents
+/// for everything cheni can do.
+async fn dispatch(command: Commands) -> Result<()> {
     match command {
         Commands::Check { category, details, json, refresh } => {
-            cmd::check::run(category.as_deref(), details, json, refresh).await?;
+            cmd::check::run(category.as_deref(), details, json, refresh).await
         }
-
         Commands::Pin { package, category, flakes, force } => {
-            if flakes {
-                cmd::pin::pin_flake_inputs().await?;
-            } else if let Some(name) = package {
-                cmd::pin::pin_one(&name, force).await?;
-            } else if let Some(cat) = category {
-                cmd::pin::pin_category(&cat, force).await?;
-            } else {
-                anyhow::bail!(
-                    "Specify a package name, a category, or --flakes.\n\
-                     Usage: cheni pin <package>\n\
-                     Usage: cheni pin --category <name>     (e.g. dev, apps)\n\
-                     Usage: cheni pin --flakes"
-                );
-            }
+            dispatch_pin(package, category, flakes, force).await
         }
-
-        Commands::Unpin { package, all } => {
-            if all {
-                cmd::pin::unpin_all()?;
-            } else if let Some(name) = package {
-                cmd::pin::unpin_one(&name)?;
-            } else {
-                anyhow::bail!(
-                    "Specify a package name or --all.\n\
-                     Usage: cheni unpin <package>\n\
-                     Usage: cheni unpin --all"
-                );
-            }
-        }
-
-        Commands::Update => {
-            cmd::update::run()?;
-        }
-
+        Commands::Unpin { package, all } => dispatch_unpin(package, all),
+        Commands::Update => cmd::update::run(),
         Commands::Upgrade { gc, no_clean_pins, yes } => {
-            cmd::upgrade::run(cmd::upgrade::UpgradeOptions {
-                gc,
-                no_clean_pins,
-                yes,
-            })?;
+            cmd::upgrade::run(cmd::upgrade::UpgradeOptions { gc, no_clean_pins, yes })
         }
-
-        Commands::Build => {
-            cmd::build::run()?;
-        }
-
-        Commands::Doctor => {
-            cmd::doctor::run()?;
-        }
-
-        Commands::SelfUpdate => {
-            cmd::self_update::run()?;
-        }
-
+        Commands::Build => cmd::build::run(),
+        Commands::Doctor => cmd::doctor::run(),
+        Commands::SelfUpdate => cmd::self_update::run(),
         Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes } => {
             cmd::history::run(cmd::history::HistoryOptions {
-                diff,
-                full,
-                limit,
-                delete,
-                prune,
-                keep,
-                older_than,
-                gc,
-                yes,
-            })?;
+                diff, full, limit, delete, prune, keep, older_than, gc, yes,
+            })
         }
-
-        Commands::Rollback { target } => {
-            cmd::rollback::run(target)?;
-        }
-
-        Commands::Diff { from, to } => {
-            cmd::diff::run(from, to)?;
-        }
-
-        Commands::Search { query } => {
-            cmd::search::run(&query)?;
-        }
-
-        Commands::Why { package } => {
-            cmd::why::run(&package)?;
-        }
-
-        Commands::Clean => {
-            cmd::clean::run()?;
-        }
-
-        Commands::Init => {
-            cmd::init::run()?;
-        }
-
-        Commands::Status => {
-            cmd::status::run()?;
-        }
-
-        Commands::BugReport => {
-            cmd::bug_report::run()?;
-        }
-
-        Commands::Completion { shell } => {
-            use clap::CommandFactory;
-            use std::io::Write;
-            let mut cmd = Cli::command();
-            let bin_name = cmd.get_name().to_string();
-            // Generate into a buffer first so we can handle BrokenPipe
-            // gracefully when the output is piped into `head`, etc. The
-            // upstream `generate()` would panic otherwise.
-            let mut buf = Vec::new();
-            clap_complete::generate(shell, &mut cmd, bin_name, &mut buf);
-            if let Err(e) = std::io::stdout().write_all(&buf) {
-                if e.kind() != std::io::ErrorKind::BrokenPipe {
-                    return Err(e.into());
-                }
-            }
-        }
-
-        Commands::Man => {
-            use clap::CommandFactory;
-            use std::io::Write;
-            let cmd = Cli::command();
-            let mut buf = Vec::new();
-            clap_mangen::Man::new(cmd).render(&mut buf)?;
-            if let Err(e) = std::io::stdout().write_all(&buf) {
-                if e.kind() != std::io::ErrorKind::BrokenPipe {
-                    return Err(e.into());
-                }
-            }
-        }
+        Commands::Rollback { target } => cmd::rollback::run(target),
+        Commands::Diff { from, to } => cmd::diff::run(from, to),
+        Commands::Search { query } => cmd::search::run(&query),
+        Commands::Why { package } => cmd::why::run(&package),
+        Commands::Clean => cmd::clean::run(),
+        Commands::Init => cmd::init::run(),
+        Commands::Status => cmd::status::run(),
+        Commands::BugReport => cmd::bug_report::run(),
+        Commands::Completion { shell } => emit_completion(shell),
+        Commands::Man => emit_man_page(),
     }
+}
 
-    Ok(())
+/// `cheni pin` — one of three mutually-exclusive modes plus a
+/// hand-holding bail message when the user forgot the selector.
+async fn dispatch_pin(
+    package: Option<String>,
+    category: Option<String>,
+    flakes: bool,
+    force: bool,
+) -> Result<()> {
+    if flakes {
+        cmd::pin::pin_flake_inputs().await
+    } else if let Some(name) = package {
+        cmd::pin::pin_one(&name, force).await
+    } else if let Some(cat) = category {
+        cmd::pin::pin_category(&cat, force).await
+    } else {
+        anyhow::bail!(
+            "Specify a package name, a category, or --flakes.\n\
+             Usage: cheni pin <package>\n\
+             Usage: cheni pin --category <name>     (e.g. dev, apps)\n\
+             Usage: cheni pin --flakes"
+        );
+    }
+}
+
+fn dispatch_unpin(package: Option<String>, all: bool) -> Result<()> {
+    if all {
+        cmd::pin::unpin_all()
+    } else if let Some(name) = package {
+        cmd::pin::unpin_one(&name)
+    } else {
+        anyhow::bail!(
+            "Specify a package name or --all.\n\
+             Usage: cheni unpin <package>\n\
+             Usage: cheni unpin --all"
+        );
+    }
+}
+
+fn emit_completion(shell: clap_complete::Shell) -> Result<()> {
+    use clap::CommandFactory;
+    let mut cmd = Cli::command();
+    let bin_name = cmd.get_name().to_string();
+    // Generate into a buffer first so we can handle BrokenPipe
+    // gracefully when the output is piped into `head`, etc. — the
+    // upstream `generate()` would panic otherwise.
+    let mut buf = Vec::new();
+    clap_complete::generate(shell, &mut cmd, bin_name, &mut buf);
+    write_ignoring_broken_pipe(&buf)
+}
+
+fn emit_man_page() -> Result<()> {
+    use clap::CommandFactory;
+    let cmd = Cli::command();
+    let mut buf = Vec::new();
+    clap_mangen::Man::new(cmd).render(&mut buf)?;
+    write_ignoring_broken_pipe(&buf)
+}
+
+fn write_ignoring_broken_pipe(buf: &[u8]) -> Result<()> {
+    use std::io::Write;
+    match std::io::stdout().write_all(buf) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
