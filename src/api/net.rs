@@ -12,6 +12,7 @@
 //! Valid values: a positive integer number of seconds. Bogus values
 //! fall back to the default with a debug log.
 
+use anyhow::{bail, Result};
 use std::time::Duration;
 use tracing::debug;
 
@@ -58,6 +59,48 @@ pub(crate) fn resolve_timeout(env_value: Option<&str>) -> Duration {
             Duration::from_secs(DEFAULT_TIMEOUT_SECS)
         }
     }
+}
+
+/// Maximum body size we'll accept from any HTTP response, in bytes.
+///
+/// Real Repology project pages are a few kilobytes; GitHub/GitLab
+/// commit responses are under a megabyte even for very large repos.
+/// 5 MiB is a generous ceiling that keeps a compromised or buggy
+/// upstream from turning cheni into a memory-DoS target.
+pub const MAX_BODY_BYTES: usize = 5 * 1024 * 1024;
+
+/// Reject responses whose advertised `Content-Length` already exceeds
+/// `max_bytes`. Call this *before* reading the body so a lying-large
+/// response is refused on the spot without pulling bytes into memory.
+///
+/// A missing `Content-Length` header means we cannot pre-check — the
+/// server is chunked-transfer or headerless — so we let it through
+/// and rely on `verify_body_size` after the fact.
+pub fn check_content_length(content_length: Option<u64>, max_bytes: usize) -> Result<()> {
+    if let Some(len) = content_length {
+        if len as usize > max_bytes {
+            bail!(
+                "response Content-Length ({} bytes) exceeds {} byte limit",
+                len,
+                max_bytes
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Reject a body that turned out larger than `max_bytes` after reading.
+/// Complements `check_content_length` for servers that lied about or
+/// omitted the header.
+pub fn verify_body_size(actual: usize, max_bytes: usize) -> Result<()> {
+    if actual > max_bytes {
+        bail!(
+            "response body ({} bytes) exceeds {} byte limit",
+            actual,
+            max_bytes
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

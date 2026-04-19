@@ -391,9 +391,13 @@ async fn parse_response(
     installed: Option<&str>,
 ) -> Result<PackageLookup> {
     let status = response.status();
-    let entries: Vec<RepologyEntry> = response
-        .json()
+    super::net::check_content_length(response.content_length(), super::net::MAX_BODY_BYTES)?;
+    let body = response
+        .bytes()
         .await
+        .with_context(|| format!("Reading response body for '{}' (HTTP {})", name, status))?;
+    super::net::verify_body_size(body.len(), super::net::MAX_BODY_BYTES)?;
+    let entries: Vec<RepologyEntry> = serde_json::from_slice(&body)
         .with_context(|| format!("Failed to parse response for '{}' (HTTP {})", name, status))?;
 
     trace!("Repology returned {} entries for '{}'", entries.len(), name);

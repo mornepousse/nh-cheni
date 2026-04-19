@@ -58,3 +58,34 @@ fn rejects_empty_string() {
         Duration::from_secs(DEFAULT_TIMEOUT_SECS)
     );
 }
+
+#[test]
+fn content_length_within_limit_passes() {
+    assert!(check_content_length(Some(1024), MAX_BODY_BYTES).is_ok());
+    assert!(check_content_length(Some(MAX_BODY_BYTES as u64), MAX_BODY_BYTES).is_ok());
+}
+
+#[test]
+fn content_length_over_limit_rejected() {
+    let err = check_content_length(Some(MAX_BODY_BYTES as u64 + 1), MAX_BODY_BYTES).unwrap_err();
+    assert!(err.to_string().contains("Content-Length"));
+    assert!(err.to_string().contains("exceeds"));
+}
+
+#[test]
+fn content_length_missing_passes() {
+    // No Content-Length header — we can't pre-check, defer to verify_body_size.
+    assert!(check_content_length(None, MAX_BODY_BYTES).is_ok());
+}
+
+#[test]
+fn verify_body_size_within_limit_passes() {
+    assert!(verify_body_size(0, MAX_BODY_BYTES).is_ok());
+    assert!(verify_body_size(MAX_BODY_BYTES, MAX_BODY_BYTES).is_ok());
+}
+
+#[test]
+fn verify_body_size_over_limit_rejected() {
+    let err = verify_body_size(MAX_BODY_BYTES + 1, MAX_BODY_BYTES).unwrap_err();
+    assert!(err.to_string().contains("exceeds"));
+}

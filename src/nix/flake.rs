@@ -388,7 +388,19 @@ where
         debug!("API request failed: {} → {}", url, response.status());
         return None;
     }
-    let json: serde_json::Value = response.json().ok()?;
+    if let Err(e) = crate::api::net::check_content_length(
+        response.content_length(),
+        crate::api::net::MAX_BODY_BYTES,
+    ) {
+        debug!("{}: {}", url, e);
+        return None;
+    }
+    let body = response.bytes().ok()?;
+    if let Err(e) = crate::api::net::verify_body_size(body.len(), crate::api::net::MAX_BODY_BYTES) {
+        debug!("{}: {}", url, e);
+        return None;
+    }
+    let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
     extract(&json)
 }
 
