@@ -80,3 +80,49 @@ fn duplicate_pattern_in_log_reports_once() {
     let hits = find_issues(log);
     assert_eq!(hits.len(), 1);
 }
+
+#[test]
+fn detects_unfree_package_refusal() {
+    let log = "error: Package 'steam-1.0.0.82' has an unfree license ('unfree'), \
+               refusing to evaluate.";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("unfree"));
+}
+
+#[test]
+fn detects_broken_package_error() {
+    let log = "error: Package 'discord-0.0.85' in /nix/store/.../default.nix:123 \
+               is marked as broken, refusing to evaluate.";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("broken"));
+}
+
+#[test]
+fn detects_package_collision() {
+    let log = "error: collision between `/nix/store/AAA-foo-1.0/bin/foo' \
+               and `/nix/store/BBB-bar-2.0/bin/foo'";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("collision"));
+}
+
+#[test]
+fn detects_pure_eval_absolute_path_refusal() {
+    let log = "error: access to absolute path '/home/user/secrets.nix' \
+               is forbidden in pure eval mode (use '--impure' to override)";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("pure eval mode"));
+}
+
+#[test]
+fn detects_file_not_in_git_tree() {
+    let log = "warning: Git tree '/home/user/nixos-config' is dirty\n\
+               error: path '/nix/store/...-source/modules/new.nix' \
+               does not exist in the flake";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("tracked by git"));
+}

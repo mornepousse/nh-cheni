@@ -92,6 +92,62 @@ pub const KNOWN_FINDINGS: &[Finding] = &[
         action: "Bisect the change: comment out recent `override`/`overrideAttrs` \
                  calls until evaluation succeeds, then reintroduce one at a time.",
     },
+    Finding {
+        matcher: "has an unfree license",
+        title: "unfree package refused",
+        explanation: "A package in your config ships under an unfree license \
+                      (e.g. proprietary drivers, Steam, VS Code). NixOS refuses \
+                      by default — the user must opt in explicitly.",
+        action: "Add `nixpkgs.config.allowUnfree = true;` to your NixOS config. \
+                 For a one-shot on the CLI, `NIXPKGS_ALLOW_UNFREE=1` plus `--impure` \
+                 on `nix build`/`nix shell` lets a single invocation through without \
+                 touching the config.",
+    },
+    Finding {
+        matcher: "is marked as broken",
+        title: "broken package",
+        explanation: "Someone in nixpkgs flagged this package as not-currently-building \
+                      or known-failing. The marker is usually recent and documented \
+                      in the GitHub issue tracker.",
+        action: "First: remove the package from your config and try without it. \
+                 If you genuinely need it, `nixpkgs.config.allowBroken = true;` will \
+                 force-build (often fails), or `override { meta.broken = false; }` \
+                 opts out at the overlay level. Check the nixpkgs issue tracker for \
+                 the WHY — fixes tend to land fast on popular packages.",
+    },
+    Finding {
+        matcher: "collision between",
+        title: "package collision (two packages provide the same file)",
+        explanation: "`environment.systemPackages` has two packages that both install \
+                      the same file (typically a `bin/` executable or a man page). \
+                      Nix refuses to pick one for you — activation would be ambiguous.",
+        action: "Pick one. If you need both, set a priority: \
+                 `(lib.hiPrio pkgs.X)` in the preferred entry, or `(lib.lowPrio pkgs.Y)` \
+                 on the other. Runs cleanly once one path is unambiguously winning.",
+    },
+    Finding {
+        matcher: "is forbidden in pure eval mode",
+        title: "absolute path access in pure eval mode",
+        explanation: "Flakes evaluate in pure mode: absolute paths like `/home/user/foo` \
+                      are refused because they're not reproducible across machines. \
+                      Usually a `path:/...` flake input, an `import /abs/path`, or \
+                      a secret-loading trick meant for impure eval.",
+        action: "Replace the absolute path with a relative one (`./foo`) or add the \
+                 file as a proper flake input. For a deliberate one-shot, re-run \
+                 the command with `--impure` — but avoid making that the default, \
+                 you lose reproducibility guarantees.",
+    },
+    Finding {
+        matcher: "does not exist in the flake",
+        title: "file referenced but not tracked by git",
+        explanation: "Flakes only see files that git knows about. A new `.nix` file \
+                      that hasn't been `git add`-ed is invisible to the flake source \
+                      copied into the Nix store, so `imports = [ ./foo.nix ];` fails \
+                      with `does not exist in the flake`.",
+        action: "`git add <file>` (you can `git commit` later — staging is enough for \
+                 the flake to see it). A trailing `warning: Git tree '...' is dirty` \
+                 in the same output is the usual smoking gun.",
+    },
 ];
 
 /// Pure core: scan `log` for every pattern and return the ones that
