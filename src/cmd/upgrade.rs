@@ -304,8 +304,7 @@ fn print_section_from_changes(
     glyph_color: Color,
 ) {
     // Split into real packages + system artefacts. Packages get the
-    // full one-line treatment; artefacts get collapsed to a single
-    // tally at the bottom.
+    // full one-line treatment; artefacts get collapsed.
     let (packages, artefacts): (Vec<_>, Vec<_>) =
         changes.iter().partition(|c| !is_system_artefact(c));
 
@@ -314,24 +313,27 @@ fn print_section_from_changes(
         Color::Yellow => glyph.yellow().to_string(),
     };
 
-    // Header accounts for both buckets so the count lines up with the
-    // dry-run's total, but it distinguishes them so the user sees the
-    // real package count at a glance.
+    // Case 1: artefacts only. Nothing actionable — collapse the whole
+    // section to one line so it doesn't dominate the preview.
+    if packages.is_empty() && !artefacts.is_empty() {
+        println!(
+            "  {} {} system / home-manager artefact(s) {} ({})",
+            glyph_colored,
+            artefacts.len().to_string().bold(),
+            label,
+            artefact_sample(&artefacts).dimmed()
+        );
+        return;
+    }
+
+    // Case 2: packages (with or without a tail of artefacts).
     let header = aggregate_header(&packages);
-    let pkg_count = packages.len();
-    let art_count = artefacts.len();
-    let count_phrase = match (pkg_count, art_count) {
-        (0, n) => format!("{} system artefact(s)", n),
-        (p, 0) => format!("{} package(s)", p),
-        (p, n) => format!("{} package(s) + {} system artefact(s)", p, n),
-    };
-    let head = format!("  {} {} {}", glyph_colored, count_phrase, label);
+    let head = format!("  {} {} package(s) {}", glyph_colored, packages.len(), label);
     if header.is_empty() {
         println!("{}:", head);
     } else {
         println!("{} ({}):", head, header.dimmed());
     }
-
     for change in packages.iter().take(display_limit) {
         println!("    {}", format_change(change));
     }
@@ -342,27 +344,29 @@ fn print_section_from_changes(
             packages.len() - display_limit
         );
     }
-
     if !artefacts.is_empty() {
-        // Preview a handful of artefact names so the user has a hint
-        // about what's being rebuilt, without the whole wall of
-        // `hm_.manpath` / `user-environment` / etc.
-        let sample_names: Vec<&str> = artefacts
-            .iter()
-            .take(3)
-            .map(|c| if c.name.is_empty() { c.new.as_str() } else { c.name.as_str() })
-            .collect();
-        let sample = if artefacts.len() > 3 {
-            format!("{}, …", sample_names.join(", "))
-        } else {
-            sample_names.join(", ")
-        };
         println!(
-            "    {} {} system / home-manager artefact(s) ({})",
-            "+".dimmed(),
-            artefacts.len().to_string().bold(),
-            sample.dimmed()
+            "    {} +{} system artefact(s) ({})",
+            "…".dimmed(),
+            artefacts.len(),
+            artefact_sample(&artefacts).dimmed()
         );
+    }
+}
+
+/// Pick up to 3 names from the artefact bucket for a curiosity
+/// preview. Entries with an empty `name` (unparseable) fall back to
+/// the raw `new` string.
+fn artefact_sample(artefacts: &[&PackageChange]) -> String {
+    let names: Vec<&str> = artefacts
+        .iter()
+        .take(3)
+        .map(|c| if c.name.is_empty() { c.new.as_str() } else { c.name.as_str() })
+        .collect();
+    if artefacts.len() > 3 {
+        format!("{}, …", names.join(", "))
+    } else {
+        names.join(", ")
     }
 }
 
