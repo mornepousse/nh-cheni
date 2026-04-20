@@ -261,6 +261,20 @@ fn validate_entry(entry: &FreezeEntry) -> Result<()> {
             anyhow::bail!("Freeze {} is suspiciously long ({} chars)", field, value.len());
         }
     }
+
+    // Major constraint: no software has a major version past ~9999 in
+    // practice (kernels, browsers, etc. all use 2-3 digits). A value
+    // past this range is almost certainly a typo or a payload edit —
+    // reject rather than let it round-trip quietly through the JSON.
+    if let Some(n) = entry.major_constraint {
+        if n > 9999 {
+            anyhow::bail!(
+                "Freeze majorConstraint is implausibly large ({}). \
+                 Valid majors are in 0..=9999.",
+                n
+            );
+        }
+    }
     Ok(())
 }
 

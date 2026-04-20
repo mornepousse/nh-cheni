@@ -556,6 +556,21 @@ pub fn prefetch_nixpkgs_rev(rev: &str) -> Result<String> {
     Ok(hash.to_string())
 }
 
+/// Build the Nix `system` string for the current host — `x86_64-linux`,
+/// `aarch64-linux`, `x86_64-darwin`, `aarch64-darwin`. Falls back to
+/// `x86_64-linux` for architectures Nix doesn't officially target;
+/// the caller will then see an eval error naming the missing package
+/// for the wrong arch and can move on.
+fn target_system() -> &'static str {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("x86_64", "linux") => "x86_64-linux",
+        ("aarch64", "linux") => "aarch64-linux",
+        ("x86_64", "macos") => "x86_64-darwin",
+        ("aarch64", "macos") => "aarch64-darwin",
+        _ => "x86_64-linux",
+    }
+}
+
 /// Eval `nixpkgs` pinned at `rev` + `nar_hash` and return the `.version`
 /// attribute of a named package. Used by the freeze-refresh pass to
 /// learn "what version of kicad does today's nixpkgs actually ship?"
@@ -591,19 +606,36 @@ pub fn query_pkg_version_at_rev(rev: &str, nar_hash: &str, pkg_name: &str) -> Op
         return None;
     }
 
+    // Resolve the target system explicitly instead of asking Nix for
+    // `builtins.currentSystem` — that would force `--impure`, which
+    // unlocks env reads and absolute-path access we don't want during
+    // a narHash-pinned eval. `fetchTree { rev; narHash }` is already
+    // content-addressed, so the eval stays pure.
+    let system = target_system();
+    // Defense in depth: `target_system` returns a charset we control,
+    // but we re-validate here anyway in case someone routes a
+    // different provider through this fn later.
+    if !system
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+
     let expr = format!(
         "let pkgs = import (builtins.fetchTree {{ \
 type = \"github\"; owner = \"NixOS\"; repo = \"nixpkgs\"; \
 rev = \"{rev}\"; narHash = \"{nar_hash}\"; \
-}}) {{ system = builtins.currentSystem; config.allowUnfree = true; }}; \
+}}) {{ system = \"{system}\"; config.allowUnfree = true; }}; \
 in pkgs.{pkg_name}.version",
         rev = rev,
         nar_hash = nar_hash,
+        system = system,
         pkg_name = pkg_name
     );
 
     let output = std::process::Command::new("nix")
-        .args(["eval", "--impure", "--raw", "--expr", &expr])
+        .args(["eval", "--raw", "--expr", &expr])
         .output()
         .ok()?;
     if !output.status.success() {
