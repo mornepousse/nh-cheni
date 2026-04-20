@@ -4,6 +4,7 @@
 //! human-readable messages with hints for fixing them.
 
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -29,6 +30,7 @@ struct ParsedError {
 /// Wraps `nh os switch` and, if it fails, parses the error output
 /// to provide human-readable error messages and fix suggestions.
 pub fn run() -> Result<()> {
+    let started = Instant::now();
     let nix_config = config::detect()?;
     let config_path = nix_config
         .flake_dir
@@ -41,7 +43,11 @@ pub fn run() -> Result<()> {
     let (status, captured_stderr) = run_nh_capturing_stderr(config_path)?;
 
     if status.success() {
-        println!("\n{} Build successful!", "✓".green());
+        println!(
+            "\n{} Build successful in {}.",
+            "✓".green().bold(),
+            format_elapsed(started.elapsed()).dimmed()
+        );
         return Ok(());
     }
 
@@ -50,13 +56,28 @@ pub fn run() -> Result<()> {
 
     if errors.is_empty() {
         // Couldn't parse the error — show raw output as a fallback.
-        println!("\n{} Build failed.\n", "✗".red());
+        println!(
+            "\n{} Build failed after {}.\n",
+            "✗".red(),
+            format_elapsed(started.elapsed()).dimmed()
+        );
         eprintln!("{}", captured_stderr);
         return Ok(());
     }
 
-    print_parsed_errors(&errors);
+    print_parsed_errors(&errors, started.elapsed());
     Ok(())
+}
+
+/// Format `Duration` as `MmSs` or `Ss`. Matches the helper used by
+/// `cheni upgrade` / `update` / `self-update`.
+fn format_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
 }
 
 /// Spawn `nh os switch <flake>`, stream stderr to the user line-by-line
@@ -107,10 +128,11 @@ fn run_nh_capturing_stderr(
 }
 
 /// Render the parsed error list as the human-readable failure summary.
-fn print_parsed_errors(errors: &[ParsedError]) {
+fn print_parsed_errors(errors: &[ParsedError], elapsed: std::time::Duration) {
     println!(
-        "\n{} Build failed with {} error(s):\n",
+        "\n{} Build failed after {} with {} error(s):\n",
         "✗".red(),
+        format_elapsed(elapsed).dimmed(),
         errors.len()
     );
     for (i, error) in errors.iter().enumerate() {
