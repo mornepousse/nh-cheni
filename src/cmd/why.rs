@@ -93,20 +93,67 @@ fn group_by_category<'a>(matches: &'a [Match], flake_dir: &Path) -> GroupedMatch
 
 fn print_grouped_matches(by_category: &GroupedMatches<'_>, flake_dir: &Path, package: &str) {
     for (category, files) in by_category {
-        println!("  {}", category.bold().cyan());
-        for (file, file_matches) in files {
+        println!("{}", category.bold().cyan());
+        let file_entries: Vec<_> = files.iter().collect();
+        for (fi, (file, file_matches)) in file_entries.iter().enumerate() {
+            let last_file = fi == file_entries.len() - 1;
+            let file_prefix = if last_file { "└── " } else { "├── " };
+            let child_prefix = if last_file { "    " } else { "│   " };
             let relative = file.strip_prefix(flake_dir).unwrap_or(file.as_path());
-            println!("    {}", relative.display().to_string().bold());
-            for m in file_matches {
+            println!("{}{}", file_prefix, relative.display().to_string().bold());
+            for (mi, m) in file_matches.iter().enumerate() {
+                let last_match = mi == file_matches.len() - 1;
+                let match_glyph = if last_match { "└── " } else { "├── " };
+                let tag = classify_match(&m.line);
+                let tag_display = tag
+                    .map(|t| format!(" [{}]", t).dimmed().to_string())
+                    .unwrap_or_default();
                 println!(
-                    "      {} {}",
+                    "{}{}{}{} {}",
+                    child_prefix,
+                    match_glyph,
                     format!("{:>3}:", m.line_num).dimmed(),
+                    tag_display,
                     highlight(&m.line, package),
                 );
             }
         }
         println!();
     }
+}
+
+/// Lightweight role classification for a matched line.
+///
+/// Recognises the four shapes that cover almost every "where did this
+/// come from?" question in practice:
+/// - `enabled` / `disabled` — NixOS option toggles (`.enable = true|false`)
+/// - `system` — added to `environment.systemPackages`
+/// - `home` — added to home-manager's `home.packages`
+///
+/// **Limitation**: the classifier operates on a single line. When the
+/// `systemPackages` / `home.packages` declaration opens a multi-line
+/// `with pkgs; [ ... ]` list, only the line holding the keyword gets
+/// tagged — bare package names inside the list come back with no tag.
+/// A multi-line-aware version would need a small stack-based
+/// pre-pass; deferred until someone actually asks for it.
+///
+/// Returning `None` is a feature: it's honest when the role is
+/// ambiguous rather than guessing.
+pub(crate) fn classify_match(line: &str) -> Option<&'static str> {
+    let l = line;
+    if l.contains(".enable = true") || l.contains(".enable=true") {
+        return Some("enabled");
+    }
+    if l.contains(".enable = false") || l.contains(".enable=false") {
+        return Some("disabled");
+    }
+    if l.contains("environment.systemPackages") || l.contains("systemPackages") {
+        return Some("system");
+    }
+    if l.contains("home.packages") {
+        return Some("home");
+    }
+    None
 }
 
 fn print_summary_footer(by_category: &GroupedMatches<'_>, match_count: usize) {
@@ -180,6 +227,10 @@ struct Match {
     line_num: usize,
     line: String,
 }
+
+#[cfg(test)]
+#[path = "tests/why.rs"]
+mod tests;
 
 /// Recursively collect all .nix files in a directory.
 fn collect_nix_files(dir: &Path, out: &mut Vec<PathBuf>) {
