@@ -289,6 +289,9 @@ async fn fetch_updates_concurrently(
     scan: &PackagesToCheck,
     json: bool,
 ) -> Result<(Vec<repology::PackageLookup>, Vec<flake::FlakeInput>)> {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize};
+
     // Pass installed version as a hint so the matcher can disambiguate
     // Repology projects with multiple nix entries (e.g. exo / xfce4-exo,
     // libsForQt5.breeze-icons / kdePackages.breeze-icons).
@@ -298,17 +301,34 @@ async fn fetch_updates_concurrently(
         .map(|(n, v)| (n.clone(), Some(v.clone())))
         .collect();
 
-    let spinner = start_spinner(!json);
+    let total_packages = names_with_installed.len();
+    let resolved = Arc::new(AtomicUsize::new(0));
+    let flake_done = Arc::new(AtomicBool::new(false));
+
+    let spinner = start_spinner(
+        !json,
+        resolved.clone(),
+        total_packages,
+        flake_done.clone(),
+    );
+
     let flake_dir = nix_config.flake_dir.clone();
+    let flake_done_for_task = flake_done.clone();
     let flake_handle = tokio::task::spawn_blocking(move || {
         let Ok(mut inputs) = flake::read_flake_inputs(&flake_dir) else {
+            flake_done_for_task.store(true, std::sync::atomic::Ordering::Relaxed);
             return Vec::new();
         };
         flake::check_flake_updates(&mut inputs);
+        flake_done_for_task.store(true, std::sync::atomic::Ordering::Relaxed);
         inputs
     });
 
-    let lookups = repology::lookup_versions(&names_with_installed).await?;
+    let lookups = repology::lookup_versions_with_progress(
+        &names_with_installed,
+        Some(resolved.clone()),
+    )
+    .await?;
     let flake_inputs = flake_handle.await.unwrap_or_default();
     spinner.stop();
     println!();
@@ -688,8 +708,20 @@ impl Spinner {
     }
 }
 
-fn start_spinner(enabled: bool) -> Spinner {
-    use std::io::IsTerminal;
+/// Start a live progress indicator reading from two signals:
+/// - `resolved` — number of Repology packages resolved (cache hit or
+///   API response). `total` is the denominator.
+/// - `flake_done` — flipped to true once the flake-input probe finishes.
+///
+/// Renders one line that updates in place, so the output stays quiet
+/// instead of scrolling.
+fn start_spinner(
+    enabled: bool,
+    resolved: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    total: usize,
+    flake_done: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Spinner {
+    use std::io::{IsTerminal, Write};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
     let done = Arc::new(AtomicBool::new(false));
@@ -701,12 +733,35 @@ fn start_spinner(enabled: bool) -> Spinner {
         }
         let frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
         let mut i = 0;
+        let mut last_line_len = 0;
         while !done_clone.load(Ordering::Relaxed) {
-            eprint!("\r  {} Querying remote APIs...", frames[i % frames.len()]);
+            let repology = resolved.load(Ordering::Relaxed);
+            let flake = if flake_done.load(Ordering::Relaxed) { "✓" } else { "…" };
+            let line = format!(
+                "  {} Repology {}/{}  ·  flake inputs {}",
+                frames[i % frames.len()],
+                repology.min(total),
+                total,
+                flake,
+            );
+            // Overwrite to the widest line seen so far so shrinking
+            // text (e.g. count goes from "12" to "120" and back to "12"
+            // across wrapped terminal edges) leaves no ghost characters.
+            let pad = if line.len() < last_line_len {
+                last_line_len - line.len()
+            } else {
+                0
+            };
+            eprint!("\r{}{}", line, " ".repeat(pad));
+            let _ = std::io::stderr().flush();
+            last_line_len = last_line_len.max(line.len());
             std::thread::sleep(std::time::Duration::from_millis(100));
             i += 1;
         }
-        eprint!("\r                              \r");
+        // Clear the indicator line so the report that follows starts at
+        // column 0 without any leftover progress text.
+        eprint!("\r{}\r", " ".repeat(last_line_len));
+        let _ = std::io::stderr().flush();
     });
     Spinner { done, handle }
 }

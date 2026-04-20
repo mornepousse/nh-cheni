@@ -131,8 +131,30 @@ struct RepologyEntry {
 pub async fn lookup_versions(
     packages: &[(String, Option<String>)],
 ) -> Result<Vec<PackageLookup>> {
+    lookup_versions_with_progress(packages, None).await
+}
+
+/// Same as [`lookup_versions`], but lets the caller observe live
+/// progress via an `AtomicUsize` counter. The counter is bumped once
+/// for each cache hit (in bulk, as soon as the cache is loaded) and
+/// once more each time a per-package API call resolves. The caller is
+/// responsible for knowing the total (= `packages.len()`) and for
+/// reading the counter from a separate thread to drive the UI.
+pub async fn lookup_versions_with_progress(
+    packages: &[(String, Option<String>)],
+    resolved: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
+) -> Result<Vec<PackageLookup>> {
+    use std::sync::atomic::Ordering;
     let cache = cache::load();
     let (mut results, to_fetch) = split_cache_hits(packages, &cache);
+
+    // Cache hits resolve immediately — surface them to the progress
+    // indicator so the counter doesn't sit at 0 during a fully-cached
+    // run.
+    if let Some(ref r) = resolved {
+        r.fetch_add(results.len(), Ordering::Relaxed);
+    }
+
     if to_fetch.is_empty() {
         debug!("All {} packages found in cache", packages.len());
         return Ok(results);
@@ -141,7 +163,7 @@ pub async fn lookup_versions(
 
     let client = build_http_client()?;
     let handles = spawn_lookups(&client, to_fetch);
-    let (fresh, updated_cache) = collect_and_merge(handles, &cache).await;
+    let (fresh, updated_cache) = collect_and_merge(handles, &cache, resolved).await;
     results.extend(fresh);
     cache::save(&updated_cache);
     Ok(results)
@@ -220,7 +242,9 @@ fn spawn_lookups(
 async fn collect_and_merge(
     handles: Vec<tokio::task::JoinHandle<Result<PackageLookup>>>,
     prior: &cache::Cache,
+    resolved: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
 ) -> (Vec<PackageLookup>, cache::Cache) {
+    use std::sync::atomic::Ordering;
     let mut fresh = Vec::new();
     let mut new_cache = cache::new_with_timestamp();
     for (name, entry) in &prior.entries {
@@ -243,6 +267,13 @@ async fn collect_and_merge(
             // Log at debug level — 429 retries are expected and noisy at WARN.
             Ok(Err(e)) => debug!("API error: {}", e),
             Err(e) => debug!("Task error: {}", e),
+        }
+        // Count every handle (success, API error, task error) — from
+        // the user's point of view the item has been "processed" and
+        // the indicator should keep moving even when the API is
+        // flaking.
+        if let Some(ref r) = resolved {
+            r.fetch_add(1, Ordering::Relaxed);
         }
     }
     (fresh, new_cache)
