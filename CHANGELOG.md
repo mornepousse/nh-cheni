@@ -7,6 +7,42 @@ semver.
 
 ## Unreleased
 
+## [0.4.1] — 2026-04-20
+
+UX polish across every long-running command. No breaking changes.
+
+### Added
+- `cheni check` shows a real progress indicator instead of a static
+  spinner: `Repology 12/45  ·  flake inputs …` updates in place,
+  driven by an `AtomicUsize` counter that Repology bumps on every
+  cache hit or API resolution.
+- Every long-running command now reports elapsed time:
+  `cheni build`, `cheni update`, `cheni upgrade`, `cheni self-update`,
+  `cheni rollback`.
+- **No-op warnings before the confirmation prompt** in `cheni upgrade`,
+  `cheni update`, and `cheni self-update`. When the tool can predict
+  that the rebuild will be pure re-eval noise (flake inputs
+  unchanged + either dirty git tree or already-applied pins), it
+  says so above the `[Y/n]` with an actionable opt-out.
+
+### Changed
+- `cheni upgrade` preview collapses home-manager / nixos-system
+  artefacts (options.json, hm_.manpath, user-environment, …) into
+  a single dimmed summary line instead of listing them individually.
+  Real packages stay one line each.
+- Final summaries are truthful: `19 packages changed (19 new)` is
+  gone. Artefact-only rebuilds now say `no user-facing package
+  changes (N system artefacts rebuilt)` or `nothing changed`, with
+  a one-line explanation of *why* (dirty tree / home-manager
+  re-eval).
+- Step numbering unified across `upgrade` / `update` / `self-update`:
+  no more duplicate `[3/4] Rebuilding system` followed by `[2/4]
+  Rebuilding system...` from an inline label that wasn't removed
+  when the readability overhaul landed.
+- `cheni rollback` uses `util::confirm` instead of calling
+  `dialoguer::Confirm` directly — only remaining direct-dialoguer
+  caller, cleanup for consistency.
+
 ## [0.4.0] — 2026-04-20
 
 Desktop-user feature bump. Notable:
