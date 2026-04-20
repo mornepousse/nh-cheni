@@ -4,13 +4,22 @@
 //! obsolete pins, and optionally garbage-collect old generations.
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use colored::Colorize;
 use tracing::debug;
 
 use crate::nix::{config, pins};
+
+/// One input update parsed out of `nix flake update`'s chatty stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InputUpdate {
+    name: String,
+    old_date: String,
+    new_date: String,
+}
 
 /// Options for `cheni upgrade`.
 pub struct UpgradeOptions {
@@ -25,53 +34,181 @@ pub struct UpgradeOptions {
 
 /// Run `cheni upgrade`.
 ///
-/// Full system upgrade:
-/// 1. Update all flake inputs (`nix flake update`)
-/// 2. Rebuild the system (`nh os switch`)
-/// 3. Clean obsolete pins (`cheni clean` logic)
-/// 4. (optional, with --gc) Garbage-collect old generations
+/// Full system upgrade, broken into numbered steps:
+/// 1. Update flake inputs + refresh major-constrained freezes
+/// 2. Preview changes
+/// 3. Rebuild the system
+/// 4. Clean obsolete pins
+/// 5. (optional, with --gc) Garbage-collect old generations
 pub fn run(opts: UpgradeOptions) -> Result<()> {
+    let started = Instant::now();
     let nix_config = config::detect()?;
     let config_path = nix_config.flake_dir.to_str()
         .context("Config path is not valid UTF-8")?;
+    let total_steps = if opts.gc { 5 } else { 4 };
 
     println!("{}\n", "=== cheni upgrade ===".bold());
 
+    print_step(1, total_steps, "Updating flake inputs");
     update_flake_inputs(&nix_config.flake_dir)?;
     refresh_constrained_freezes_step(&nix_config.flake_dir);
+    print_separator();
 
-    if !opts.yes && !preview_and_confirm(config_path, &nix_config.hostname)? {
-        return Ok(());
-    }
+    print_step(2, total_steps, "Previewing changes");
+    let stats = match preview_and_confirm(config_path, &nix_config.hostname, opts.yes)? {
+        Some(s) => s,
+        None => return Ok(()),
+    };
+    print_separator();
 
+    print_step(3, total_steps, "Rebuilding system");
     rebuild_system(config_path)?;
+    print_separator();
+
+    print_step(4, total_steps, "Checking obsolete pins");
     run_pin_cleanup_step(&nix_config.flake_dir, opts.no_clean_pins)?;
+
     if opts.gc {
+        print_separator();
+        print_step(5, total_steps, "Collecting garbage (> 30 days)");
         run_gc_step(opts.yes)?;
     }
 
-    println!("\n{} Upgrade complete!", "✓".green());
+    print_separator();
+    print_final_summary(started.elapsed(), &stats);
     if !opts.gc {
         println!(
             "{}",
-            "Old generations kept for rollback. Use --gc to reclaim disk space later.".dimmed()
+            "  Old generations kept for rollback. Use --gc to reclaim disk space later.".dimmed()
         );
     }
     Ok(())
 }
 
-/// Step 1: refresh every flake input. Bails if `nix flake update` fails.
+/// Render `[N/total] Title` in a consistent shape across the run.
+fn print_step(n: usize, total: usize, title: &str) {
+    println!("{} {}", format!("[{}/{}]", n, total).dimmed(), title.bold());
+}
+
+/// Horizontal rule between steps. Keeps the output skimmable — each
+/// step becomes a visually distinct block rather than running into
+/// its neighbours.
+fn print_separator() {
+    println!("{}", "───────────────────────────────────────────".dimmed());
+}
+
+/// Step 1: refresh every flake input. Bails if `nix flake update`
+/// fails. Captures the stderr so we can print a clean summary of
+/// which inputs bumped to which date, instead of leaking the raw
+/// multiline URL/narHash chatter nix emits by default.
 fn update_flake_inputs(flake_dir: &Path) -> Result<()> {
-    println!("{} Updating all flake inputs...", "[1/4]".dimmed());
-    let status = Command::new("nix")
+    let output = Command::new("nix")
         .args(["flake", "update"])
         .current_dir(flake_dir)
-        .status()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
         .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
-    if !status.success() {
+
+    if !output.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
         anyhow::bail!("nix flake update failed");
     }
+
+    // nix flake update prints its narrative on stderr.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let updates = parse_flake_update_events(&stderr);
+    print_flake_update_summary(&updates);
     Ok(())
+}
+
+/// Parse the `• Updated input 'X':` blocks out of `nix flake update`'s
+/// stderr. Returns one `InputUpdate` per input that actually bumped.
+///
+/// The stanza is:
+/// ```text
+/// • Updated input 'NAME':
+///     'url?…' (YYYY-MM-DD)
+///   → 'url?…' (YYYY-MM-DD)
+/// ```
+fn parse_flake_update_events(stderr: &str) -> Vec<InputUpdate> {
+    let mut out = Vec::new();
+    let lines: Vec<&str> = stderr.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        if let Some(name) = extract_updated_input_name(line) {
+            // Next two lines carry the old / new locator.
+            let old_date = lines.get(i + 1).and_then(|l| extract_parenthesised_date(l));
+            let new_date = lines.get(i + 2).and_then(|l| extract_parenthesised_date(l));
+            if let (Some(old_date), Some(new_date)) = (old_date, new_date) {
+                out.push(InputUpdate {
+                    name,
+                    old_date,
+                    new_date,
+                });
+                i += 3;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// `• Updated input 'cheni':` → `Some("cheni")`.
+fn extract_updated_input_name(line: &str) -> Option<String> {
+    let trimmed = line.trim_start();
+    let rest = trimmed.strip_prefix("• Updated input '")?;
+    let end = rest.find('\'')?;
+    Some(rest[..end].to_string())
+}
+
+/// Extract `YYYY-MM-DD` from a locator line like
+/// `    'github:...?narHash=...' (2026-04-20)`.
+fn extract_parenthesised_date(line: &str) -> Option<String> {
+    let open = line.rfind('(')?;
+    let close = line[open + 1..].find(')')?;
+    let body = &line[open + 1..open + 1 + close];
+    // Shape check: YYYY-MM-DD.
+    if body.len() == 10
+        && body.as_bytes()[4] == b'-'
+        && body.as_bytes()[7] == b'-'
+        && body.chars().enumerate().all(|(i, c)| {
+            if i == 4 || i == 7 {
+                c == '-'
+            } else {
+                c.is_ascii_digit()
+            }
+        })
+    {
+        Some(body.to_string())
+    } else {
+        None
+    }
+}
+
+/// Render the flake-update outcome as a compact table. Silent when
+/// nothing bumped (the separator + "already up to date" header is
+/// enough).
+fn print_flake_update_summary(updates: &[InputUpdate]) {
+    if updates.is_empty() {
+        println!("  {}", "Everything already up to date.".dimmed());
+        return;
+    }
+    println!(
+        "  {} {} input(s) updated:",
+        "✓".green(),
+        updates.len().to_string().bold()
+    );
+    for u in updates {
+        println!(
+            "    {:<20} {} → {}",
+            u.name.bold(),
+            u.old_date.dimmed(),
+            u.new_date
+        );
+    }
 }
 
 /// Step 1b: refresh any freezes that carry a `--major N` constraint.
@@ -93,22 +230,41 @@ fn refresh_constrained_freezes_step(flake_dir: &Path) {
     }
 }
 
-/// Step 1.5: evaluate pending changes via `nix build --dry-run`, show a
+/// Aggregated counts from the dry-run preview, reused by the final
+/// summary. `None` means "no changes, upgrade short-circuited".
+#[derive(Debug, Clone, Default)]
+pub struct UpgradeStats {
+    pub major: usize,
+    pub minor: usize,
+    pub patch: usize,
+    pub new: usize,
+}
+
+impl UpgradeStats {
+    fn total(&self) -> usize {
+        self.major + self.minor + self.patch + self.new
+    }
+}
+
+/// Step 2: evaluate pending changes via `nix build --dry-run`, show a
 /// human summary, then ask for confirmation.
 ///
-/// Returns Ok(true) if the caller should proceed with the rebuild,
-/// Ok(false) if the user either cancelled or there's nothing to do.
-fn preview_and_confirm(config_path: &str, hostname: &str) -> Result<bool> {
-    println!("\n{} Evaluating changes (no download)...\n", "[preview]".dimmed());
-
+/// Returns `Ok(Some(stats))` when the caller should proceed with the
+/// rebuild, `Ok(None)` when the user cancelled or there's nothing
+/// to do. `yes` skips the prompt for non-interactive use.
+fn preview_and_confirm(
+    config_path: &str,
+    hostname: &str,
+    yes: bool,
+) -> Result<Option<UpgradeStats>> {
     let flake_ref = format!(
         "{}#nixosConfigurations.{}.config.system.build.toplevel",
         config_path, hostname
     );
     let preview_output = Command::new("nix")
         .args(["build", &flake_ref, "--dry-run", "--no-link", "--print-build-logs"])
-        .stderr(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
         .output()
         .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
@@ -123,34 +279,50 @@ fn preview_and_confirm(config_path: &str, hostname: &str) -> Result<bool> {
 
     if to_build.is_empty() && to_fetch.is_empty() {
         println!("  {}", "Nothing to build or download — already up to date.".green());
-        println!("\n{}", "No changes to apply.".dimmed());
-        return Ok(false);
+        return Ok(None);
     }
 
-    print_preview_lists(&to_build, &to_fetch);
+    let stats = print_preview_lists(&to_build, &to_fetch);
 
+    if yes {
+        return Ok(Some(stats));
+    }
     println!();
     if !confirm("Download and apply these changes?")? {
-        println!("\n{}", "Upgrade cancelled. Flake is already updated.".yellow());
+        println!("\n{}", "  Upgrade cancelled. Flake is already updated.".yellow());
         println!("  Use '{}' to rebuild later.", "cheni upgrade --yes".bold());
-        return Ok(false);
+        return Ok(None);
     }
-    Ok(true)
+    Ok(Some(stats))
 }
 
-/// Print the "to fetch" and "to build" lists, enriched with the
-/// currently-installed version (so a user sees `firefox 149.0.1 →
-/// 149.0.2` instead of the bare `firefox-149.0.2` store name), a
-/// short classification tag (`major`, `minor`, `patch`, `new`), and
-/// an aggregate tally at the top of each section.
-fn print_preview_lists(to_build: &[String], to_fetch: &[String]) {
-    let installed = crate::nix::store::read_installed_packages().unwrap_or_default();
-    if !to_fetch.is_empty() {
-        print_section("↓", "to download", to_fetch, &installed, 20, Color::Cyan);
+fn print_section_from_changes(
+    glyph: &str,
+    label: &str,
+    changes: &[PackageChange],
+    display_limit: usize,
+    glyph_color: Color,
+) {
+    let header = aggregate_header(changes);
+    let glyph_colored = match glyph_color {
+        Color::Cyan => glyph.cyan().to_string(),
+        Color::Yellow => glyph.yellow().to_string(),
+    };
+    let head = format!("  {} {} package(s) {}", glyph_colored, changes.len(), label);
+    if header.is_empty() {
+        println!("{}:", head);
+    } else {
+        println!("{} ({}):", head, header.dimmed());
     }
-    if !to_build.is_empty() {
-        println!();
-        print_section("⚒", "to build locally", to_build, &installed, 10, Color::Yellow);
+    for change in changes.iter().take(display_limit) {
+        println!("    {}", format_change(change));
+    }
+    if changes.len() > display_limit {
+        println!(
+            "    {} and {} more...",
+            "...".dimmed(),
+            changes.len() - display_limit
+        );
     }
 }
 
@@ -169,35 +341,100 @@ struct PackageChange {
     diff: crate::version::compare::VersionDiff,
 }
 
-fn print_section(
-    glyph: &str,
-    label: &str,
-    entries: &[String],
-    installed: &[crate::nix::store::StorePackage],
-    display_limit: usize,
-    glyph_color: Color,
-) {
-    let changes = build_changes(entries, installed);
-    let header = aggregate_header(&changes);
-    let head = format!("  {} {} package(s) {}", glyph, entries.len(), label);
-    let head = match glyph_color {
-        Color::Cyan => head.replacen(glyph, &glyph.cyan().to_string(), 1),
-        Color::Yellow => head.replacen(glyph, &glyph.yellow().to_string(), 1),
-    };
-    if header.is_empty() {
-        println!("{}:", head);
+/// Top-level renderer of the "to fetch" + "to build" blocks. Builds
+/// `PackageChange` lists once (so the downstream `UpgradeStats`
+/// aggregates match what the user saw) and emits them through
+/// `print_section_from_changes`.
+fn print_preview_lists(to_build: &[String], to_fetch: &[String]) -> UpgradeStats {
+    let installed = crate::nix::store::read_installed_packages().unwrap_or_default();
+    let fetch_changes = build_changes(to_fetch, &installed);
+    let build_changes_vec = build_changes(to_build, &installed);
+
+    if !fetch_changes.is_empty() {
+        print_section_from_changes("↓", "to download", &fetch_changes, 20, Color::Cyan);
+    }
+    if !build_changes_vec.is_empty() {
+        println!();
+        print_section_from_changes("⚒", "to build locally", &build_changes_vec, 10, Color::Yellow);
+    }
+
+    aggregate_stats(&fetch_changes, &build_changes_vec)
+}
+
+/// Collapse fetch+build changes into `UpgradeStats` for the final
+/// summary line. Each package is counted once with its version-diff
+/// classification.
+fn aggregate_stats(
+    fetch: &[PackageChange],
+    build: &[PackageChange],
+) -> UpgradeStats {
+    use crate::version::compare::VersionDiff;
+    let mut stats = UpgradeStats::default();
+    for c in fetch.iter().chain(build.iter()) {
+        if c.old.is_none() {
+            stats.new += 1;
+            continue;
+        }
+        match c.diff {
+            VersionDiff::Major => stats.major += 1,
+            VersionDiff::Minor => stats.minor += 1,
+            VersionDiff::Equal | VersionDiff::Newer => stats.patch += 1,
+        }
+    }
+    stats
+}
+
+/// Render the final "✓ Upgrade complete in X — Y packages changed"
+/// line with the counts captured at preview time.
+fn print_final_summary(elapsed: std::time::Duration, stats: &UpgradeStats) {
+    let total = stats.total();
+    let mut parts: Vec<String> = Vec::new();
+    if stats.major > 0 {
+        parts.push(format!("{} major", stats.major).yellow().bold().to_string());
+    }
+    if stats.minor > 0 {
+        parts.push(format!("{} minor", stats.minor));
+    }
+    if stats.patch > 0 {
+        parts.push(format!("{} patch", stats.patch).dimmed().to_string());
+    }
+    if stats.new > 0 {
+        parts.push(format!("{} new", stats.new).green().to_string());
+    }
+
+    let breakdown = if parts.is_empty() {
+        String::new()
     } else {
-        println!("{} ({}):", head, header.dimmed());
-    }
-    for change in changes.iter().take(display_limit) {
-        println!("    {}", format_change(change));
-    }
-    if changes.len() > display_limit {
-        println!(
-            "    {} and {} more...",
-            "...".dimmed(),
-            changes.len() - display_limit
-        );
+        format!(" ({})", parts.join(", "))
+    };
+    let pkg_count = if total == 0 {
+        "no changes".to_string()
+    } else {
+        format!(
+            "{} package{} changed{}",
+            total,
+            if total == 1 { "" } else { "s" },
+            breakdown
+        )
+    };
+
+    println!(
+        "{} {} in {} — {}.",
+        "✓".green().bold(),
+        "Upgrade complete".bold(),
+        format_elapsed(elapsed).dimmed(),
+        pkg_count
+    );
+}
+
+/// Format `Duration` as `MmSs` or `Ss` — just the live-log feel, not
+/// sub-second precision.
+fn format_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
     }
 }
 
