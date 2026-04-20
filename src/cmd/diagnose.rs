@@ -148,6 +148,74 @@ pub const KNOWN_FINDINGS: &[Finding] = &[
                  the flake to see it). A trailing `warning: Git tree '...' is dirty` \
                  in the same output is the usual smoking gun.",
     },
+    Finding {
+        matcher: "cached failure of attribute",
+        title: "stale flake eval-cache masking the real error",
+        explanation: "Nix's flake evaluation cache remembered a previous failure and \
+                      is replaying it instead of re-evaluating. Even `--show-trace` \
+                      returns this uninformative line. The underlying cause may have \
+                      been fixed already, but the cache still says no.",
+        action: "Re-run with `--option eval-cache false` (or `--no-eval-cache`) to \
+                 force a fresh evaluation. Once the real error surfaces, fix that; \
+                 the cache will update on the next successful eval. See \
+                 https://github.com/NixOS/nix/issues/3872 for the root cause.",
+    },
+    Finding {
+        matcher: "SSL peer certificate",
+        title: "TLS failure fetching from a substituter",
+        explanation: "Nix couldn't validate the TLS certificate of a download target \
+                      (typically cache.nixos.org or a private binary cache). Common \
+                      causes: corporate VPN/proxy (ZScaler, mitmproxy) intercepting \
+                      TLS, an out-of-date CA bundle, or `NIX_SSL_CERT_FILE` pointing \
+                      at the wrong file.",
+        action: "Check `NIX_SSL_CERT_FILE` — on NixOS it should point at \
+                 `/etc/ssl/certs/ca-bundle.crt`. If behind a corporate proxy, add \
+                 the proxy's CA cert to the bundle (or `--option ssl-cert-file <path>`). \
+                 `curl -v https://cache.nixos.org/` reproduces without nix in the loop.",
+    },
+    Finding {
+        matcher: "undefined variable",
+        title: "undefined variable in the Nix expression",
+        explanation: "A name used in the config isn't in scope — a typo, a missing \
+                      `let`-binding, a module attribute accessed before its module \
+                      is imported, or a `with pkgs;` section that doesn't contain \
+                      what you expected. The error line usually points at the exact \
+                      offending reference.",
+        action: "Read the `at ...` file:line:col in the error — that's where the \
+                 undefined name sits. Check for typos, a missing `import`, or a \
+                 missing `inputs.<foo>.follows = \"nixpkgs\";` wiring for a flake \
+                 input that injects packages.",
+    },
+    Finding {
+        matcher: "cannot coerce",
+        title: "type mismatch — usually function passed where string expected",
+        explanation: "Nix found a value of one type where another was expected. \
+                      The common shape is `cannot coerce a function to a string`, \
+                      which happens when you write `pkgs.writeScript \"foo\" pkgs.bash` \
+                      instead of `pkgs.writeScript \"foo\" \"${pkgs.bash}/bin/bash\"`, \
+                      or pass an attribute set where a path was expected.",
+        action: "Inspect the `at ...` location in the error. If the value is a \
+                 function, you probably forgot to call it (`f arg` instead of `f`). \
+                 If it's an attribute set, you likely want a specific field \
+                 (`pkg.out`, `\"${pkg}\"`, `pkg.meta.mainProgram`).",
+    },
+    Finding {
+        matcher: "experimental Nix feature",
+        title: "experimental feature (flakes / nix-command) not enabled",
+        explanation: "The command you ran relies on `nix-command` or `flakes`, \
+                      which are still marked experimental in Nix and must be \
+                      enabled explicitly. On NixOS this is typically set once \
+                      in the system config; on a stock multi-user Nix install \
+                      it's usually missing.",
+        action: "Persistent fix, NixOS: \
+                 `nix.settings.experimental-features = [ \"nix-command\" \"flakes\" ];` \
+                 in configuration.nix. \
+                 Persistent fix, non-NixOS: add \
+                 `experimental-features = nix-command flakes` to \
+                 `~/.config/nix/nix.conf` (or `/etc/nix/nix.conf`). \
+                 One-shot: prefix any command with \
+                 `--extra-experimental-features 'nix-command flakes'`.",
+    },
 ];
 
 /// Pure core: scan `log` for every pattern and return the ones that

@@ -126,3 +126,59 @@ fn detects_file_not_in_git_tree() {
     assert_eq!(hits.len(), 1);
     assert!(hits[0].title.contains("tracked by git"));
 }
+
+#[test]
+fn detects_cached_eval_failure() {
+    // The Nix eval cache can replay a stale failure even when the real
+    // underlying error has been fixed. The marker is the word "cached"
+    // in front of "failure of attribute".
+    let log = "error: cached failure of attribute \
+               'nixosConfigurations.morthinkpad.config.system.build.toplevel'";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("eval-cache"));
+}
+
+#[test]
+fn detects_tls_failure_on_substituter() {
+    let log = "error: unable to download 'https://cache.nixos.org/nar/...': \
+               SSL peer certificate or SSH remote key was not OK (60) \
+               SSL certificate problem: self signed certificate in certificate chain";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("TLS failure"));
+}
+
+#[test]
+fn detects_undefined_variable() {
+    let log = "error:\n\
+               … while calling the 'seq' builtin\n\
+               \n\
+               at /nix/store/.../default.nix:12:5:\n\
+               \n\
+               error: undefined variable 'pkgs-unstable'";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("undefined variable"));
+}
+
+#[test]
+fn detects_type_coercion_error() {
+    let log = "error: cannot coerce a function to a string\n\
+               at /nix/store/.../home.nix:42:5";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("type mismatch"));
+}
+
+#[test]
+fn detects_disabled_experimental_feature() {
+    // The "--extra-experimental-features" hint in the error text itself
+    // wouldn't be useful to match against — the stable signature is
+    // the "experimental Nix feature ... is disabled" phrasing.
+    let log = "error: experimental Nix feature 'nix-command' is disabled; \
+               add '--extra-experimental-features nix-command' to enable it";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("experimental feature"));
+}
