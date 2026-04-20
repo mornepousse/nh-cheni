@@ -50,7 +50,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
     println!("{}\n", "=== cheni upgrade ===".bold());
 
     print_step(1, total_steps, "Updating flake inputs");
-    update_flake_inputs(&nix_config.flake_dir)?;
+    let context = update_flake_inputs(&nix_config.flake_dir)?;
     refresh_constrained_freezes_step(&nix_config.flake_dir);
     print_separator();
 
@@ -75,7 +75,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
     }
 
     print_separator();
-    print_final_summary(started.elapsed(), &stats);
+    print_final_summary(started.elapsed(), &stats, &context);
     if !opts.gc {
         println!(
             "{}",
@@ -101,7 +101,7 @@ fn print_separator() {
 /// fails. Captures the stderr so we can print a clean summary of
 /// which inputs bumped to which date, instead of leaking the raw
 /// multiline URL/narHash chatter nix emits by default.
-fn update_flake_inputs(flake_dir: &Path) -> Result<()> {
+fn update_flake_inputs(flake_dir: &Path) -> Result<UpgradeContext> {
     let output = Command::new("nix")
         .args(["flake", "update"])
         .current_dir(flake_dir)
@@ -119,7 +119,21 @@ fn update_flake_inputs(flake_dir: &Path) -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let updates = parse_flake_update_events(&stderr);
     print_flake_update_summary(&updates);
-    Ok(())
+    Ok(UpgradeContext {
+        inputs_updated: updates.len(),
+        git_tree_dirty: detect_dirty_tree_warning(&stderr),
+    })
+}
+
+/// Nix prints `warning: Git tree '<path>' is dirty` (or `warning: dirty
+/// Git tree '<path>'` on older nix) when the flake repo has
+/// uncommitted changes. Detecting it lets the final summary explain
+/// why a "no-op" upgrade still rebuilt artefacts.
+fn detect_dirty_tree_warning(stderr: &str) -> bool {
+    stderr
+        .lines()
+        .any(|l| l.contains("Git tree") && l.contains("is dirty")
+             || l.contains("dirty Git tree"))
 }
 
 /// Parse the `• Updated input 'X':` blocks out of `nix flake update`'s
@@ -245,6 +259,19 @@ impl UpgradeStats {
     fn total_packages(&self) -> usize {
         self.major + self.minor + self.patch + self.new
     }
+}
+
+/// Signals picked up during the run so the final summary can explain
+/// *why* things were (or weren't) rebuilt — not just count them.
+#[derive(Default)]
+pub struct UpgradeContext {
+    /// Number of flake inputs that moved in step 1. Zero means
+    /// everything was already up to date.
+    pub inputs_updated: usize,
+    /// `warning: Git tree '…' is dirty` was seen — the flake's own
+    /// git checkout has uncommitted changes, which triggers a
+    /// re-evaluation even when no input moved.
+    pub git_tree_dirty: bool,
 }
 
 /// Step 2: evaluate pending changes via `nix build --dry-run`, show a
@@ -543,7 +570,27 @@ fn aggregate_stats(
 
 /// Render the final "✓ Upgrade complete in X — Y packages changed"
 /// line with the counts captured at preview time.
-fn print_final_summary(elapsed: std::time::Duration, stats: &UpgradeStats) {
+fn print_final_summary(
+    elapsed: std::time::Duration,
+    stats: &UpgradeStats,
+    context: &UpgradeContext,
+) {
+    let headline = render_summary_headline(stats, context);
+    println!(
+        "{} {} in {} — {}.",
+        "✓".green().bold(),
+        "Upgrade complete".bold(),
+        format_elapsed(elapsed).dimmed(),
+        headline
+    );
+    if let Some(reason) = explain_no_op_rebuild(stats, context) {
+        println!("  {}", reason.dimmed());
+    }
+}
+
+/// Build the human-readable tail of the "✓ Upgrade complete …"
+/// sentence. Pure so it's trivially testable.
+fn render_summary_headline(stats: &UpgradeStats, context: &UpgradeContext) -> String {
     let packages = stats.total_packages();
     let mut parts: Vec<String> = Vec::new();
     if stats.major > 0 {
@@ -564,13 +611,12 @@ fn print_final_summary(elapsed: std::time::Duration, stats: &UpgradeStats) {
         format!(" ({})", parts.join(", "))
     };
 
-    // Summary shape:
-    //   no changes at all          → "no changes"
-    //   packages only              → "N packages changed (…)"
-    //   packages + artefacts       → "N packages changed (…), M system artefacts rebuilt"
-    //   artefacts only             → "no user-facing package changes (M system artefacts rebuilt)"
-    let headline = match (packages, stats.artefacts) {
-        (0, 0) => "no changes".to_string(),
+    match (packages, stats.artefacts) {
+        (0, 0) => "nothing changed".to_string(),
+        // Artefacts-only with a known cause collapses to "nothing
+        // changed" — the artefacts are just re-evaluation fallout
+        // that the follow-up line will explain.
+        (0, _) if context.explains_artefacts_only() => "nothing changed".to_string(),
         (0, a) => format!(
             "no user-facing package changes ({} system artefact{} rebuilt)",
             a,
@@ -590,15 +636,42 @@ fn print_final_summary(elapsed: std::time::Duration, stats: &UpgradeStats) {
             a,
             if a == 1 { "" } else { "s" },
         ),
-    };
+    }
+}
 
-    println!(
-        "{} {} in {} — {}.",
-        "✓".green().bold(),
-        "Upgrade complete".bold(),
-        format_elapsed(elapsed).dimmed(),
-        headline
-    );
+/// When the rebuild did *nothing* user-facing but still produced
+/// derivations, explain why — the user just spent 40 seconds and
+/// deserves to know whether it was pointless. Returns `None` if
+/// there's nothing useful to say.
+fn explain_no_op_rebuild(stats: &UpgradeStats, context: &UpgradeContext) -> Option<String> {
+    // Only fire the hint when there were no real package changes and
+    // at least some artefacts were rebuilt — otherwise the headline
+    // is already self-explanatory.
+    if stats.total_packages() > 0 || stats.artefacts == 0 {
+        return None;
+    }
+    match (context.inputs_updated, context.git_tree_dirty) {
+        (0, true) => Some(format!(
+            "Flake inputs unchanged but your config git tree is dirty — {} system artefact{} \
+             re-evaluated to match the uncommitted state.",
+            stats.artefacts,
+            if stats.artefacts == 1 { " was" } else { "s were" },
+        )),
+        (0, false) => Some(format!(
+            "Flake inputs unchanged; {} system artefact{} re-evaluated (home-manager internals).",
+            stats.artefacts,
+            if stats.artefacts == 1 { "" } else { "s" },
+        )),
+        _ => None, // inputs changed — the artefacts have an obvious cause
+    }
+}
+
+impl UpgradeContext {
+    /// Whether this context explains why an artefacts-only rebuild
+    /// happened — used to collapse the headline to "nothing changed".
+    fn explains_artefacts_only(&self) -> bool {
+        self.inputs_updated == 0
+    }
 }
 
 /// Format `Duration` as `MmSs` or `Ss` — just the live-log feel, not

@@ -261,6 +261,73 @@ fn parses_skips_malformed_date_lines() {
 }
 
 #[test]
+fn detects_dirty_tree_warning_from_nix_stderr() {
+    let stderr = "warning: Git tree '/home/mae/nixos-config' is dirty\n";
+    assert!(detect_dirty_tree_warning(stderr));
+}
+
+#[test]
+fn detects_dirty_tree_warning_older_nix_phrasing() {
+    // Older nix wrote it as "dirty Git tree '…'" — just in case
+    // the user pins a stale nix version somewhere.
+    let stderr = "warning: dirty Git tree '/home/mae/nixos-config'\n";
+    assert!(detect_dirty_tree_warning(stderr));
+}
+
+#[test]
+fn detects_dirty_tree_warning_absent() {
+    let stderr = "no updates\n";
+    assert!(!detect_dirty_tree_warning(stderr));
+}
+
+#[test]
+fn summary_collapses_to_nothing_changed_when_artefacts_are_fully_explained() {
+    // Inputs unchanged + dirty tree → the 19 artefacts are pure
+    // re-eval noise. Headline stays "nothing changed", follow-up
+    // line explains why.
+    let stats = UpgradeStats { artefacts: 19, ..UpgradeStats::default() };
+    let ctx = UpgradeContext { inputs_updated: 0, git_tree_dirty: true };
+    let headline = render_summary_headline(&stats, &ctx);
+    assert_eq!(headline, "nothing changed");
+
+    let reason = explain_no_op_rebuild(&stats, &ctx).expect("should explain");
+    assert!(reason.contains("dirty"), "reason was: {reason}");
+    assert!(reason.contains("19 system artefact"), "reason was: {reason}");
+}
+
+#[test]
+fn summary_mentions_reeval_when_inputs_unchanged_and_tree_clean() {
+    let stats = UpgradeStats { artefacts: 5, ..UpgradeStats::default() };
+    let ctx = UpgradeContext { inputs_updated: 0, git_tree_dirty: false };
+    assert_eq!(render_summary_headline(&stats, &ctx), "nothing changed");
+
+    let reason = explain_no_op_rebuild(&stats, &ctx).expect("should explain");
+    assert!(reason.contains("home-manager"), "reason was: {reason}");
+}
+
+#[test]
+fn summary_keeps_package_headline_when_real_packages_changed() {
+    // Real packages changed → headline reports them, no follow-up.
+    let stats = UpgradeStats {
+        minor: 1, artefacts: 17, ..UpgradeStats::default()
+    };
+    let ctx = UpgradeContext { inputs_updated: 3, git_tree_dirty: false };
+    let headline = render_summary_headline(&stats, &ctx);
+    assert!(headline.contains("1 package"), "headline: {headline}");
+    assert!(headline.contains("17 system artefact"), "headline: {headline}");
+    assert!(explain_no_op_rebuild(&stats, &ctx).is_none());
+}
+
+#[test]
+fn summary_no_follow_up_when_inputs_moved() {
+    // Inputs moved but only artefacts got rebuilt — the cause is
+    // obvious (inputs moved), no need for a dedicated explanation.
+    let stats = UpgradeStats { artefacts: 3, ..UpgradeStats::default() };
+    let ctx = UpgradeContext { inputs_updated: 1, git_tree_dirty: false };
+    assert!(explain_no_op_rebuild(&stats, &ctx).is_none());
+}
+
+#[test]
 fn format_elapsed_under_a_minute() {
     assert_eq!(format_elapsed(std::time::Duration::from_secs(0)), "0s");
     assert_eq!(format_elapsed(std::time::Duration::from_secs(42)), "42s");
