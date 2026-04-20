@@ -20,7 +20,7 @@ use anyhow::{anyhow, Context, Result};
 use minisign_verify::{PublicKey, Signature};
 use tracing::debug;
 
-use crate::api::net;
+use crate::http;
 
 /// Minisign public key that signs every cheni release. Loaded at
 /// compile time so the binary and its trust anchor ship together.
@@ -158,7 +158,7 @@ pub async fn verify_release(tag: &str) -> Result<VerifyReport> {
     debug!("fetching signature: {}", signature_url);
 
     let client = reqwest::Client::builder()
-        .timeout(net::http_timeout())
+        .timeout(http::http_timeout())
         .user_agent(concat!("cheni/", env!("GIT_DESCRIBE")))
         .build()
         .context("building HTTP client")?;
@@ -179,7 +179,7 @@ pub async fn verify_release(tag: &str) -> Result<VerifyReport> {
     })
 }
 
-/// Download bytes with the shared HTTP body cap from `api::net`.
+/// Download bytes with the shared HTTP body cap from `crate::http`.
 async fn fetch_bounded(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
     let response = client
         .get(url)
@@ -190,9 +190,9 @@ async fn fetch_bounded(client: &reqwest::Client, url: &str) -> Result<Vec<u8>> {
     if !response.status().is_success() {
         anyhow::bail!("HTTP {} fetching {}", response.status(), url);
     }
-    net::check_content_length(response.content_length(), net::MAX_BODY_BYTES)?;
+    http::check_content_length(response.content_length(), http::MAX_BODY_BYTES)?;
     let body = response.bytes().await.context("reading body")?;
-    net::verify_body_size(body.len(), net::MAX_BODY_BYTES)?;
+    http::verify_body_size(body.len(), http::MAX_BODY_BYTES)?;
     Ok(body.to_vec())
 }
 

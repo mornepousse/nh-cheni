@@ -303,10 +303,11 @@ cheni/
 │   │   └── tests/           # unit tests per nix module
 │   ├── api/                 # External data sources
 │   │   ├── mod.rs
-│   │   ├── net.rs           # HTTP timeout + body-size cap helpers
 │   │   ├── repology.rs      # Repology API client (rate-limited)
 │   │   ├── cache.rs         # On-disk cache (~/.cache/cheni)
 │   │   └── tests/           # unit tests per api module
+│   ├── http.rs              # Shared HTTP helpers (timeout, body cap,
+│   │                        #   Retry-After) used by api/, nix/, release
 │   ├── output/              # Live output prettification
 │   │   ├── mod.rs
 │   │   ├── prettify.rs      # Strip /nix/store/<hash>- from a line

@@ -290,7 +290,7 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
     // as Repology, and a 5s hard cap frequently tripped in practice.
     let Ok(client) = reqwest::blocking::Client::builder()
         .user_agent("cheni/0.1")
-        .timeout(crate::api::net::http_timeout())
+        .timeout(crate::http::http_timeout())
         .build()
     else {
         return;
@@ -419,15 +419,15 @@ where
         debug!("API request failed: {} → {}", url, response.status());
         return None;
     }
-    if let Err(e) = crate::api::net::check_content_length(
+    if let Err(e) = crate::http::check_content_length(
         response.content_length(),
-        crate::api::net::MAX_BODY_BYTES,
+        crate::http::MAX_BODY_BYTES,
     ) {
         debug!("{}: {}", url, e);
         return None;
     }
     let body = response.bytes().ok()?;
-    if let Err(e) = crate::api::net::verify_body_size(body.len(), crate::api::net::MAX_BODY_BYTES) {
+    if let Err(e) = crate::http::verify_body_size(body.len(), crate::http::MAX_BODY_BYTES) {
         debug!("{}: {}", url, e);
         return None;
     }
@@ -439,7 +439,7 @@ where
 ///
 /// On the first response, if the status is 429 we read the
 /// `Retry-After` header (capped/defaulted by
-/// `crate::api::net::parse_retry_after`), sleep for that many
+/// `crate::http::parse_retry_after`), sleep for that many
 /// seconds, and issue exactly one more GET. Any other status is
 /// returned as-is to the caller.
 fn send_with_retry_on_429(
@@ -455,7 +455,7 @@ fn send_with_retry_on_429(
         .headers()
         .get(reqwest::header::RETRY_AFTER)
         .and_then(|v| v.to_str().ok());
-    let wait = crate::api::net::parse_retry_after(retry_after);
+    let wait = crate::http::parse_retry_after(retry_after);
     debug!("429 from {}, retrying in {}s", url, wait);
     std::thread::sleep(std::time::Duration::from_secs(wait));
 

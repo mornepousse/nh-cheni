@@ -3,6 +3,7 @@
 //! Library crate exposing the core modules for testing and reuse.
 
 pub mod api;
+pub mod http;
 pub mod nix;
 pub mod output;
 pub mod release;

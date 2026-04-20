@@ -18,9 +18,10 @@ const MAX_CONCURRENT: usize = 2;
 /// Delay between batches of requests (in milliseconds).
 const BATCH_DELAY_MS: u64 = 500;
 
-// Rate-limit constants + parser moved to `crate::api::net` so the
-// flake-input probe in `src/nix/flake.rs` can reuse them.
-use super::net::parse_retry_after;
+// Rate-limit policy lives in `crate::http` so every HTTP path
+// (repology, flake-input probe, release fetch) shares the same
+// Retry-After behaviour.
+use crate::http::parse_retry_after;
 
 /// Maximum random jitter added to batch delay (in milliseconds).
 /// Avoids thundering herd when multiple instances run concurrently.
@@ -176,7 +177,7 @@ fn split_cache_hits(
 fn build_http_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .user_agent("cheni/0.1")
-        .timeout(super::net::http_timeout())
+        .timeout(crate::http::http_timeout())
         .build()
         .context("Failed to create HTTP client")
 }
@@ -369,12 +370,12 @@ async fn parse_response(
     installed: Option<&str>,
 ) -> Result<PackageLookup> {
     let status = response.status();
-    super::net::check_content_length(response.content_length(), super::net::MAX_BODY_BYTES)?;
+    crate::http::check_content_length(response.content_length(), crate::http::MAX_BODY_BYTES)?;
     let body = response
         .bytes()
         .await
         .with_context(|| format!("Reading response body for '{}' (HTTP {})", name, status))?;
-    super::net::verify_body_size(body.len(), super::net::MAX_BODY_BYTES)?;
+    crate::http::verify_body_size(body.len(), crate::http::MAX_BODY_BYTES)?;
     let entries: Vec<RepologyEntry> = serde_json::from_slice(&body)
         .with_context(|| format!("Failed to parse response for '{}' (HTTP {})", name, status))?;
 
