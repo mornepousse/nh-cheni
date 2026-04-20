@@ -135,7 +135,9 @@ the currently-booted system to keep rollback safe.
 | Command                     | What it does                                              |
 |-----------------------------|-----------------------------------------------------------|
 | `cheni doctor`              | Health checks (paths, pins, flake, store, cache, tools)   |
-| `cheni self-update`         | Refresh the cheni flake input + rebuild                   |
+| `cheni self-update`         | Refresh the cheni flake input + verify + rebuild          |
+| `cheni verify [--tag v…]`   | Read-only signature check on the installed cheni          |
+| `cheni diagnose [file]`     | Clarify a cryptic rebuild log (file or stdin)             |
 | `cheni init`                | One-time setup: add `nixpkgs-latest` to your flake        |
 | `cheni bug-report`          | Print a diagnostic report ready to paste into an issue    |
 | `cheni completion <shell>`  | Shell completion (bash / zsh / fish / elvish / powershell)|

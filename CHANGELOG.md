@@ -7,6 +7,140 @@ semver.
 
 ## Unreleased
 
+Desktop-user quality-of-life pass on top of v0.2.0. No breaking
+changes; every item below is additive or a readability improvement
+to an existing command.
+
+### Added
+- **`cheni diagnose [file]`** — scan a rebuild log (from a path or
+  stdin) and surface known-issue hints in a `what / why / fix`
+  format. Starts with five curated patterns (`aes_generic`,
+  fixed-output hash mismatch, `No space left on device`, missing
+  flake attribute, infinite recursion); the list grows one entry at
+  a time as real logs cross our desks.
+- **Diagnose hints injected on rebuild failure** — when
+  `cheni upgrade` or `cheni self-update` fails, the raw failure is
+  followed by a compact postscript listing any patterns the
+  diagnose library recognised. No extra flag; the user sees
+  actionable hints automatically instead of a wall of store paths.
+
+### Changed
+- **`cheni upgrade` preview is now dense** — store names replaced
+  by `name   old → new  [tag]`, with a per-section aggregate
+  (`2 major, 8 minor, 9 patch, 1 new`). Major bumps colour-flagged
+  so they're hard to miss.
+- **`cheni rollback` shows a from→to preview and asks confirmation**
+  — current gen + target gen with date and NixOS label, explicit
+  direction ("moving back N generations"), reminder that the
+  current generation stays reachable until the next GC. Invalid
+  targets fail upfront with a clear message instead of a cryptic
+  nix-env error. `-y / --yes` bypasses the prompt.
+- **`cheni history --gc` and `cheni upgrade --gc` preview first** —
+  `nix-collect-garbage --dry-run` runs as the user (no sudo), the
+  count of paths about to disappear is displayed, and the user is
+  asked to confirm before the real sudo GC step kicks in.
+- **`cheni upgrade` and `cheni self-update` prettify nh output live**
+  — `/nix/store/<hash>-` prefixes are stripped on every line before
+  display, merged through a single OS pipe so stdout/stderr stay in
+  emission order. `cheni build` gains the same prettification on
+  its existing stderr streamer. The raw bytes are still captured
+  for the structured error parsers.
+- **`cheni why` renders as a tree** — Unicode box-drawing
+  characters (`├── └── │`) replace flat indentation. Matches carry
+  a short role tag when the line is unambiguous: `[enabled]`,
+  `[disabled]`, `[system]`, `[home]`.
+
+### Internal
+- New `src/output/` module with `prettify_line` and a merged-pipe
+  runner (`run_streaming`) used by the commands that shell out to
+  `nh`. `os_pipe = "1"` added as a dep (pure Rust, no FFI).
+- New `src/nix/gc.rs` wrapping the `nix-collect-garbage --dry-run`
+  preview and its pure `parse_path_count` helper.
+- `nix::store::split_name_version` promoted to `pub(crate)` so the
+  upgrade preview can reuse the existing name/version parser.
+- `cmd::history::read_generations` and `Generation` exposed at
+  crate visibility to power `cheni rollback`'s preview.
+- Six new test files (`output/tests/prettify.rs`,
+  `nix/tests/gc.rs`, `cmd/tests/diagnose.rs`,
+  `cmd/tests/why.rs`, `cmd/tests/rollback.rs`,
+  `cmd/tests/upgrade.rs`), plus fixtures in several existing
+  files. Total test count crossed 380.
+
+## [0.2.0] — 2026-04-19
+
+### Added
+- **`cheni verify [--tag v…]`** — read-only signature check on the
+  installed cheni (or any tag). Works anywhere, doesn't touch the
+  flake or the Nix store.
+
+### Fixed
+- **Self-update crash on second upgrade** — `reqwest::blocking`
+  inside the tokio async runtime was crashing at drop ("Cannot
+  drop a runtime in a context where blocking is not allowed"). The
+  verification path is now async end-to-end via `reqwest::Client`.
+
+### Internal
+- Verification primitives (public key embedding, URL derivation,
+  signature check, dev-suffix stripping) extracted from
+  `cmd/self_update` into a new top-level `release` module.
+  `cmd::self_update` and `cmd::verify` share the same trust anchor
+  and behaviour.
+
+## [0.1.0-beta] — 2026-04-19
+
+First release with signed tarballs. Signature verification is
+still soft on this version (the in-flight cheni v0.1.0-alpha
+doesn't know how to verify yet); from v0.1.0-beta onwards,
+`cheni self-update` verifies by default.
+
+### Added
+- **Signed releases via minisign** — every tagged release tarball
+  gets a `.minisig` asset published to the GitLab release page.
+  Public key checked in at `public-keys/cheni-release.pub`
+  (fingerprint `358A303A12B2640B`) and embedded in the cheni
+  binary at compile time.
+- **`cheni self-update` verifies the signature** — between
+  `nix flake update cheni` and `nh os switch`, the new release's
+  tarball and `.minisig` are downloaded and verified against the
+  embedded public key. `--allow-unsigned` is the documented
+  escape hatch for key rotation, local dev, or transitional
+  upgrades from versions that don't expose a `ref` in
+  `flake.lock`.
+- **SECURITY.md** — user-facing threat model, manual verification
+  procedure, and compromise-response plan.
+
+### Changed
+- **Retry-After honored on Repology 429s** — the fixed 3s wait is
+  now a fallback; a server-supplied value in `[1, 30]` seconds is
+  respected. Anything outside the range (or missing) still falls
+  through to the default.
+- **HTTP body cap of 5 MiB** applied to every
+  Repology/GitHub/GitLab response via new
+  `api::net::check_content_length` + `verify_body_size` helpers.
+- **`$USER` / `$LOGNAME` sanitised** before splicing into
+  `/etc/profiles/per-user/...` paths — defence-in-depth against
+  environment tampering.
+- **Sudo and `nix-store` call sites routed through `tool_error`**
+  so a missing binary produces the same actionable install hint
+  as the rest of the codebase.
+- **Tests extracted from every remaining inline `mod tests`**
+  block (cmd/obsolete, version/parse, version/compare) into
+  sibling files, matching the project-wide convention.
+
+### Internal
+- Seven project-scoped Claude Code agents committed under
+  `.claude/agents/` (`cheni-release-manager`,
+  `cheni-code-reviewer`, `cheni-security-auditor`,
+  `cheni-nix-integration`, `cheni-repology-debugger`,
+  `cheni-flake-maintainer`, `cheni-test-author`) so future
+  sessions inherit the project conventions instead of re-deriving
+  them.
+
+## [0.1.0-alpha] — 2026-04-14
+
+First tagged release. The "Added" list below covers what shipped
+with the initial version.
+
 ### Added
 - **`cheni completion <shell>`** — emit bash / zsh / fish / elvish /
   powershell completion scripts on stdout. Pipe into your shell's

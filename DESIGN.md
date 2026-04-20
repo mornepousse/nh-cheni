@@ -242,9 +242,11 @@ cheni/
 │   │   ├── search.rs        # cheni search (nix search wrapper)
 │   │   ├── why.rs           # cheni why (find declaring .nix file)
 │   │   ├── clean.rs         # cheni clean (obsolete pins)
-│   │   ├── self_update.rs   # cheni self-update
+│   │   ├── self_update.rs   # cheni self-update (verifies signature)
+│   │   ├── verify.rs        # cheni verify (read-only signature check)
+│   │   ├── diagnose.rs      # cheni diagnose (clarify rebuild logs)
 │   │   ├── history.rs       # cheni history (list + --prune/--delete/--keep)
-│   │   ├── rollback.rs      # cheni rollback
+│   │   ├── rollback.rs      # cheni rollback (with from→to preview)
 │   │   ├── diff.rs          # cheni diff <from> <to>
 │   │   ├── interactive.rs   # menu when run with no subcommand
 │   │   ├── obsolete.rs      # shared helpers for pin obsolescence
@@ -255,22 +257,38 @@ cheni/
 │   │   ├── config.rs        # Detect flake, hostname, modules
 │   │   ├── flake.rs         # Parse flake.lock, check remote inputs
 │   │   ├── pins.rs          # Read/write package-pins.json
+│   │   ├── gc.rs            # nix-collect-garbage --dry-run preview
 │   │   ├── tools.rs         # Friendly ENOENT → install-hint mapper
 │   │   └── tests/           # unit tests per nix module
 │   ├── api/                 # External data sources
 │   │   ├── mod.rs
-│   │   ├── net.rs           # HTTP timeout resolution (env-overridable)
+│   │   ├── net.rs           # HTTP timeout + body-size cap helpers
 │   │   ├── repology.rs      # Repology API client (rate-limited)
 │   │   ├── cache.rs         # On-disk cache (~/.cache/cheni)
 │   │   └── tests/           # unit tests per api module
-│   └── version/             # Version logic
-│       ├── mod.rs
-│       ├── parse.rs         # Parse version strings (semver + calver)
-│       └── compare.rs       # Major/minor/newer detection
+│   ├── output/              # Live output prettification
+│   │   ├── mod.rs
+│   │   ├── prettify.rs      # Strip /nix/store/<hash>- from a line
+│   │   ├── stream.rs        # Spawn a child with merged stdout/stderr pipe
+│   │   └── tests/
+│   ├── release.rs           # Minisign signature verification
+│   ├── version/             # Version logic
+│   │   ├── mod.rs
+│   │   ├── parse.rs         # Parse version strings (semver + calver)
+│   │   └── compare.rs       # Major/minor/newer detection
+│   └── tests/               # Unit tests for root-level modules
+│       ├── util.rs
+│       └── release.rs
+├── public-keys/
+│   ├── cheni-release.pub    # Trusted minisign public key
+│   └── README.md            # Fingerprint + manual verification procedure
+├── VERSION                  # Source of truth for the displayed version
 ├── Cargo.toml
 ├── flake.nix
-├── build.rs                 # Embeds GIT_SHORT_HASH at compile time
+├── build.rs                 # Reads VERSION + git describe at build time
 ├── DESIGN.md
+├── SECURITY.md              # Threat model + verify procedure
+├── RELEASING.md             # Release protocol (bump, sign, publish)
 └── README.md
 ```
 
