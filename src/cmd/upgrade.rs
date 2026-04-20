@@ -119,26 +119,164 @@ fn preview_and_confirm(config_path: &str, hostname: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// Print the "to fetch" and "to build" lists, each truncated so the
-/// terminal doesn't get flooded on a big update.
+/// Print the "to fetch" and "to build" lists, enriched with the
+/// currently-installed version (so a user sees `firefox 149.0.1 →
+/// 149.0.2` instead of the bare `firefox-149.0.2` store name), a
+/// short classification tag (`major`, `minor`, `patch`, `new`), and
+/// an aggregate tally at the top of each section.
 fn print_preview_lists(to_build: &[String], to_fetch: &[String]) {
+    let installed = crate::nix::store::read_installed_packages().unwrap_or_default();
     if !to_fetch.is_empty() {
-        println!("  {} {} package(s) to download:", "↓".cyan(), to_fetch.len());
-        for pkg in to_fetch.iter().take(20) {
-            println!("    {}", pkg.dimmed());
-        }
-        if to_fetch.len() > 20 {
-            println!("    {} and {} more...", "...".dimmed(), to_fetch.len() - 20);
-        }
+        print_section("↓", "to download", to_fetch, &installed, 20, Color::Cyan);
     }
     if !to_build.is_empty() {
-        println!("\n  {} {} package(s) to build locally:", "⚒".yellow(), to_build.len());
-        for pkg in to_build.iter().take(10) {
-            println!("    {}", pkg.dimmed());
+        println!();
+        print_section("⚒", "to build locally", to_build, &installed, 10, Color::Yellow);
+    }
+}
+
+/// How the "old → new" version delta should be styled.
+enum Color {
+    Cyan,
+    Yellow,
+}
+
+/// One changed package, ready for display. `old` is `None` when the
+/// package isn't currently installed (= new install rather than update).
+struct PackageChange {
+    name: String,
+    old: Option<String>,
+    new: String,
+    diff: crate::version::compare::VersionDiff,
+}
+
+fn print_section(
+    glyph: &str,
+    label: &str,
+    entries: &[String],
+    installed: &[crate::nix::store::StorePackage],
+    display_limit: usize,
+    glyph_color: Color,
+) {
+    let changes = build_changes(entries, installed);
+    let header = aggregate_header(&changes);
+    let head = format!("  {} {} package(s) {}", glyph, entries.len(), label);
+    let head = match glyph_color {
+        Color::Cyan => head.replacen(glyph, &glyph.cyan().to_string(), 1),
+        Color::Yellow => head.replacen(glyph, &glyph.yellow().to_string(), 1),
+    };
+    if header.is_empty() {
+        println!("{}:", head);
+    } else {
+        println!("{} ({}):", head, header.dimmed());
+    }
+    for change in changes.iter().take(display_limit) {
+        println!("    {}", format_change(change));
+    }
+    if changes.len() > display_limit {
+        println!(
+            "    {} and {} more...",
+            "...".dimmed(),
+            changes.len() - display_limit
+        );
+    }
+}
+
+/// Build the "major / minor / patch / new" aggregate line, omitting
+/// zero-count groups so the header stays tight.
+fn aggregate_header(changes: &[PackageChange]) -> String {
+    use crate::version::compare::VersionDiff;
+    let mut major = 0;
+    let mut minor = 0;
+    let mut patch = 0;
+    let mut new = 0;
+    for c in changes {
+        if c.old.is_none() {
+            new += 1;
+            continue;
         }
-        if to_build.len() > 10 {
-            println!("    {} and {} more...", "...".dimmed(), to_build.len() - 10);
+        match c.diff {
+            VersionDiff::Major => major += 1,
+            VersionDiff::Minor => minor += 1,
+            VersionDiff::Equal | VersionDiff::Newer => patch += 1,
         }
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if major > 0 {
+        parts.push(format!("{} major", major));
+    }
+    if minor > 0 {
+        parts.push(format!("{} minor", minor));
+    }
+    if patch > 0 {
+        parts.push(format!("{} patch", patch));
+    }
+    if new > 0 {
+        parts.push(format!("{} new", new));
+    }
+    parts.join(", ")
+}
+
+/// Match each dry-run entry against the currently-installed set,
+/// computing the `{name, old, new, diff}` tuple used by the renderer.
+/// Entries whose store name can't be split into `name-version` are
+/// shown with an empty `name` and the raw entry as `new` — better
+/// than dropping them silently.
+fn build_changes(
+    entries: &[String],
+    installed: &[crate::nix::store::StorePackage],
+) -> Vec<PackageChange> {
+    use crate::nix::store::split_name_version;
+    use crate::version::{compare::compare_versions, parse::parse_version};
+
+    entries
+        .iter()
+        .map(|entry| {
+            let (name, new_ver) = split_name_version(entry)
+                .unwrap_or_else(|| (String::new(), entry.clone()));
+            let old = installed
+                .iter()
+                .find(|p| p.name == name)
+                .map(|p| p.version.clone());
+            let diff = match old.as_deref() {
+                Some(old_ver) => compare_versions(&parse_version(old_ver), &parse_version(&new_ver)),
+                None => crate::version::compare::VersionDiff::Equal,
+            };
+            PackageChange {
+                name,
+                old,
+                new: new_ver,
+                diff,
+            }
+        })
+        .collect()
+}
+
+/// Render a single change as a one-liner. `major` bumps get a yellow
+/// arrow so they stand out at a glance; `patch` is dimmed.
+fn format_change(c: &PackageChange) -> String {
+    use crate::version::compare::VersionDiff;
+    let name = if c.name.is_empty() {
+        c.new.clone()
+    } else {
+        c.name.clone()
+    };
+    let tag = match (&c.old, &c.diff) {
+        (None, _) => "new".green().to_string(),
+        (Some(_), VersionDiff::Major) => "major".yellow().bold().to_string(),
+        (Some(_), VersionDiff::Minor) => "minor".to_string(),
+        (Some(_), VersionDiff::Newer) => "downgrade".magenta().to_string(),
+        (Some(_), _) => "patch".dimmed().to_string(),
+    };
+    match &c.old {
+        Some(old) => format!(
+            "{:<28} {} → {}  [{}]",
+            name.bold(),
+            old.dimmed(),
+            c.new,
+            tag
+        ),
+        None => format!("{:<28} {} {}  [{}]", name.bold(), "→".dimmed(), c.new, tag),
     }
 }
 
@@ -320,3 +458,7 @@ fn clean_obsolete_pins(flake_dir: &Path) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "tests/upgrade.rs"]
+mod tests;

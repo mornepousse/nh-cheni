@@ -187,7 +187,7 @@ fn extract_store_name(path: &str) -> Option<&str> {
 ///   "legcord-1.5.4"              → ("legcord", "1.5.4")
 ///   "gtk+3-3.24.51"              → ("gtk+3", "3.24.51")
 ///   "xdg-desktop-portal-1.15.1"  → ("xdg-desktop-portal", "1.15.1")
-fn split_name_version(store_name: &str) -> Option<(String, String)> {
+pub(crate) fn split_name_version(store_name: &str) -> Option<(String, String)> {
     // First, reject sub-outputs
     for suffix in IGNORED_SUFFIXES {
         if store_name.ends_with(suffix) {
