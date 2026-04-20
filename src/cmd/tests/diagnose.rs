@@ -341,3 +341,35 @@ fn detects_nar_hash_mismatch_on_flake_input() {
     assert_eq!(hits.len(), 1);
     assert!(hits[0].title.contains("narHash"));
 }
+
+#[test]
+fn detects_shallow_dependency_failure() {
+    let log = "building '/nix/store/abc.drv'...\n\
+               ... real error buried earlier ...\n\
+               error: 1 dependencies couldn't be built: \
+               /nix/store/def-nixos-system-host.drv";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("upstream dependency"));
+}
+
+#[test]
+fn detects_network_access_inside_sandbox() {
+    let log = "error: builder for '/nix/store/xyz.drv' failed \
+               with exit code 1;\n\
+               last 10 log lines:\n\
+               > curl: (6) Could not resolve host: example.com\n\
+               > access to network is forbidden";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("sandbox"));
+}
+
+#[test]
+fn detects_fd_exhaustion() {
+    let log = "error: opening file '/nix/store/...-foo.json': \
+               Too many open files";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("file-descriptor"));
+}

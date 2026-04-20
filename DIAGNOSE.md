@@ -21,7 +21,7 @@ string appears anywhere in the text. False positives are possible
 by design — the library errs on the side of surfacing a hint that
 might help rather than staying silent.
 
-## Current catalogue — 30 patterns
+## Current catalogue — 33 patterns
 
 ### Build runtime
 
@@ -33,6 +33,9 @@ might help rather than staying silent.
 | `exit code 137` | build killed by the OOM killer (exit 137 = SIGKILL) |
 | `failed to install the bootloader` | bootloader install failed — system may not boot |
 | `refusing to overwrite` | activation refused to overwrite an existing file |
+| `dependencies couldn't be built` | upstream dependency failed — real error is earlier in the log |
+| `access to network is forbidden` | build tried to reach the network inside the sandbox |
+| `Too many open files` | process hit the file-descriptor limit |
 
 ### Network / fetch
 

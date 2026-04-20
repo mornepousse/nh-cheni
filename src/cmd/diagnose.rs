@@ -457,6 +457,57 @@ pub const KNOWN_FINDINGS: &[Finding] = &[
                  (last-ditch). For submodule inputs, `flake = false;` on \
                  the input sidesteps the recursive-hash recomputation.",
     },
+    Finding {
+        matcher: "dependencies couldn't be built",
+        title: "upstream dependency failed — real error is earlier in the log",
+        explanation: "When a package deep in your closure fails, every \
+                      derivation that depends on it fails too — and nix \
+                      reports the SHALLOW failure last, so scrolling to \
+                      the bottom gives you \"1 dependencies couldn't be \
+                      built\" with no clue about which one. The real \
+                      error is somewhere earlier, attached to the \
+                      actual broken build.",
+        action: "Scroll up to the FIRST `error: builder for ...failed` \
+                 entry — that's the root cause. `nix log <drv-path>` \
+                 replays the full build output for a specific \
+                 derivation. For a rebuilder loop, pass \
+                 `--keep-going` so every failure surfaces in one pass \
+                 instead of stopping at the first.",
+    },
+    Finding {
+        matcher: "access to network is forbidden",
+        title: "build tried to reach the network inside the sandbox",
+        explanation: "By default Nix builds run in a network-isolated \
+                      namespace — a pure build cannot fetch anything. \
+                      If the derivation legitimately needs the network \
+                      (a source download), it must be a fixed-output \
+                      derivation (declare `outputHash`) so Nix can \
+                      verify what came back. The error means either the \
+                      package is mis-packaged upstream or your build \
+                      step is trying to download something it shouldn't.",
+        action: "If the derivation is yours, declare the fetch as a \
+                 `fetchurl` / `fetchFromGitHub` / similar fixed-output \
+                 derivation with `sha256`. If you're building someone \
+                 else's package and hit this, file an issue — don't \
+                 reach for `--option sandbox false`, that's a global \
+                 security knob and should stay on.",
+    },
+    Finding {
+        matcher: "Too many open files",
+        title: "process hit the file-descriptor limit",
+        explanation: "Systemd services, including `nix-daemon`, inherit \
+                      the per-service `LimitNOFILE` ceiling (default \
+                      1024 on many distros). Large builds and \
+                      `nix develop` shells can open tens of thousands \
+                      of files while walking a closure — blow through \
+                      1024 and fd-heavy operations start returning \
+                      errors that look like random I/O failures.",
+        action: "On NixOS: `systemd.services.nix-daemon.serviceConfig.\
+LimitNOFILE = 1048576;` in your config (then `systemctl daemon-reload \
+&& systemctl restart nix-daemon`). `/etc/security/limits.conf` and \
+                 `ulimit -n` don't help for systemd services — they \
+                 need the `LimitNOFILE=` directive.",
+    },
 ];
 
 /// Pure core: scan `log` for every pattern and return the ones that
