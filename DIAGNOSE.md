@@ -21,7 +21,7 @@ string appears anywhere in the text. False positives are possible
 by design — the library errs on the side of surfacing a hint that
 might help rather than staying silent.
 
-## Current catalogue — 28 patterns
+## Current catalogue — 30 patterns
 
 ### Build runtime
 
@@ -51,6 +51,7 @@ might help rather than staying silent.
 | `does not exist in the flake` | file referenced but not tracked by git |
 | `is forbidden in pure eval mode` | absolute path access in pure eval mode |
 | `cannot parse flake reference` | malformed flake URL |
+| `NAR hash mismatch` | flake input narHash in flake.lock is stale |
 
 ### Eval-time
 
@@ -63,6 +64,7 @@ might help rather than staying silent.
 | `syntax error, unexpected` | Nix syntax error |
 | `is not of type` | NixOS option value has the wrong type |
 | `cannot allocate memory` | memory exhausted during evaluation (not a build) |
+| `is used but not defined` | option referenced without the declaring module loaded |
 
 ### Package policy
 
