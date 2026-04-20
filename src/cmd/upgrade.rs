@@ -3,7 +3,6 @@
 //! Full system upgrade: update all flake inputs, rebuild, clean
 //! obsolete pins, and optionally garbage-collect old generations.
 
-use std::io::{self, Write};
 use std::path::Path;
 use std::process::Command;
 
@@ -438,16 +437,11 @@ fn extract_store_name(path: &str) -> Option<String> {
     Some(name.trim_end_matches(".drv").to_string())
 }
 
-/// Ask a yes/no question. Default is yes.
+/// Wrapper around `util::confirm` that keeps upgrade's default-yes
+/// semantic at the call site (the original local helper did the same
+/// thing; this version delegates to the shared prompt).
 fn confirm(question: &str) -> Result<bool> {
-    print!("{} {} ", question, "[Y/n]".dimmed());
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-
-    Ok(answer.is_empty() || answer == "y" || answer == "yes")
+    crate::util::confirm(question, true)
 }
 
 /// Remove pins that are now obsolete (nixpkgs caught up with nixpkgs-latest).
