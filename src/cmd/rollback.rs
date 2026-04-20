@@ -4,12 +4,13 @@
 //! after showing a human-readable summary of what's changing.
 
 use std::process::Command;
+use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
-use dialoguer::{theme::ColorfulTheme, Confirm};
 
 use super::history::{read_generations, Generation};
+use crate::util;
 
 /// Run `cheni rollback [target]`.
 ///
@@ -23,6 +24,7 @@ use super::history::{read_generations, Generation};
 /// labels), asks for confirmation (`--yes` bypasses), then performs
 /// the switch with sudo.
 pub fn run(target: Option<u32>, yes: bool) -> Result<()> {
+    let started = Instant::now();
     println!("{}\n", "=== cheni rollback ===".bold());
 
     let gens = read_generations()?;
@@ -34,19 +36,39 @@ pub fn run(target: Option<u32>, yes: bool) -> Result<()> {
 
     print_summary(current, target_gen);
 
-    if !yes && !confirm_rollback()? {
+    // `default_yes = false` — rollback is a destructive operation
+    // (sudo + switches the running system generation). Safer to make
+    // the user explicitly type 'y' than to accept a stray Enter.
+    if !yes && !util::confirm("Proceed with rollback?", false)? {
         println!("{}", "  Cancelled — nothing changed.".yellow());
         return Ok(());
     }
 
     apply_rollback(target)?;
 
-    println!("\n{} Rolled back successfully!", "✓".green());
+    println!(
+        "\n{} {} in {} — now on generation {}.",
+        "✓".green().bold(),
+        "Rollback complete".bold(),
+        format_elapsed(started.elapsed()).dimmed(),
+        target_gen.number.to_string().bold()
+    );
     println!(
         "  Run '{}' to see all generations.",
         "cheni history".bold()
     );
     Ok(())
+}
+
+/// Format `Duration` as `MmSs` or `Ss`. Matches the helper used in the
+/// other long-running commands.
+fn format_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
 }
 
 /// Pick the target generation from the listing.
@@ -114,15 +136,6 @@ fn print_summary(current: &Generation, target: &Generation) {
         current.number
     );
     println!();
-}
-
-fn confirm_rollback() -> Result<bool> {
-    let theme = ColorfulTheme::default();
-    Confirm::with_theme(&theme)
-        .with_prompt("Proceed with rollback?")
-        .default(false)
-        .interact()
-        .context("reading confirmation")
 }
 
 /// Execute the actual switch. Two paths:
