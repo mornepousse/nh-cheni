@@ -147,6 +147,13 @@ enum Commands {
     Freeze {
         /// Package name to freeze. Omit to list current freezes.
         package: Option<String>,
+
+        /// Track the latest `MAJOR.y.z` instead of locking one specific
+        /// version. With `--major 9`, `cheni upgrade` will bump the
+        /// frozen rev to today's nixpkgs as long as upstream is still
+        /// on major 9, and hold it once upstream moves to 10.
+        #[arg(long, value_name = "N")]
+        major: Option<u32>,
     },
 
     /// Release a frozen package (or all freezes with --all)
@@ -412,7 +419,7 @@ async fn dispatch(command: Commands) -> Result<()> {
             dispatch_pin(package, category, flakes, force).await
         }
         Commands::Unpin { package, all, yes } => dispatch_unpin(package, all, yes),
-        Commands::Freeze { package } => dispatch_freeze(package),
+        Commands::Freeze { package, major } => dispatch_freeze(package, major),
         Commands::Unfreeze { package, all, yes } => dispatch_unfreeze(package, all, yes),
         Commands::Update => cmd::update::run(),
         Commands::Upgrade { gc, no_clean_pins, yes } => {
@@ -480,9 +487,9 @@ fn dispatch_unpin(package: Option<String>, all: bool, yes: bool) -> Result<()> {
 /// `cheni freeze` — one arg selects freeze-a-package, no arg lists freezes.
 /// Matches `cheni pin`'s empty-arg listing behaviour so the two commands
 /// feel like a matched pair.
-fn dispatch_freeze(package: Option<String>) -> Result<()> {
+fn dispatch_freeze(package: Option<String>, major: Option<u32>) -> Result<()> {
     match package {
-        Some(name) => cmd::freeze::freeze_one(&name),
+        Some(name) => cmd::freeze::freeze_one(&name, major),
         None => cmd::freeze::list_freezes(),
     }
 }

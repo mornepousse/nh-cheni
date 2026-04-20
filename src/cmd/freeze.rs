@@ -38,11 +38,16 @@ pub fn list_freezes() -> Result<()> {
     let total = current.len();
     for (idx, (name, entry)) in current.iter().enumerate() {
         let glyph = crate::util::tree_glyph(idx, total);
+        let mode = match entry.major_constraint {
+            Some(n) => format!(" [major {}]", n).cyan().to_string(),
+            None => String::new(),
+        };
         println!(
-            "  {} {:<28} {} {}",
+            "  {} {:<28} {}{} {}",
             glyph.dimmed(),
             name.bold(),
             entry.version.dimmed(),
+            mode,
             format!("(since {}, rev {})", entry.frozen_at, flake::short_hash(&entry.rev)).dimmed()
         );
     }
@@ -64,7 +69,7 @@ pub fn list_freezes() -> Result<()> {
 /// when the package isn't installed, when it's already pinned (the two
 /// mechanisms are mutually exclusive), or when the user cancels at the
 /// preview prompt.
-pub fn freeze_one(name: &str) -> Result<()> {
+pub fn freeze_one(name: &str, major_constraint: Option<u32>) -> Result<()> {
     let nix_config = config::detect()?;
     if !config::is_initialized(&nix_config.flake_dir) {
         super::check::print_first_run_hint();
@@ -73,15 +78,44 @@ pub fn freeze_one(name: &str) -> Result<()> {
 
     reject_if_pinned(&nix_config.flake_dir, name)?;
     let installed_version = store::find_by_name(name)?.version;
+
+    // When `--major N` is passed, sanity-check that the installed
+    // version actually starts with that major — otherwise the user is
+    // about to freeze a 9.x package at "major 10" which is almost
+    // certainly a typo.
+    if let Some(n) = major_constraint {
+        let parsed = crate::version::parse::parse_version(&installed_version);
+        match parsed.first() {
+            Some(&installed_major) if installed_major as u32 == n => { /* ok */ }
+            Some(&installed_major) => anyhow::bail!(
+                "--major {} doesn't match the installed version ({}, major {}).\n\
+                 Did you mean --major {}?",
+                n,
+                installed_version,
+                installed_major,
+                installed_major
+            ),
+            None => anyhow::bail!(
+                "Cannot parse a major version out of '{}' — drop --major or \
+                 pick a different package.",
+                installed_version
+            ),
+        }
+    }
+
     let ctx = gather_freeze_context(&nix_config.flake_dir, name, &installed_version)?;
 
-    print_freeze_contract(name, &installed_version);
-    if !confirm(&format!("Freeze {} at {}?", name, installed_version), true)? {
+    print_freeze_contract(name, &installed_version, major_constraint);
+    let prompt = match major_constraint {
+        Some(n) => format!("Freeze {} at major {} (currently {})?", name, n, installed_version),
+        None => format!("Freeze {} at {}?", name, installed_version),
+    };
+    if !confirm(&prompt, true)? {
         println!("{}", "  Cancelled — nothing frozen.".yellow());
         return Ok(());
     }
 
-    apply_freeze(&nix_config.flake_dir, name, ctx, &installed_version)
+    apply_freeze(&nix_config.flake_dir, name, ctx, &installed_version, major_constraint)
 }
 
 /// Everything we need to build a `FreezeEntry`, plus the side effect
@@ -138,22 +172,29 @@ fn apply_freeze(
     name: &str,
     ctx: FreezeContext,
     installed_version: &str,
+    major_constraint: Option<u32>,
 ) -> Result<()> {
     let entry = freezes::FreezeEntry {
         rev: ctx.rev,
         nar_hash: ctx.nar_hash,
         version: installed_version.to_string(),
         frozen_at: today_iso(),
+        major_constraint,
     };
     let newly_frozen = freezes::add(flake_dir, name, entry)?;
 
+    let tail = match major_constraint {
+        Some(n) => format!(" (tracking major {})", n),
+        None => String::new(),
+    };
     let summary = if newly_frozen {
-        format!("Froze {} at {}.", name.bold(), installed_version.dimmed())
+        format!("Froze {} at {}{}.", name.bold(), installed_version.dimmed(), tail)
     } else {
         format!(
-            "Updated freeze for {} — now held at {}.",
+            "Updated freeze for {} — now held at {}{}.",
             name.bold(),
-            installed_version.dimmed()
+            installed_version.dimmed(),
+            tail
         )
     };
     println!("\n{} {}", "✓".green(), summary);
@@ -212,18 +253,44 @@ fn print_freeze_header(name: &str, installed: &str, existing: Option<&freezes::F
 /// Educational block before the confirm — mirror of `pin::print_pin_contract`
 /// so the two commands feel like a matched pair. The copy is deliberately
 /// sharp on the inverse semantic ("held" vs "tracks nixpkgs-latest").
-fn print_freeze_contract(name: &str, installed: &str) {
+///
+/// With `major_constraint`, the wording pivots from "strict lock" to
+/// "track the latest within major N".
+fn print_freeze_contract(name: &str, installed: &str, major_constraint: Option<u32>) {
     println!("  {}", "What this does:".bold());
-    println!(
-        "    Holds {} at {} regardless of nixpkgs updates.",
-        name.bold(),
-        installed.dimmed()
-    );
-    println!(
-        "    Next '{}' will keep {} at this version — other packages move as usual.",
-        "cheni upgrade".bold(),
-        name
-    );
+    match major_constraint {
+        None => {
+            println!(
+                "    Holds {} at {} regardless of nixpkgs updates.",
+                name.bold(),
+                installed.dimmed()
+            );
+            println!(
+                "    Next '{}' will keep {} at this version — other packages move as usual.",
+                "cheni upgrade".bold(),
+                name
+            );
+        }
+        Some(n) => {
+            println!(
+                "    Tracks major {} of {} (currently {}).",
+                n.to_string().bold(),
+                name.bold(),
+                installed.dimmed()
+            );
+            println!(
+                "    Next '{}' will bump {} to the latest {}.x available in nixpkgs,",
+                "cheni upgrade".bold(),
+                name,
+                n
+            );
+            println!(
+                "    and hold it at the last {}.x once upstream moves to {}.",
+                n,
+                n + 1
+            );
+        }
+    }
     println!(
         "    The freeze stays active until you run '{}'.",
         format!("cheni unfreeze {}", name).bold()
@@ -266,6 +333,166 @@ fn short_nar_hash(hash: &str) -> String {
         .rev()
         .collect();
     format!("{}…{}", head, tail)
+}
+
+/// Outcome of refreshing one constrained freeze entry. Reported back
+/// to the caller (typically `cheni upgrade`) so it can render a
+/// single-line summary per entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefreshOutcome {
+    /// Couldn't query upstream nixpkgs — entry unchanged.
+    Unknown,
+    /// Upstream still on the tracked major and same version as
+    /// what's stored — nothing to do.
+    UpToDate { version: String },
+    /// Upstream still on the tracked major but a newer `X.y.z` is
+    /// available; the entry was bumped to that version.
+    Bumped { old_version: String, new_version: String },
+    /// Upstream has moved past the tracked major — entry held at
+    /// the previous rev, user should decide.
+    Held {
+        frozen_version: String,
+        upstream_version: String,
+        tracked_major: u32,
+    },
+}
+
+/// Walk every constrained freeze and refresh the ones whose upstream
+/// nixpkgs version still matches the `major_constraint`. Returns a
+/// per-entry outcome so the caller can display what happened.
+///
+/// - No constrained freezes → returns an empty Vec, no IO beyond
+///   reading `package-freezes.json`.
+/// - Any bumps → writes the updated freezes file atomically.
+/// - Unreachable nixpkgs (network, missing rev) → every constrained
+///   entry reports `Unknown`, file is not modified.
+pub fn refresh_constrained_freezes(
+    flake_dir: &std::path::Path,
+) -> Result<Vec<(String, RefreshOutcome)>> {
+    let current = freezes::read(flake_dir)?;
+    let constrained: Vec<(String, freezes::FreezeEntry)> = current
+        .iter()
+        .filter(|(_, e)| e.major_constraint.is_some())
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    if constrained.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Current nixpkgs state the user just flake-updated to.
+    let current_rev = flake::read_nixpkgs_rev(flake_dir)?;
+    // Prefetching is the expensive step — fail-open so an offline
+    // refresh doesn't block the upgrade. We report Unknown for each
+    // constrained entry instead.
+    let current_nar = match flake::prefetch_nixpkgs_rev(&current_rev) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::debug!("freeze refresh: prefetch failed ({}), reporting Unknown", e);
+            return Ok(constrained
+                .into_iter()
+                .map(|(name, _)| (name, RefreshOutcome::Unknown))
+                .collect());
+        }
+    };
+
+    let mut outcomes = Vec::with_capacity(constrained.len());
+    let mut updated = current.clone();
+    for (name, entry) in constrained {
+        let constraint = entry.major_constraint.expect("filtered to Some");
+        let Some(upstream_version) =
+            flake::query_pkg_version_at_rev(&current_rev, &current_nar, &name)
+        else {
+            outcomes.push((name, RefreshOutcome::Unknown));
+            continue;
+        };
+        let parsed = crate::version::parse::parse_version(&upstream_version);
+        let Some(&first) = parsed.first() else {
+            outcomes.push((name, RefreshOutcome::Unknown));
+            continue;
+        };
+        let upstream_major = first as u32;
+        if upstream_major == constraint {
+            if upstream_version == entry.version {
+                outcomes.push((name, RefreshOutcome::UpToDate { version: upstream_version }));
+            } else {
+                let new_entry = freezes::FreezeEntry {
+                    rev: current_rev.clone(),
+                    nar_hash: current_nar.clone(),
+                    version: upstream_version.clone(),
+                    frozen_at: today_iso(),
+                    major_constraint: Some(constraint),
+                };
+                updated.insert(name.clone(), new_entry);
+                outcomes.push((
+                    name,
+                    RefreshOutcome::Bumped {
+                        old_version: entry.version.clone(),
+                        new_version: upstream_version,
+                    },
+                ));
+            }
+        } else {
+            outcomes.push((
+                name,
+                RefreshOutcome::Held {
+                    frozen_version: entry.version.clone(),
+                    upstream_version,
+                    tracked_major: constraint,
+                },
+            ));
+        }
+    }
+
+    if updated != current {
+        freezes::write(flake_dir, &updated)?;
+    }
+    Ok(outcomes)
+}
+
+/// Render the outcome table from `refresh_constrained_freezes` for
+/// display in `cheni upgrade`. No-op when every entry is `UpToDate`
+/// or the list is empty.
+pub fn print_refresh_summary(outcomes: &[(String, RefreshOutcome)]) {
+    let any_interesting = outcomes.iter().any(|(_, o)| {
+        !matches!(o, RefreshOutcome::UpToDate { .. })
+    });
+    if !any_interesting {
+        return;
+    }
+    println!();
+    println!("  {}", "Freeze refresh:".bold());
+    for (name, outcome) in outcomes {
+        match outcome {
+            RefreshOutcome::UpToDate { .. } => {}
+            RefreshOutcome::Unknown => {
+                println!(
+                    "    {} {:<28} {}",
+                    "?".dimmed(),
+                    name.bold(),
+                    "(upstream version unavailable)".dimmed()
+                );
+            }
+            RefreshOutcome::Bumped { old_version, new_version } => {
+                println!(
+                    "    {} {:<28} {} → {}",
+                    "↑".green(),
+                    name.bold(),
+                    old_version.dimmed(),
+                    new_version.bold()
+                );
+            }
+            RefreshOutcome::Held { frozen_version, upstream_version, tracked_major } => {
+                println!(
+                    "    {} {:<28} held at {} — upstream now {} (> major {})",
+                    "!".yellow().bold(),
+                    name.bold(),
+                    frozen_version.dimmed(),
+                    upstream_version.yellow(),
+                    tracked_major
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

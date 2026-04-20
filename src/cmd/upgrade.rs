@@ -39,6 +39,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
     println!("{}\n", "=== cheni upgrade ===".bold());
 
     update_flake_inputs(&nix_config.flake_dir)?;
+    refresh_constrained_freezes_step(&nix_config.flake_dir);
 
     if !opts.yes && !preview_and_confirm(config_path, &nix_config.hostname)? {
         return Ok(());
@@ -72,6 +73,25 @@ fn update_flake_inputs(flake_dir: &Path) -> Result<()> {
         anyhow::bail!("nix flake update failed");
     }
     Ok(())
+}
+
+/// Step 1b: refresh any freezes that carry a `--major N` constraint.
+///
+/// Walks `package-freezes.json`, queries the new nixpkgs rev for each
+/// constrained package, and either bumps the freeze (same major, new
+/// patch/minor available) or holds it (upstream moved past the major).
+/// Non-fatal: a prefetch / eval failure just reports "Unknown" for
+/// the entry and leaves the upgrade moving forward.
+fn refresh_constrained_freezes_step(flake_dir: &Path) {
+    match super::freeze::refresh_constrained_freezes(flake_dir) {
+        Ok(outcomes) if !outcomes.is_empty() => {
+            super::freeze::print_refresh_summary(&outcomes);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            debug!("Freeze refresh skipped: {}", e);
+        }
+    }
 }
 
 /// Step 1.5: evaluate pending changes via `nix build --dry-run`, show a

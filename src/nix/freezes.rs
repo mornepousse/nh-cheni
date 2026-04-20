@@ -39,6 +39,14 @@ use tracing::debug;
 /// either is missing). `version` and `frozen_at` are diagnostic-only
 /// and default to empty when absent — that way a freezes file written
 /// by an older cheni still loads cleanly after a schema evolution.
+///
+/// `major_constraint` is the "track this major, block everything else"
+/// knob (set via `cheni freeze <pkg> --major N`). When `None`, the
+/// freeze is a strict lock: `rev`/`narHash` never bump until the user
+/// unfreezes. When `Some(N)`, `cheni upgrade` runs a refresh pass
+/// that bumps `rev`/`narHash` to today's nixpkgs so long as upstream
+/// is still on major N; once upstream moves to N+1, the entry is
+/// held and the user gets a visible notice.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FreezeEntry {
     /// Full nixpkgs git revision the package is held at.
@@ -53,6 +61,10 @@ pub struct FreezeEntry {
     /// ISO `YYYY-MM-DD` date when the freeze was created (diagnostic).
     #[serde(default)]
     pub frozen_at: String,
+    /// Major-version constraint. `None` = strict lock (never auto-bump).
+    /// `Some(N)` = accept any `N.y.z`, block `(N+1).y.z` and above.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "majorConstraint")]
+    pub major_constraint: Option<u32>,
 }
 
 /// Map form used across the module — `BTreeMap` so the JSON on disk has

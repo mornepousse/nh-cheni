@@ -10,6 +10,7 @@ fn sample_entry() -> FreezeEntry {
         nar_hash: "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".to_string(),
         version: "127.0.1".to_string(),
         frozen_at: "2026-04-20".to_string(),
+        major_constraint: None,
     }
 }
 

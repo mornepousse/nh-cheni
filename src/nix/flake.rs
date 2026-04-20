@@ -556,6 +556,74 @@ pub fn prefetch_nixpkgs_rev(rev: &str) -> Result<String> {
     Ok(hash.to_string())
 }
 
+/// Eval `nixpkgs` pinned at `rev` + `nar_hash` and return the `.version`
+/// attribute of a named package. Used by the freeze-refresh pass to
+/// learn "what version of kicad does today's nixpkgs actually ship?"
+/// without going through the user's overlay (which would return the
+/// *frozen* version, defeating the point).
+///
+/// Returns `None` when the eval fails for any reason — missing
+/// attribute, `.version` not a string, a malformed rev. Treated by the
+/// caller as "unknown, don't touch this entry".
+pub fn query_pkg_version_at_rev(rev: &str, nar_hash: &str, pkg_name: &str) -> Option<String> {
+    // Defence in depth — same sanity checks as elsewhere before
+    // splicing values into the `nix eval --expr` string.
+    if rev.is_empty()
+        || rev.len() > 64
+        || !rev.chars().all(|c| c.is_ascii_hexdigit())
+    {
+        return None;
+    }
+    if !(nar_hash.starts_with("sha256-") || nar_hash.starts_with("sha512-"))
+        || nar_hash.len() > 200
+        || nar_hash.chars().any(|c| c.is_control() || c == '"' || c == '\\')
+    {
+        return None;
+    }
+    // Package names splice into a Nix attribute path; reject anything
+    // that could escape the attribute lookup.
+    if pkg_name.is_empty()
+        || pkg_name.len() > 128
+        || !pkg_name.chars().all(|c| {
+            c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '+'
+        })
+    {
+        return None;
+    }
+
+    let expr = format!(
+        "let pkgs = import (builtins.fetchTree {{ \
+type = \"github\"; owner = \"NixOS\"; repo = \"nixpkgs\"; \
+rev = \"{rev}\"; narHash = \"{nar_hash}\"; \
+}}) {{ system = builtins.currentSystem; config.allowUnfree = true; }}; \
+in pkgs.{pkg_name}.version",
+        rev = rev,
+        nar_hash = nar_hash,
+        pkg_name = pkg_name
+    );
+
+    let output = std::process::Command::new("nix")
+        .args(["eval", "--impure", "--raw", "--expr", &expr])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        debug!(
+            "nix eval failed for '{}' at rev {}: {}",
+            pkg_name,
+            &rev[..rev.len().min(12)],
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return None;
+    }
+    let version = String::from_utf8(output.stdout).ok()?;
+    let version = version.trim().to_string();
+    if version.is_empty() {
+        None
+    } else {
+        Some(version)
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/flake.rs"]
 mod tests;
