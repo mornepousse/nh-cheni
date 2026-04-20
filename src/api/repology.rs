@@ -18,14 +18,9 @@ const MAX_CONCURRENT: usize = 2;
 /// Delay between batches of requests (in milliseconds).
 const BATCH_DELAY_MS: u64 = 500;
 
-/// Wait time after a 429 response before retrying (in seconds).
-/// Used when the server does not provide a `Retry-After` header.
-const RATE_LIMIT_RETRY_SECS: u64 = 3;
-
-/// Upper bound on `Retry-After` values we'll honor. Beyond this we
-/// fall back to `RATE_LIMIT_RETRY_SECS`: we'd rather give up and
-/// return "unknown" than block a user command for half a minute+.
-const RATE_LIMIT_MAX_WAIT_SECS: u64 = 30;
+// Rate-limit constants + parser moved to `crate::api::net` so the
+// flake-input probe in `src/nix/flake.rs` can reuse them.
+use super::net::parse_retry_after;
 
 /// Maximum random jitter added to batch delay (in milliseconds).
 /// Avoids thundering herd when multiple instances run concurrently.
@@ -337,23 +332,6 @@ async fn query_one(
     }
 
     parse_response(response, name, &match_names, installed).await
-}
-
-/// Parse the `Retry-After` header into a seconds value.
-///
-/// Honors the delta-seconds format (RFC 7231 §7.1.3). The HTTP-date
-/// variant is uncommon on APIs like Repology and we don't attempt to
-/// parse it — we fall back to the default instead.
-///
-/// Returns:
-/// - the header value when it parses as a u64 in `[1, RATE_LIMIT_MAX_WAIT_SECS]`
-/// - `RATE_LIMIT_RETRY_SECS` otherwise (missing header, unparseable,
-///   zero, or exceeding the cap)
-fn parse_retry_after(header_value: Option<&str>) -> u64 {
-    match header_value.and_then(|s| s.trim().parse::<u64>().ok()) {
-        Some(secs) if (1..=RATE_LIMIT_MAX_WAIT_SECS).contains(&secs) => secs,
-        _ => RATE_LIMIT_RETRY_SECS,
-    }
 }
 
 /// Simple jitter based on the package index.

@@ -103,6 +103,34 @@ pub fn verify_body_size(actual: usize, max_bytes: usize) -> Result<()> {
     Ok(())
 }
 
+/// Default wait after a 429 response when the server didn't set
+/// `Retry-After`. Three seconds matches Repology's recommended back-off
+/// and is short enough for a CLI command to retry transparently.
+pub const RATE_LIMIT_RETRY_SECS: u64 = 3;
+
+/// Upper bound on `Retry-After` values we'll honor. Beyond this we
+/// fall back to `RATE_LIMIT_RETRY_SECS`: we'd rather give up and
+/// return an "unknown" than block the user for half a minute+.
+pub const RATE_LIMIT_MAX_WAIT_SECS: u64 = 30;
+
+/// Parse the `Retry-After` header into a seconds value.
+///
+/// Honors the delta-seconds format (RFC 7231 §7.1.3). The HTTP-date
+/// variant is uncommon on APIs we consume (Repology, GitHub, GitLab)
+/// and we don't attempt to parse it — we fall back to the default
+/// instead.
+///
+/// Returns:
+/// - the header value when it parses as a u64 in `[1, RATE_LIMIT_MAX_WAIT_SECS]`
+/// - `RATE_LIMIT_RETRY_SECS` otherwise (missing header, unparseable,
+///   zero, or exceeding the cap)
+pub fn parse_retry_after(header_value: Option<&str>) -> u64 {
+    match header_value.and_then(|s| s.trim().parse::<u64>().ok()) {
+        Some(secs) if (1..=RATE_LIMIT_MAX_WAIT_SECS).contains(&secs) => secs,
+        _ => RATE_LIMIT_RETRY_SECS,
+    }
+}
+
 #[cfg(test)]
 #[path = "tests/net.rs"]
 mod tests;

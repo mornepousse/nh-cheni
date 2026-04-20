@@ -89,3 +89,42 @@ fn verify_body_size_over_limit_rejected() {
     let err = verify_body_size(MAX_BODY_BYTES + 1, MAX_BODY_BYTES).unwrap_err();
     assert!(err.to_string().contains("exceeds"));
 }
+
+#[test]
+fn retry_after_honors_server_seconds() {
+    assert_eq!(parse_retry_after(Some("5")), 5);
+    assert_eq!(parse_retry_after(Some("  12  ")), 12);
+}
+
+#[test]
+fn retry_after_caps_at_max() {
+    // Beyond the cap we fall back to the default — we'd rather
+    // return "unknown" than block a user command for a full minute.
+    assert_eq!(parse_retry_after(Some("60")), RATE_LIMIT_RETRY_SECS);
+    assert_eq!(
+        parse_retry_after(Some(&(RATE_LIMIT_MAX_WAIT_SECS + 1).to_string())),
+        RATE_LIMIT_RETRY_SECS
+    );
+}
+
+#[test]
+fn retry_after_accepts_boundary() {
+    assert_eq!(parse_retry_after(Some("1")), 1);
+    assert_eq!(
+        parse_retry_after(Some(&RATE_LIMIT_MAX_WAIT_SECS.to_string())),
+        RATE_LIMIT_MAX_WAIT_SECS
+    );
+}
+
+#[test]
+fn retry_after_falls_back_on_missing_or_invalid() {
+    assert_eq!(parse_retry_after(None), RATE_LIMIT_RETRY_SECS);
+    assert_eq!(parse_retry_after(Some("")), RATE_LIMIT_RETRY_SECS);
+    assert_eq!(parse_retry_after(Some("0")), RATE_LIMIT_RETRY_SECS);
+    // HTTP-date form — not parsed, falls back to the default.
+    assert_eq!(
+        parse_retry_after(Some("Wed, 21 Oct 2026 07:28:00 GMT")),
+        RATE_LIMIT_RETRY_SECS
+    );
+    assert_eq!(parse_retry_after(Some("soon")), RATE_LIMIT_RETRY_SECS);
+}

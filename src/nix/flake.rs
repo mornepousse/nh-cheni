@@ -404,11 +404,17 @@ fn is_revision_outdated(remote_rev: &str, local_rev: &str) -> bool {
 }
 
 /// Fetch commit info from a Git hosting API.
+///
+/// Honors a `429 Too Many Requests` with a single retry, waiting for
+/// the server-supplied `Retry-After` when present and falling back to
+/// `RATE_LIMIT_RETRY_SECS` otherwise. GitHub's anonymous quota (60
+/// req/h) is the common offender; a brief back-off is usually enough
+/// to land on the next hour boundary.
 fn fetch_commit_info<F>(client: &reqwest::blocking::Client, url: &str, extract: F) -> Option<RemoteCommitInfo>
 where
     F: Fn(&serde_json::Value) -> Option<RemoteCommitInfo>,
 {
-    let response = client.get(url).send().ok()?;
+    let response = send_with_retry_on_429(client, url)?;
     if !response.status().is_success() {
         debug!("API request failed: {} → {}", url, response.status());
         return None;
@@ -427,6 +433,33 @@ where
     }
     let json: serde_json::Value = serde_json::from_slice(&body).ok()?;
     extract(&json)
+}
+
+/// Send a GET request with a single retry on HTTP 429.
+///
+/// On the first response, if the status is 429 we read the
+/// `Retry-After` header (capped/defaulted by
+/// `crate::api::net::parse_retry_after`), sleep for that many
+/// seconds, and issue exactly one more GET. Any other status is
+/// returned as-is to the caller.
+fn send_with_retry_on_429(
+    client: &reqwest::blocking::Client,
+    url: &str,
+) -> Option<reqwest::blocking::Response> {
+    let first = client.get(url).send().ok()?;
+    if first.status() != reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Some(first);
+    }
+
+    let retry_after = first
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|v| v.to_str().ok());
+    let wait = crate::api::net::parse_retry_after(retry_after);
+    debug!("429 from {}, retrying in {}s", url, wait);
+    std::thread::sleep(std::time::Duration::from_secs(wait));
+
+    client.get(url).send().ok()
 }
 
 /// Take up to the first 12 characters of a Git hash — char-based rather
