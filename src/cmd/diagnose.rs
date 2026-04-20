@@ -291,6 +291,71 @@ pub const KNOWN_FINDINGS: &[Finding] = &[
                  + Nix plugin, Emacs nix-mode, etc.) catches most of these \
                  live.",
     },
+    Finding {
+        matcher: "is not of type",
+        title: "NixOS option value has the wrong type",
+        explanation: "A config entry was assigned a value that doesn't match \
+                      the option's declared type — `environment.systemPackages \
+                      = [ \"firefox\" ];` (string) where a list of `package` \
+                      was expected, or `services.picom.activeOpacity = \"0.8\";` \
+                      (string) where the module now wants a float. The full \
+                      error points at the exact `[definition N-entry M]` so \
+                      you can trace back to the offending assignment.",
+        action: "Re-run with `--show-trace` for the full path to the bad \
+                 definition. Usual fix: swap the string for the real package \
+                 (`pkgs.firefox`), or the float for a number literal (`0.8` \
+                 not `\"0.8\"`). Type changes after a nixpkgs bump are a \
+                 common trigger — check the release notes for renamed/retyped \
+                 options.",
+    },
+    Finding {
+        matcher: "Failed to start",
+        title: "systemd service failed to start after activation",
+        explanation: "The rebuild succeeded at eval/build time but one or more \
+                      systemd units failed when the new configuration was \
+                      activated. The previous generation is still active; \
+                      boot should still work, but the feature that needed the \
+                      failing service won't.",
+        action: "Inspect the unit: `journalctl -u <service>.service -b` \
+                 (recent boot) or `systemctl status <service>.service`. \
+                 Common culprits on desktops: \
+                 `systemd-networkd-wait-online.service` timing out on \
+                 unused NICs (disable with `systemd.network.wait-online.enable \
+                 = false;`), `systemd.update-utmp.service` on btrfs (known \
+                 upstream issue), ad-hoc service definitions with a bad \
+                 `ExecStart` path.",
+    },
+    Finding {
+        matcher: "cannot parse flake reference",
+        title: "malformed flake URL",
+        explanation: "A flake ref in your config (or on the command line) \
+                      doesn't match any of the accepted shapes: `github:...`, \
+                      `gitlab:...`, `git+https://...`, `git+ssh://...`, \
+                      `path:...`. Typical mistakes: a trailing slash, a \
+                      `.git` suffix on a github short-ref, or a missing \
+                      protocol prefix.",
+        action: "Test the ref in isolation: `nix flake metadata <ref>`. \
+                 Common valid shapes: `github:owner/repo`, \
+                 `github:owner/repo/branch`, \
+                 `git+https://gitlab.com/owner/repo.git?ref=main`, \
+                 `path:./subflake`. Drop trailing slashes and quote the ref \
+                 if it contains special characters.",
+    },
+    Finding {
+        matcher: "Authentication failed for",
+        title: "private repository fetch without credentials",
+        explanation: "A `git+https://` or `git+ssh://` flake input points at \
+                      a repository that requires authentication and nix \
+                      doesn't have credentials for it. Public repos served \
+                      over SSH also fail this way when your SSH key isn't \
+                      loaded in the agent.",
+        action: "For `git+https://github.com/...` private refs: configure \
+                 `access-tokens` in `nix.settings` with a read-scoped PAT. \
+                 For `git+ssh://`: make sure `ssh-agent` is running and the \
+                 key is added (`ssh-add ~/.ssh/id_ed25519`); `ssh -T \
+                 git@github.com` should say \"Hi <user>!\" before nix \
+                 will have any luck.",
+    },
 ];
 
 /// Pure core: scan `log` for every pattern and return the ones that

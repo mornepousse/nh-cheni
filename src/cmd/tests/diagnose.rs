@@ -231,3 +231,46 @@ fn detects_syntax_error() {
     assert_eq!(hits.len(), 1);
     assert!(hits[0].title.contains("syntax error"));
 }
+
+#[test]
+fn detects_option_type_mismatch() {
+    let log = "error: A definition for option \
+               `environment.systemPackages.[definition 1-entry 5]' \
+               is not of type `package'. Definition values:\n\
+               - In `/etc/nixos/configuration.nix': \"firefox\"";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("wrong type"));
+}
+
+#[test]
+fn detects_systemd_unit_failure_at_activation() {
+    let log = "setting up /etc...\n\
+               reloading user units for mae...\n\
+               Job for networkmanager.service failed because the control \
+               process exited with error code.\n\
+               Failed to start Network Manager.\n\
+               See 'systemctl status networkmanager.service' for details.";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("systemd"));
+}
+
+#[test]
+fn detects_malformed_flake_url() {
+    let log = "error: cannot parse flake reference \
+               'github:owner/repo/'";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("malformed"));
+}
+
+#[test]
+fn detects_private_repo_auth_failure() {
+    let log = "error: program 'git' failed with exit code 128\n\
+               remote: Repository not found or authentication failed\n\
+               fatal: Authentication failed for 'https://github.com/private/repo.git/'";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("private repository"));
+}
