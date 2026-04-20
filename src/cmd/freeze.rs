@@ -66,24 +66,51 @@ pub fn list_freezes() -> Result<()> {
 /// preview prompt.
 pub fn freeze_one(name: &str) -> Result<()> {
     let nix_config = config::detect()?;
-
     if !config::is_initialized(&nix_config.flake_dir) {
         super::check::print_first_run_hint();
         return Ok(());
     }
 
     reject_if_pinned(&nix_config.flake_dir, name)?;
-    let store_pkg = store::find_by_name(name)?;
-    let installed_version = store_pkg.version.clone();
+    let installed_version = store::find_by_name(name)?.version;
+    let ctx = gather_freeze_context(&nix_config.flake_dir, name, &installed_version)?;
 
-    let existing = freezes::read(&nix_config.flake_dir)?
-        .get(name)
-        .cloned();
-    print_freeze_header(name, &installed_version, existing.as_ref());
+    print_freeze_contract(name, &installed_version);
+    if !confirm(&format!("Freeze {} at {}?", name, installed_version), true)? {
+        println!("{}", "  Cancelled — nothing frozen.".yellow());
+        return Ok(());
+    }
+
+    apply_freeze(&nix_config.flake_dir, name, ctx, &installed_version)
+}
+
+/// Everything we need to build a `FreezeEntry`, plus the side effect
+/// of printing the "preview" lines (header + rev + narHash) to the
+/// user on the way.
+///
+/// Split out so `freeze_one` reads as a four-step orchestrator:
+/// preflight → gather → confirm → apply.
+struct FreezeContext {
+    rev: String,
+    nar_hash: String,
+}
+
+/// Step 2 of `freeze_one`: print the header, read the current nixpkgs
+/// rev, prefetch the narHash. Returns the rev+narHash ready for
+/// `apply_freeze`. Exits early (via `?`) if reading flake.lock or
+/// prefetching fails — those are hard errors the caller should
+/// surface as-is.
+fn gather_freeze_context(
+    flake_dir: &std::path::Path,
+    name: &str,
+    installed_version: &str,
+) -> Result<FreezeContext> {
+    let existing = freezes::read(flake_dir)?.get(name).cloned();
+    print_freeze_header(name, installed_version, existing.as_ref());
 
     println!();
     println!("  {}", "Reading current nixpkgs revision from flake.lock…".dimmed());
-    let rev = flake::read_nixpkgs_rev(&nix_config.flake_dir)?;
+    let rev = flake::read_nixpkgs_rev(flake_dir)?;
     println!(
         "  {} rev {}",
         "·".dimmed(),
@@ -97,36 +124,39 @@ pub fn freeze_one(name: &str) -> Result<()> {
     let nar_hash = flake::prefetch_nixpkgs_rev(&rev)
         .context("Could not prefetch the nixpkgs tarball — freeze aborted.")?;
     println!("  {} {}", "·".dimmed(), short_nar_hash(&nar_hash).dimmed());
-
     println!();
-    print_freeze_contract(name, &installed_version);
-    if !confirm(&format!("Freeze {} at {}?", name, installed_version), true)? {
-        println!("{}", "  Cancelled — nothing frozen.".yellow());
-        return Ok(());
-    }
 
+    Ok(FreezeContext { rev, nar_hash })
+}
+
+/// Step 4 of `freeze_one`: write the entry to `package-freezes.json`
+/// and print a success line tailored to whether this was a new
+/// freeze or a replacement. The `newly_frozen` bool comes back from
+/// `freezes::add` — we don't have to pre-compute it.
+fn apply_freeze(
+    flake_dir: &std::path::Path,
+    name: &str,
+    ctx: FreezeContext,
+    installed_version: &str,
+) -> Result<()> {
     let entry = freezes::FreezeEntry {
-        rev,
-        nar_hash,
-        version: installed_version.clone(),
+        rev: ctx.rev,
+        nar_hash: ctx.nar_hash,
+        version: installed_version.to_string(),
         frozen_at: today_iso(),
     };
-    let newly_frozen = freezes::add(&nix_config.flake_dir, name, entry)?;
-    if newly_frozen {
-        println!(
-            "\n{} Froze {} at {}.",
-            "✓".green(),
-            name.bold(),
-            installed_version.dimmed()
-        );
+    let newly_frozen = freezes::add(flake_dir, name, entry)?;
+
+    let summary = if newly_frozen {
+        format!("Froze {} at {}.", name.bold(), installed_version.dimmed())
     } else {
-        println!(
-            "\n{} Updated freeze for {} — now held at {}.",
-            "✓".green(),
+        format!(
+            "Updated freeze for {} — now held at {}.",
             name.bold(),
             installed_version.dimmed()
-        );
-    }
+        )
+    };
+    println!("\n{} {}", "✓".green(), summary);
     println!("Run '{}' to apply.", "cheni build".bold());
     Ok(())
 }
