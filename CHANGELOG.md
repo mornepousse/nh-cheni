@@ -7,6 +7,68 @@ semver.
 
 ## Unreleased
 
+## [0.4.0] — 2026-04-20
+
+Desktop-user feature bump. Notable:
+
+### Added
+- **`cheni freeze <pkg> --major N`** — tracks the latest `N.y.z`
+  instead of strict-locking one version. `cheni upgrade` bumps the
+  frozen rev to today's nixpkgs when upstream is still on major N,
+  and holds it once upstream moves to N+1 (with a visible warning).
+  Strict locks (no `--major`) unchanged — the flag is additive.
+- **11 new `cheni diagnose` patterns** — including unfree, broken,
+  collision, home-manager file conflict, GitHub rate limit, OOM
+  (exit 137), DNS, syntax error, option-type mismatch, systemd
+  activation failure, bootloader install, untrusted substituter,
+  `dependencies couldn't be built`, sandbox violation, and the FD-
+  exhaustion `Too many open files`. Catalogue: 17 → 33 patterns.
+
+### Changed
+- `cheni upgrade` grows a step 1b ("Freeze refresh") between flake
+  update and preview. Reports per-entry whether a constrained
+  freeze was bumped, held (upstream moved past the major), up to
+  date, or unknown (offline/eval failure). Non-fatal — network
+  issues don't block the upgrade.
+- `nix::flake::fetch_commit_info` now honors `Retry-After` on 429
+  responses from GitHub/GitLab. Same policy as the Repology
+  client, shared via `crate::http::parse_retry_after`.
+
+### Internal
+- HTTP helpers (`http_timeout`, `check_content_length`,
+  `verify_body_size`, `parse_retry_after`, `MAX_BODY_BYTES`,
+  `RATE_LIMIT_*`) moved from `api/net` to `crate::http`. Closes the
+  cross-sibling `nix/` → `api/` layering warning flagged by the
+  post-v0.2.0 review. `api::net` → `crate::http` for all consumers.
+- `util::confirm`, `util::tree_glyph`, `util::format_ymd` /
+  `format_ymd_hm` extracted. Removes ~80 lines of duplication across
+  `pin`, `freeze`, `unfreeze`, `upgrade`, `history`.
+- `nix::store::find_by_name` and `nix::flake::short_hash` promoted
+  to `pub(crate)` so commands stop copy-pasting the same helpers.
+- `cmd::freeze::freeze_one` split into `gather_freeze_context` +
+  `apply_freeze` to keep the orchestrator under 30 lines.
+- `FreezeEntry.major_constraint: Option<u32>` added (serialised as
+  `majorConstraint`, `skip_serializing_if = Option::is_none` so
+  strict-lock entries stay byte-identical on round-trip).
+- `nix::flake::query_pkg_version_at_rev` queries a package's
+  `.version` at a specific nixpkgs rev via `nix eval --raw --expr`
+  (pure — system injected from `std::env::consts`, `--impure` not
+  used; fetchTree content-addressed by narHash).
+
+### Security
+- `nix eval` in the freeze-refresh path runs pure. `--impure` was
+  dropped after the security audit flagged it as an unnecessary
+  capability (only used for `builtins.currentSystem` — now we
+  resolve the system from Rust directly).
+- `freezes::validate_entry` rejects `majorConstraint > 9999` as
+  defence-in-depth against payload edits to
+  `package-freezes.json`.
+- `DIAGNOSE.md` catalogue now lists 33 patterns.
+
+### Fixed
+- `src/tests/util.rs` atomic-write tests had been silently clobbered
+  in the consolidation pass; restored. +3 tests.
+
 ## [0.3.0] — 2026-04-20
 
 Desktop-user quality-of-life pass on top of v0.2.0, plus the
