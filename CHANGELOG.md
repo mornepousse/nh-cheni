@@ -7,9 +7,12 @@ semver.
 
 ## Unreleased
 
-Desktop-user quality-of-life pass on top of v0.2.0. No breaking
-changes; every item below is additive or a readability improvement
-to an existing command.
+## [0.3.0] — 2026-04-20
+
+Desktop-user quality-of-life pass on top of v0.2.0, plus the
+`freeze`/`unfreeze` commands — the semantic inverse of `pin`.
+No breaking changes; every item below is additive or a
+readability improvement to an existing command.
 
 ### Added
 - **`cheni freeze <pkg>` / `cheni unfreeze <pkg|--all>`** — hold a
