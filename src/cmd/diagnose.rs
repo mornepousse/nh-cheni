@@ -421,6 +421,42 @@ pub const KNOWN_FINDINGS: &[Finding] = &[
                  it — either remove the module declaration or mark the \
                  option with `lib.mkForce` to override the default.",
     },
+    Finding {
+        matcher: "is used but not defined",
+        title: "option referenced without the declaring module loaded",
+        explanation: "Your config sets a NixOS option (e.g. \
+                      `hardware.nvidia.open = true;`) but the module \
+                      that *declares* it isn't in scope — typical causes: \
+                      a missing `imports = [ ... ];`, a typo in the \
+                      attribute path, or the option was renamed/removed \
+                      in a recent nixpkgs bump (a classic is \
+                      `hardware.opengl` → `hardware.graphics`).",
+        action: "Grep nixpkgs for the option name — if it's truly gone, \
+                 check the release notes of the nixpkgs channel you \
+                 upgraded from/to for the rename. If it's still there, \
+                 confirm the module that declares it is in your \
+                 `imports = [ ... ];`. `nixos-option <attribute-path>` \
+                 (or the generic `nix eval .#nixosConfigurations.<host>.options.<path>`) \
+                 is the fast way to check whether the option exists at all.",
+    },
+    Finding {
+        matcher: "NAR hash mismatch",
+        title: "flake input narHash in flake.lock is stale",
+        explanation: "The narHash recorded in your `flake.lock` for an \
+                      input doesn't match what Nix just computed from \
+                      the fetched source. Distinct from a fixed-output \
+                      hash mismatch (that's upstream changing bytes); \
+                      this one is usually a Nix-version change in how \
+                      it hashes an input — git submodules handling \
+                      changed between 2.18 → 2.22, zip input hashing \
+                      changed at 2.21, `export-subst` in .gitattributes \
+                      produces unstable hashes by design.",
+        action: "`nix flake update <input>` regenerates the lock entry \
+                 with the new hash. If you can't afford to bump the \
+                 input, pin Nix to a version before the hash-mode change \
+                 (last-ditch). For submodule inputs, `flake = false;` on \
+                 the input sidesteps the recursive-hash recomputation.",
+    },
 ];
 
 /// Pure core: scan `log` for every pattern and return the ones that

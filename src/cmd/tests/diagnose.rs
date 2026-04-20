@@ -316,3 +316,28 @@ fn detects_activation_refusing_to_overwrite() {
     assert_eq!(hits.len(), 1);
     assert!(hits[0].title.contains("overwrite"));
 }
+
+#[test]
+fn detects_option_used_but_not_defined() {
+    let log = "error:\n\
+               The option `hardware.graphics.enable' is used but not defined.\n\
+               \n\
+               Did you mean one of:\n\
+                 hardware.opengl.enable";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("declaring module"));
+}
+
+#[test]
+fn detects_nar_hash_mismatch_on_flake_input() {
+    // Distinct signature from the existing `hash mismatch in fixed-output
+    // derivation` pattern — this one is flake-lock, not fetch-derivation.
+    let log = "error: NAR hash mismatch in input \
+               'github:NixOS/nixpkgs/nixos-unstable':\n\
+               wanted sha256-AAAA==\n\
+               got    sha256-BBBB==";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("narHash"));
+}
