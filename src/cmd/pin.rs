@@ -14,6 +14,79 @@ use crate::nix::{config, flake, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::parse_version;
 
+/// Run `cheni pin` with no arguments.
+///
+/// Lists the currently pinned packages with the store version each
+/// one is frozen at, and flags pins that nixpkgs has already caught
+/// up with (the pin is still technically honoured but does nothing
+/// useful — `cheni clean` would remove it).
+pub fn list_pins() -> Result<()> {
+    let nix_config = config::detect()?;
+    let current_pins = pins::read(&nix_config.flake_dir)?;
+
+    println!("{}\n", "=== cheni pin (list) ===".bold());
+
+    if current_pins.is_empty() {
+        println!("  {}", "no active pins.".dimmed());
+        println!();
+        println!("  Pin a package with '{}'.", "cheni pin <name>".bold());
+        return Ok(());
+    }
+
+    let installed = store::read_installed_packages().unwrap_or_default();
+    let lock_path = nix_config.flake_dir.join("flake.lock");
+    let obsolete = super::obsolete::count_obsolete_pins(&lock_path, &current_pins);
+    let all_obsolete = obsolete == current_pins.len() && obsolete > 0;
+
+    println!(
+        "  {} pin(s) active{}",
+        current_pins.len().to_string().bold(),
+        if all_obsolete {
+            " (all obsolete — nixpkgs caught up)".yellow().to_string()
+        } else if obsolete > 0 {
+            format!(" ({} obsolete)", obsolete).yellow().to_string()
+        } else {
+            String::new()
+        }
+    );
+    println!();
+
+    for (idx, name) in current_pins.iter().enumerate() {
+        let glyph = if idx + 1 == current_pins.len() {
+            "└──"
+        } else {
+            "├──"
+        };
+        let version_display = installed
+            .iter()
+            .find(|p| p.name == *name)
+            .map(|p| p.version.clone())
+            .unwrap_or_else(|| "(not installed)".to_string());
+        println!(
+            "  {} {:<28} {}",
+            glyph.dimmed(),
+            name.bold(),
+            version_display.dimmed()
+        );
+    }
+
+    println!();
+    if obsolete > 0 {
+        println!(
+            "  {} Run '{}' to drop obsolete pins.",
+            "·".dimmed(),
+            "cheni clean".bold()
+        );
+    }
+    println!(
+        "  {} Run '{}' to release one, or '{}' to release all.",
+        "·".dimmed(),
+        "cheni unpin <name>".bold(),
+        "cheni unpin --all".bold()
+    );
+    Ok(())
+}
+
 /// Run `cheni pin <package>`.
 ///
 /// Pins a single package by name.

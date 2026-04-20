@@ -108,7 +108,7 @@ enum Commands {
         refresh: bool,
     },
 
-    /// Pin a package or category for update via nixpkgs-latest
+    /// Pin a package (or list active pins when called with no arguments)
     Pin {
         /// Package name to pin (e.g. "vivaldi", "zen-browser")
         package: Option<String>,
@@ -427,12 +427,10 @@ async fn dispatch_pin(
     } else if let Some(cat) = category {
         cmd::pin::pin_category(&cat, force).await
     } else {
-        anyhow::bail!(
-            "Specify a package name, a category, or --flakes.\n\
-             Usage: cheni pin <package>\n\
-             Usage: cheni pin --category <name>     (e.g. dev, apps)\n\
-             Usage: cheni pin --flakes"
-        );
+        // No selector — list current pins so `cheni pin` on its own
+        // answers "what's pinned right now?" without having to grep
+        // through package-pins.json or run `cheni status`.
+        cmd::pin::list_pins()
     }
 }
 
