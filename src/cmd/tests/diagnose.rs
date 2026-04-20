@@ -182,3 +182,52 @@ fn detects_disabled_experimental_feature() {
     assert_eq!(hits.len(), 1);
     assert!(hits[0].title.contains("experimental feature"));
 }
+
+#[test]
+fn detects_home_manager_conflict() {
+    let log = "Existing file '/home/jdoe/.config/git/config' is in the way of \
+               '/nix/store/...-home-manager-files/.config/git/config'";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("home-manager"));
+}
+
+#[test]
+fn detects_github_rate_limit() {
+    let log = "error: unable to download \
+               'https://api.github.com/repos/NixOS/nixpkgs': \
+               HTTP error 403 — API rate limit exceeded for 203.0.113.1";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("GitHub API rate limit"));
+}
+
+#[test]
+fn detects_oom_kill_exit_code_137() {
+    let log = "error: builder for '/nix/store/...-libreoffice-7.6.4.drv' \
+               failed with exit code 137";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("OOM killer"));
+}
+
+#[test]
+fn detects_dns_resolution_failure() {
+    let log = "error: unable to download \
+               'https://github.com/foo/bar/archive/abc.tar.gz': \
+               Could not resolve host: github.com \
+               (Temporary failure in name resolution)";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("DNS resolution"));
+}
+
+#[test]
+fn detects_syntax_error() {
+    // Nix parser error output has a fairly stable shape.
+    let log = "error: syntax error, unexpected end of file, expecting '}'\n\
+               at /nix/store/.../modules/desktop/hyprland.nix:42:5";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("syntax error"));
+}

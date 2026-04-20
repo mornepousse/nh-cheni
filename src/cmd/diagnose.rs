@@ -216,6 +216,81 @@ pub const KNOWN_FINDINGS: &[Finding] = &[
                  One-shot: prefix any command with \
                  `--extra-experimental-features 'nix-command flakes'`.",
     },
+    Finding {
+        matcher: "is in the way of",
+        title: "home-manager refuses to overwrite an existing file",
+        explanation: "home-manager protects files it doesn't own: if your home \
+                      directory already has (say) `~/.config/git/config` from \
+                      before you declared `programs.git.enable = true;`, activation \
+                      stops rather than clobber your manual copy.",
+        action: "Two clean options. Move the existing file aside manually \
+                 (`mv ~/.config/git/config{,.pre-hm}` and re-run), or let \
+                 home-manager back it up automatically with \
+                 `home-manager.backupFileExtension = \"backup\";` in your \
+                 NixOS-level home-manager block. The second option stays \
+                 idempotent across rebuilds.",
+    },
+    Finding {
+        matcher: "API rate limit exceeded",
+        title: "GitHub API rate limit hit during flake fetch",
+        explanation: "Anonymous GitHub API calls are capped at 60/hour per IP. \
+                      `github:owner/repo` flake refs hit the API — a CGNAT'd \
+                      connection or a shared office IP exhausts the quota \
+                      quickly, and every `nix flake update` adds to the count.",
+        action: "Configure an access token: create a fine-grained personal \
+                 access token on GitHub (read-only is enough), then add \
+                 `nix.settings.access-tokens = [ \"github.com=<token>\" ];` \
+                 to your NixOS config. The per-token quota is 5000/hour. \
+                 Alternatively, switch specific flakes from `github:` to \
+                 `git+https://github.com/.../repo.git?ref=main` — bypasses \
+                 api.github.com entirely.",
+    },
+    Finding {
+        matcher: "exit code 137",
+        title: "build killed by the OOM killer (exit 137 = SIGKILL)",
+        explanation: "Exit code 137 is `128 + 9` (SIGKILL). On Linux, a build \
+                      that hits this without a deliberate `kill -9` was almost \
+                      certainly reaped by the kernel's out-of-memory killer — \
+                      some packages (CUDA, large C++ projects, LLVM-based \
+                      toolchains) peak well past 8 GB during link.",
+        action: "Rebuild on a machine with more RAM, or raise your swap: \
+                 `swapon --show` then `swapoff` + resize + `swapon`. \
+                 On a VM, bump `memorySize`. If you're on a laptop and can't \
+                 add RAM, pinning the package to a pre-built binary cache \
+                 version via `cheni pin` sidesteps the local build entirely.",
+    },
+    Finding {
+        matcher: "Temporary failure in name resolution",
+        title: "DNS resolution failure inside a build or fetch",
+        explanation: "A derivation tried to reach a hostname and couldn't \
+                      resolve it. Typical causes: the Nix sandbox strips DNS \
+                      (fetches must use `fetchurl` / `fetchFromGitHub` with \
+                      fixed-output hashes, which go through the daemon's \
+                      resolver), `/etc/resolv.conf` is stale, or a \
+                      corporate VPN blocks the DNS the nix daemon is using.",
+        action: "For fixed-output derivations: confirm your DNS works with \
+                 `getent hosts github.com`. If the derivation itself tries \
+                 to resolve names at build time (not fixed-output), it's a \
+                 package bug — file an issue. For flake updates failing: \
+                 same check, then verify `nix.settings.substituters` aren't \
+                 pointing at an unreachable host.",
+    },
+    Finding {
+        matcher: "syntax error, unexpected",
+        title: "Nix syntax error",
+        explanation: "The Nix parser hit a token it didn't expect — typically \
+                      a missing closing brace/bracket, a stray `;`, an \
+                      unterminated string, or a `with`/`let` that wasn't \
+                      followed by `in`. The error line:column in the output \
+                      points at where the parser gave up, not necessarily \
+                      where the real mistake is.",
+        action: "Look a few lines ABOVE the reported position — the missing \
+                 delimiter usually lives upstream. Running `nix-instantiate \
+                 --parse <file.nix> > /dev/null` isolates the parse step \
+                 without eval. An editor with Nix syntax support (VS Code \
+                 + Nix plugin, Emacs nix-mode, etc.) catches most of these \
+                 live.",
+    },
 ];
 
 /// Pure core: scan `log` for every pattern and return the ones that
