@@ -34,6 +34,11 @@ use tracing::debug;
 /// A frozen package entry. Serialised exactly as documented at the
 /// module level — keep the field names stable; the overlay in flake.nix
 /// reads `rev` and `narHash` by name.
+///
+/// `rev` and `narHash` are load-bearing (the overlay fails hard if
+/// either is missing). `version` and `frozen_at` are diagnostic-only
+/// and default to empty when absent — that way a freezes file written
+/// by an older cheni still loads cleanly after a schema evolution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FreezeEntry {
     /// Full nixpkgs git revision the package is held at.
@@ -43,8 +48,10 @@ pub struct FreezeEntry {
     #[serde(rename = "narHash")]
     pub nar_hash: String,
     /// Installed version at freeze time (diagnostic — shown in status).
+    #[serde(default)]
     pub version: String,
     /// ISO `YYYY-MM-DD` date when the freeze was created (diagnostic).
+    #[serde(default)]
     pub frozen_at: String,
 }
 

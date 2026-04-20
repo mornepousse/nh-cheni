@@ -162,3 +162,26 @@ and are worth being aware of:
   predates the signing system will upgrade without verification.
   Once you've passed through a signed release, every subsequent
   upgrade is checked.
+
+## `package-pins.json` / `package-freezes.json` as trust boundaries
+
+The two JSON files that live at the root of your NixOS flake are
+**local trust boundaries**, equivalent in status to `flake.lock`:
+
+- `package-pins.json` lists the names of packages cheni routes
+  through `nixpkgs-latest` via the overlay.
+- `package-freezes.json` stores `{rev, narHash}` per package for
+  the freeze overlay. At each rebuild, the overlay calls
+  `builtins.fetchTree { rev; narHash }` — Nix itself verifies that
+  the fetched tarball hashes to `narHash` and **fails the build**
+  if they don't match, so a tampered `package-freezes.json` can
+  never silently serve modified package source.
+
+That said, a local attacker who can write to your flake directory
+can point freezes at an arbitrary nixpkgs rev (e.g. a known-
+vulnerable snapshot) as long as the matching narHash is also in
+the file. cheni treats write access to the flake directory as
+trusted — if that assumption breaks (compromised user account,
+misconfigured shared filesystem), the JSON files are one of several
+things the attacker can now leverage. Treat them with the same
+mental model as `flake.lock` itself.
