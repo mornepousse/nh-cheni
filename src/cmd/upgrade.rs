@@ -55,7 +55,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
     print_separator();
 
     print_step(2, total_steps, "Previewing changes");
-    let stats = match preview_and_confirm(config_path, &nix_config.hostname, opts.yes)? {
+    let stats = match preview_and_confirm(config_path, &nix_config.hostname, opts.yes, &context)? {
         Some(s) => s,
         None => return Ok(()),
     };
@@ -284,6 +284,7 @@ fn preview_and_confirm(
     config_path: &str,
     hostname: &str,
     yes: bool,
+    context: &UpgradeContext,
 ) -> Result<Option<UpgradeStats>> {
     let flake_ref = format!(
         "{}#nixosConfigurations.{}.config.system.build.toplevel",
@@ -311,6 +312,13 @@ fn preview_and_confirm(
     }
 
     let stats = print_preview_lists(&to_build, &to_fetch);
+
+    // If we already know this rebuild is going to be pure noise, warn
+    // BEFORE the confirmation prompt so the user can skip the wait.
+    if let Some(warning) = preview_noop_warning(&stats, context) {
+        println!();
+        println!("  {} {}", "⚠".yellow().bold(), warning.yellow());
+    }
 
     if yes {
         return Ok(Some(stats));
@@ -584,7 +592,7 @@ fn print_final_summary(
         headline
     );
     if let Some(reason) = explain_no_op_rebuild(stats, context) {
-        println!("  {}", reason.dimmed());
+        println!("  {} {}", "ⓘ".cyan(), reason);
     }
 }
 
@@ -663,6 +671,33 @@ fn explain_no_op_rebuild(stats: &UpgradeStats, context: &UpgradeContext) -> Opti
             if stats.artefacts == 1 { "" } else { "s" },
         )),
         _ => None, // inputs changed — the artefacts have an obvious cause
+    }
+}
+
+/// Pre-confirmation warning: rebuild is predicted to be pure noise.
+/// Returns `None` when the rebuild has a genuine cause (real package
+/// changes, or flake inputs that moved).
+fn preview_noop_warning(stats: &UpgradeStats, context: &UpgradeContext) -> Option<String> {
+    if stats.total_packages() > 0 || stats.artefacts == 0 {
+        return None;
+    }
+    if context.inputs_updated > 0 {
+        return None;
+    }
+    if context.git_tree_dirty {
+        Some(format!(
+            "No package will change. {} system artefact{} are being rebuilt because your \
+             nixos-config git tree is dirty — commit or stash your changes to skip this.",
+            stats.artefacts,
+            if stats.artefacts == 1 { "" } else { "s" },
+        ))
+    } else {
+        Some(format!(
+            "No package will change. {} system artefact{} are home-manager internals \
+             re-evaluating — safe to skip.",
+            stats.artefacts,
+            if stats.artefacts == 1 { "" } else { "s" },
+        ))
     }
 }
 

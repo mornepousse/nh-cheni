@@ -319,6 +319,44 @@ fn summary_keeps_package_headline_when_real_packages_changed() {
 }
 
 #[test]
+fn preview_warns_before_rebuild_when_tree_dirty_and_only_artefacts() {
+    let stats = UpgradeStats { artefacts: 19, ..UpgradeStats::default() };
+    let ctx = UpgradeContext { inputs_updated: 0, git_tree_dirty: true };
+    let warning = preview_noop_warning(&stats, &ctx).expect("should warn");
+    assert!(warning.contains("dirty"), "warning: {warning}");
+    assert!(warning.contains("commit or stash"), "warning: {warning}");
+    assert!(warning.contains("No package will change"), "warning: {warning}");
+}
+
+#[test]
+fn preview_warns_when_tree_clean_but_only_artefacts() {
+    let stats = UpgradeStats { artefacts: 3, ..UpgradeStats::default() };
+    let ctx = UpgradeContext { inputs_updated: 0, git_tree_dirty: false };
+    let warning = preview_noop_warning(&stats, &ctx).expect("should warn");
+    assert!(warning.contains("home-manager internals"), "warning: {warning}");
+    assert!(warning.contains("safe to skip"), "warning: {warning}");
+}
+
+#[test]
+fn preview_stays_silent_when_inputs_moved() {
+    // Inputs moved → the rebuild has a real cause even if only
+    // artefacts show in the preview. No spurious warning.
+    let stats = UpgradeStats { artefacts: 5, ..UpgradeStats::default() };
+    let ctx = UpgradeContext { inputs_updated: 2, git_tree_dirty: false };
+    assert!(preview_noop_warning(&stats, &ctx).is_none());
+}
+
+#[test]
+fn preview_stays_silent_when_real_packages_change() {
+    // Real package bump → no "no-op" warning even if the tree is dirty.
+    let stats = UpgradeStats {
+        minor: 1, artefacts: 10, ..UpgradeStats::default()
+    };
+    let ctx = UpgradeContext { inputs_updated: 0, git_tree_dirty: true };
+    assert!(preview_noop_warning(&stats, &ctx).is_none());
+}
+
+#[test]
 fn summary_no_follow_up_when_inputs_moved() {
     // Inputs moved but only artefacts got rebuilt — the cause is
     // obvious (inputs moved), no need for a dedicated explanation.
