@@ -274,3 +274,45 @@ fn detects_private_repo_auth_failure() {
     assert_eq!(hits.len(), 1);
     assert!(hits[0].title.contains("private repository"));
 }
+
+#[test]
+fn detects_bootloader_install_failure() {
+    let log = "installing the boot loader...\n\
+               error: failed to install the bootloader.\n\
+               See 'journalctl -u boot.mount' for details.";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("bootloader"));
+}
+
+#[test]
+fn detects_eval_time_memory_failure() {
+    // Distinct from exit code 137 — this fires BEFORE any build starts.
+    let log = "error: while evaluating the attribute \
+               'nixosConfigurations.big-config.config.system.build.toplevel':\n\
+               std::bad_alloc: cannot allocate memory";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("evaluation"));
+}
+
+#[test]
+fn detects_untrusted_substituter() {
+    let log = "warning: ignoring untrusted substituter \
+               'https://my-cache.example.com/', you are not a trusted user. \
+               Run 'man nix.conf' for more information.";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("cache"));
+}
+
+#[test]
+fn detects_activation_refusing_to_overwrite() {
+    // NixOS activation (not home-manager) can also refuse in-place clobber.
+    let log = "activating the configuration...\n\
+               refusing to overwrite '/etc/my-service.conf' \
+               (owned by a previous manual install)";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].title.contains("overwrite"));
+}

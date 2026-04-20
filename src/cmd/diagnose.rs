@@ -356,6 +356,71 @@ pub const KNOWN_FINDINGS: &[Finding] = &[
                  git@github.com` should say \"Hi <user>!\" before nix \
                  will have any luck.",
     },
+    Finding {
+        matcher: "failed to install the bootloader",
+        title: "bootloader install failed — system may not boot",
+        explanation: "Activation reached the bootloader step and it refused \
+                      to install. Typical triggers: the disk UUID in \
+                      `boot.loader.grub.device` doesn't match the current \
+                      device, EFI/BIOS mode mismatch (systemd-boot needs \
+                      EFI, grub in legacy mode needs a BIOS boot partition), \
+                      or `/boot` is read-only. Critically: the *previous* \
+                      generation's bootloader is untouched — rebooting still \
+                      brings you back to the old working system.",
+        action: "Do not reboot until this is fixed. Check \
+                 `lsblk -f` / `efibootmgr -v` to confirm the device layout, \
+                 then either correct `boot.loader.grub.device` / \
+                 `boot.loader.systemd-boot.enable` in your config or \
+                 remount `/boot` writable. `cheni rollback` is always \
+                 available as an escape hatch.",
+    },
+    Finding {
+        matcher: "cannot allocate memory",
+        title: "memory exhausted during evaluation (not a build)",
+        explanation: "Different from exit code 137: this fires at eval time \
+                      (before any build starts), when Nix itself or `nix \
+                      flake` runs out of memory while walking the config. \
+                      Large configs with many `rec`/`with` blocks blow up \
+                      memory here. Unlike 137, swap doesn't help much — \
+                      Nix's working set needs RAM.",
+        action: "Close other memory-heavy apps and retry. For persistent \
+                 cases on low-RAM machines, evaluate on a bigger box and \
+                 copy the result: `nix copy --to ssh://laptop \
+                 /nix/store/<drv>` after building remotely. Longer-term: \
+                 look for large `attrNames` iterations or transitive \
+                 `rec` webs in your config.",
+    },
+    Finding {
+        matcher: "untrusted substituter",
+        title: "binary cache rejected because it's not trusted",
+        explanation: "Nix refused to pull a build from a substituter \
+                      (binary cache) because either its public key isn't \
+                      in `trusted-public-keys` or the substituter URL \
+                      isn't listed in `trusted-substituters`. The build \
+                      would have succeeded, but without cache trust Nix \
+                      won't use the pre-built artifact.",
+        action: "Add the substituter's public key to \
+                 `nix.settings.trusted-public-keys` AND list its URL in \
+                 `nix.settings.substituters` (or `trusted-substituters`). \
+                 For well-known caches like cachix, their installation \
+                 docs publish both the URL and the key. Without trust \
+                 configured, Nix falls back to building locally.",
+    },
+    Finding {
+        matcher: "refusing to overwrite",
+        title: "activation refused to overwrite an existing file",
+        explanation: "A NixOS module (not home-manager this time) tried \
+                      to place a file where something non-Nix-managed \
+                      already lives. Common with `environment.etc.\"…\".text` \
+                      colliding with a file you wrote by hand, or a \
+                      service putting a config in `/etc` that was \
+                      previously managed outside NixOS.",
+        action: "Move the existing file aside (`mv /etc/foo /etc/foo.pre-nixos`) \
+                 and re-run the rebuild. If the file is meant to stay \
+                 hand-managed, reconsider whether the module should own \
+                 it — either remove the module declaration or mark the \
+                 option with `lib.mkForce` to override the default.",
+    },
 ];
 
 /// Pure core: scan `log` for every pattern and return the ones that
