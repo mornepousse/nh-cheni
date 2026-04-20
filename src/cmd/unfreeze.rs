@@ -4,12 +4,11 @@
 //! the regular `nixpkgs` input. Next `cheni upgrade` will move them to
 //! whatever the rest of the system is on.
 
-use std::io::{self, Write};
-
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::nix::{config, freezes};
+use crate::nix::{config, freezes, flake};
+use crate::util::confirm;
 
 /// Run `cheni unfreeze <package>`.
 pub fn unfreeze_one(name: &str, yes: bool) -> Result<()> {
@@ -27,7 +26,7 @@ pub fn unfreeze_one(name: &str, yes: bool) -> Result<()> {
         name.bold(),
         entry.version.dimmed(),
         entry.frozen_at.dimmed(),
-        short_rev(&entry.rev).dimmed()
+        flake::short_hash(&entry.rev).dimmed()
     );
     println!(
         "  Unfreezing routes {} back through plain nixpkgs. Next '{}' will move it",
@@ -71,7 +70,7 @@ pub fn unfreeze_all(yes: bool) -> Result<()> {
 
     let total = current.len();
     for (idx, (name, entry)) in current.iter().enumerate() {
-        let glyph = if idx + 1 == total { "└──" } else { "├──" };
+        let glyph = crate::util::tree_glyph(idx, total);
         println!(
             "    {} {:<28} {}",
             glyph.dimmed(),
@@ -102,23 +101,8 @@ pub fn unfreeze_all(yes: bool) -> Result<()> {
     Ok(())
 }
 
-fn confirm(question: &str, default_yes: bool) -> Result<bool> {
-    let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
-    print!("{} {} ", question, hint.dimmed());
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    if answer.is_empty() {
-        return Ok(default_yes);
-    }
-    Ok(answer == "y" || answer == "yes")
-}
-
-/// Char-based first-12-chars truncation, consistent with `flake::short_hash`.
-fn short_rev(rev: &str) -> String {
-    rev.chars().take(12).collect()
-}
+// `confirm` and `short_rev` removed — use `crate::util::confirm`
+// and `crate::nix::flake::short_hash` directly.
 
 #[cfg(test)]
 #[path = "tests/unfreeze.rs"]

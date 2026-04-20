@@ -10,8 +10,6 @@
 //! at, and the overlay (see `cmd::init`) routes the package through
 //! `builtins.fetchTree` at that rev.
 
-use std::io::{self, Write};
-
 use anyhow::{Context, Result};
 use colored::Colorize;
 
@@ -39,13 +37,13 @@ pub fn list_freezes() -> Result<()> {
 
     let total = current.len();
     for (idx, (name, entry)) in current.iter().enumerate() {
-        let glyph = if idx + 1 == total { "└──" } else { "├──" };
+        let glyph = crate::util::tree_glyph(idx, total);
         println!(
             "  {} {:<28} {} {}",
             glyph.dimmed(),
             name.bold(),
             entry.version.dimmed(),
-            format!("(since {}, rev {})", entry.frozen_at, short_rev(&entry.rev)).dimmed()
+            format!("(since {}, rev {})", entry.frozen_at, flake::short_hash(&entry.rev)).dimmed()
         );
     }
 
@@ -75,7 +73,7 @@ pub fn freeze_one(name: &str) -> Result<()> {
     }
 
     reject_if_pinned(&nix_config.flake_dir, name)?;
-    let store_pkg = find_in_store(name)?;
+    let store_pkg = store::find_by_name(name)?;
     let installed_version = store_pkg.version.clone();
 
     let existing = freezes::read(&nix_config.flake_dir)?
@@ -89,7 +87,7 @@ pub fn freeze_one(name: &str) -> Result<()> {
     println!(
         "  {} rev {}",
         "·".dimmed(),
-        short_rev(&rev).dimmed()
+        flake::short_hash(&rev).dimmed()
     );
 
     println!(
@@ -151,23 +149,7 @@ fn reject_if_pinned(flake_dir: &std::path::Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Locate a package in the nix store by case-insensitive name.
-/// Same matcher as `pin::find_in_store` — kept as a local copy rather
-/// than re-exporting to avoid coupling `pin.rs` to `freeze.rs`.
-fn find_in_store(name: &str) -> Result<store::StorePackage> {
-    let store_packages = store::read_installed_packages()?;
-    store_packages
-        .into_iter()
-        .find(|p| p.name.to_lowercase() == name.to_lowercase())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Package '{}' not found in the nix store.\n\
-                 Freeze needs a package that is currently installed (it holds the current version).\n\
-                 Is it installed?",
-                name
-            )
-        })
-}
+// `find_in_store` was removed — call `store::find_by_name` directly.
 
 /// Header block shown before the preview. When replacing an existing
 /// freeze, call out what's changing so the user doesn't silently lose
@@ -223,63 +205,20 @@ fn print_freeze_contract(name: &str, installed: &str) {
     println!();
 }
 
-/// Ask a yes/no question. Yes is default.
-fn confirm(question: &str, default_yes: bool) -> Result<bool> {
-    let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
-    print!("{} {} ", question, hint.dimmed());
-    io::stdout().flush()?;
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-    if answer.is_empty() {
-        return Ok(default_yes);
-    }
-    Ok(answer == "y" || answer == "yes")
-}
+// `confirm` was removed — call `crate::util::confirm` directly.
+use crate::util::confirm;
 
-/// Compact `YYYY-MM-DD` stamp for the `frozen_at` field. Built from
-/// seconds-since-epoch so the implementation has no dependency beyond
-/// std — fine for an ISO-calendar day stamp.
+/// Compact `YYYY-MM-DD` stamp for the `frozen_at` field. Delegates
+/// to `crate::util::format_ymd` for the arithmetic.
 fn today_iso() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    epoch_to_iso_date(secs)
+    crate::util::format_ymd(secs)
 }
 
-/// Convert UNIX seconds to `YYYY-MM-DD`.
-///
-/// Pure helper so the test suite can lock the behaviour at known epochs
-/// without mucking with system time. Algorithm: days since 1970-01-01,
-/// then civil-from-days via Howard Hinnant's closed form (this is the
-/// standard bit-exact algorithm used by the Abseil / date libraries).
-fn epoch_to_iso_date(secs: u64) -> String {
-    let days = (secs / 86400) as i64;
-    let (y, m, d) = civil_from_days(days);
-    format!("{:04}-{:02}-{:02}", y, m, d)
-}
-
-/// See `epoch_to_iso_date`. Returns (year, month, day) — month in 1..=12.
-fn civil_from_days(z: i64) -> (i32, u32, u32) {
-    // Shift to 0000-03-01 epoch.
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
-    let y = if m <= 2 { y + 1 } else { y };
-    (y as i32, m, d)
-}
-
-/// Char-based first-12-chars truncation, consistent with `flake::short_hash`.
-fn short_rev(rev: &str) -> String {
-    rev.chars().take(12).collect()
-}
+// `short_rev` was folded into `crate::nix::flake::short_hash`.
 
 /// Show the narHash as `sha256-AAAA…ZZZZ` so it fits on a line.
 /// Pure display — full value is preserved on disk.

@@ -431,7 +431,7 @@ where
 
 /// Take up to the first 12 characters of a Git hash — char-based rather
 /// than byte-based so a malformed response can't trigger a panic.
-fn short_hash(s: &str) -> String {
+pub(crate) fn short_hash(s: &str) -> String {
     s.chars().take(12).collect()
 }
 

@@ -1,21 +1,8 @@
-use super::*;
-
-#[test]
-fn short_rev_truncates_to_twelve_chars() {
-    assert_eq!(
-        short_rev("abcdef0123456789abcdef0123456789abcdef01"),
-        "abcdef012345"
-    );
-}
-
-#[test]
-fn short_rev_handles_short_input() {
-    assert_eq!(short_rev("abc"), "abc");
-    assert_eq!(short_rev(""), "");
-}
-
-#[test]
-fn short_rev_is_char_safe_on_non_ascii() {
-    // Must not panic at a multi-byte codepoint boundary.
-    assert_eq!(short_rev("é🦀x"), "é🦀x");
-}
+// The `short_rev` helper was folded into `crate::nix::flake::short_hash`
+// during the consolidation pass; the behaviour is already covered by
+// the existing tests in `src/nix/tests/flake.rs` (`short_hash_truncates_to_twelve`,
+// `short_hash_handles_short_input`, `short_hash_survives_non_ascii`).
+//
+// Leaving this file as a tiny placeholder so the `#[path = "tests/unfreeze.rs"]`
+// declaration in `unfreeze.rs` keeps resolving. Add real tests here as
+// new logic accrues to `cmd::unfreeze`.

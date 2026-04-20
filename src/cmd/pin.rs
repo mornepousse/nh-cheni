@@ -5,7 +5,6 @@
 //! instead of the regular nixpkgs.
 
 use std::collections::HashMap;
-use std::io::{self, Write};
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -53,11 +52,7 @@ pub fn list_pins() -> Result<()> {
     println!();
 
     for (idx, name) in current_pins.iter().enumerate() {
-        let glyph = if idx + 1 == current_pins.len() {
-            "└──"
-        } else {
-            "├──"
-        };
+        let glyph = crate::util::tree_glyph(idx, current_pins.len());
         let version_display = installed
             .iter()
             .find(|p| p.name == *name)
@@ -105,7 +100,7 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
         return pin_flake_input(&nix_config.flake_dir, name);
     }
 
-    let store_pkg = find_in_store(name)?;
+    let store_pkg = store::find_by_name(name)?;
     let installed_version = store_pkg.version.clone();
     let available = lookup_available_version(name, &installed_version).await?;
 
@@ -169,19 +164,8 @@ fn print_pin_contract(name: &str, installed: &str) {
     println!();
 }
 
-/// Locate a package in the nix store by case-insensitive name.
-fn find_in_store(name: &str) -> Result<store::StorePackage> {
-    let store_packages = store::read_installed_packages()?;
-    store_packages
-        .into_iter()
-        .find(|p| p.name.to_lowercase() == name.to_lowercase())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "Package '{}' not found in the nix store.\nIs it installed?",
-                name
-            )
-        })
-}
+// `find_in_store` was removed — call `crate::nix::store::find_by_name`
+// directly (shared with `cmd::freeze`).
 
 /// Look up the latest version of a single package on Repology, passing
 /// the installed version as a disambiguation hint.
@@ -516,11 +500,7 @@ pub fn unpin_all(yes: bool) -> Result<()> {
         current_pins.len().to_string().bold()
     );
     for (idx, name) in current_pins.iter().enumerate() {
-        let glyph = if idx + 1 == current_pins.len() {
-            "└──"
-        } else {
-            "├──"
-        };
+        let glyph = crate::util::tree_glyph(idx, current_pins.len());
         let version = installed
             .iter()
             .find(|p| p.name == *name)
@@ -557,22 +537,8 @@ pub fn unpin_all(yes: bool) -> Result<()> {
     Ok(())
 }
 
-/// Ask a yes/no question. Returns true for yes.
-fn confirm(question: &str, default_yes: bool) -> Result<bool> {
-    let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
-    print!("{} {} ", question, hint.dimmed());
-    io::stdout().flush()?;
-
-    let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
-    let answer = input.trim().to_lowercase();
-
-    if answer.is_empty() {
-        return Ok(default_yes);
-    }
-
-    Ok(answer == "y" || answer == "yes")
-}
+// `confirm` was removed — call `crate::util::confirm` directly.
+use crate::util::confirm;
 
 /// Run `cheni pin --flakes`.
 ///

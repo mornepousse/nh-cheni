@@ -187,6 +187,29 @@ fn extract_store_name(path: &str) -> Option<&str> {
 ///   "legcord-1.5.4"              → ("legcord", "1.5.4")
 ///   "gtk+3-3.24.51"              → ("gtk+3", "3.24.51")
 ///   "xdg-desktop-portal-1.15.1"  → ("xdg-desktop-portal", "1.15.1")
+/// Locate a package in the nix store by case-insensitive name.
+///
+/// Used by `cheni pin` / `cheni freeze` to resolve the user-supplied
+/// name against the currently-installed set. Returns a helpful
+/// "package not installed" error rather than a raw `None` so the
+/// caller can propagate it as-is.
+#[allow(dead_code)] // Consumed from the bin crate (cmd::*) only; the
+                    // lib crate doesn't see it but we keep the fn
+                    // here so tests exercising store parsing can
+                    // find the resolver next to its data.
+pub(crate) fn find_by_name(name: &str) -> anyhow::Result<StorePackage> {
+    let store_packages = read_installed_packages()?;
+    store_packages
+        .into_iter()
+        .find(|p| p.name.to_lowercase() == name.to_lowercase())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Package '{}' not found in the nix store.\nIs it installed?",
+                name
+            )
+        })
+}
+
 pub(crate) fn split_name_version(store_name: &str) -> Option<(String, String)> {
     // First, reject sub-outputs
     for suffix in IGNORED_SUFFIXES {
