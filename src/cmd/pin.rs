@@ -17,9 +17,10 @@ use crate::version::parse::parse_version;
 /// Run `cheni pin` with no arguments.
 ///
 /// Lists the currently pinned packages with the store version each
-/// one is frozen at, and flags pins that nixpkgs has already caught
-/// up with (the pin is still technically honoured but does nothing
-/// useful — `cheni clean` would remove it).
+/// one is currently providing, and flags pins that nixpkgs has
+/// already caught up with (the pin is still technically honoured
+/// but no longer routes the package anywhere different — `cheni clean`
+/// would remove it).
 pub fn list_pins() -> Result<()> {
     let nix_config = config::detect()?;
     let current_pins = pins::read(&nix_config.flake_dir)?;
@@ -136,22 +137,33 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
 }
 
 /// Print the "what this pin means" block. Kept short on purpose —
-/// two lines of effect, one line of how to undo.
+/// three lines of effect, one line of how to undo.
+///
+/// NB: a cheni "pin" is NOT a version freeze. It routes the package
+/// through the `nixpkgs-latest` input instead of `nixpkgs`, so the
+/// package typically gets a newer version and continues to track
+/// that input's bumps at every `cheni upgrade`. When `nixpkgs`
+/// catches up, the pin becomes obsolete and `cheni clean` drops it.
 fn print_pin_contract(name: &str, installed: &str) {
     println!();
     println!("  {}", "What this does:".bold());
     println!(
-        "    Freezes {} at version {} via the nixpkgs-latest overlay.",
+        "    Routes {} through nixpkgs-latest (currently {} in the store).",
         name.bold(),
-        installed.bold()
+        installed.dimmed()
     );
     println!(
-        "    Next '{}' will NOT move {}; other packages upgrade normally.",
+        "    Next '{}' will bump {} along with nixpkgs-latest,",
         "cheni upgrade".bold(),
         name
     );
+    println!("    typically to a newer version than plain nixpkgs provides.");
     println!(
-        "    Release later with '{}'.",
+        "    The pin auto-expires once nixpkgs catches up (via '{}').",
+        "cheni clean".bold()
+    );
+    println!(
+        "    Undo immediately with '{}' to go back to nixpkgs.",
         format!("cheni unpin {}", name).bold()
     );
     println!();
@@ -456,15 +468,18 @@ pub fn unpin_one(name: &str, yes: bool) -> Result<()> {
 
     println!("{}\n", "=== cheni unpin ===".bold());
     println!(
-        "  {} is currently pinned at {}.",
+        "  {} is currently routed through nixpkgs-latest (store version {}).",
         name.bold(),
         version.dimmed()
     );
     println!(
-        "  Removing the pin lets the next '{}' move it to whatever",
+        "  Unpinning routes {} back through plain nixpkgs, which usually",
+        name
+    );
+    println!(
+        "  provides an older version. Next '{}' will apply that move.",
         "cheni upgrade".bold()
     );
-    println!("  nixpkgs-latest provides (usually a newer version).");
     println!();
 
     if !yes && !confirm(&format!("Unpin {}?", name), false)? {
@@ -520,9 +535,10 @@ pub fn unpin_all(yes: bool) -> Result<()> {
     }
     println!();
     println!(
-        "  The next '{}' will move these packages according to nixpkgs-latest.",
+        "  All of these will be routed back through plain nixpkgs. Next '{}'",
         "cheni upgrade".bold()
     );
+    println!("  will usually move them to an older version (the nixpkgs baseline).");
     println!();
 
     if !yes
