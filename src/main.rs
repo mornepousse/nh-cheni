@@ -62,7 +62,8 @@ Maintenance:\n  \
   cheni clean                  Remove obsolete pins (caught up by nixpkgs)\n  \
   cheni doctor                 Health checks on the cheni setup\n  \
   cheni self-update            Update cheni itself\n  \
-  cheni verify                 Check the installed cheni against a signed release\n\
+  cheni verify                 Check the installed cheni against a signed release\n  \
+  cheni diagnose [file]        Scan a rebuild log for known-issue hints\n\
 \n\
 Environment:\n  \
   CHENI_CONFIG=<path>          Override the NixOS flake directory\n  \
@@ -178,6 +179,12 @@ enum Commands {
         /// Tag to verify (defaults to the installed version).
         #[arg(long)]
         tag: Option<String>,
+    },
+
+    /// Scan a build log (file or stdin) and surface known-issue hints
+    Diagnose {
+        /// Path to a log file. Reads from stdin when omitted.
+        path: Option<std::path::PathBuf>,
     },
 
     /// List system generations (or selectively delete them with --prune/--delete/--keep)
@@ -382,6 +389,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Doctor => cmd::doctor::run(),
         Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned).await,
         Commands::Verify { tag } => cmd::verify::run(cmd::verify::VerifyOptions { tag }).await,
+        Commands::Diagnose { path } => cmd::diagnose::run(cmd::diagnose::DiagnoseOptions { path }),
         Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes } => {
             cmd::history::run(cmd::history::HistoryOptions {
                 diff, full, limit, delete, prune, keep, older_than, gc, yes,
