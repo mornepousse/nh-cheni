@@ -288,7 +288,7 @@ fn dispatch_rollback(theme: &ColorfulTheme) -> Result<()> {
     } else {
         Some(target.trim().parse::<u32>()?)
     };
-    super::rollback::run(parsed)
+    super::rollback::run(parsed, false)
 }
 
 fn dispatch_diff(theme: &ColorfulTheme) -> Result<()> {

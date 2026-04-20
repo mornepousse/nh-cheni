@@ -233,6 +233,9 @@ enum Commands {
     Rollback {
         /// Generation number to roll back to (omit for the previous generation)
         target: Option<u32>,
+        /// Skip the confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
     },
 
     /// Compare two specific generations (uses nvd if available)
@@ -396,7 +399,7 @@ async fn dispatch(command: Commands) -> Result<()> {
                 diff, full, limit, delete, prune, keep, older_than, gc, yes,
             })
         }
-        Commands::Rollback { target } => cmd::rollback::run(target),
+        Commands::Rollback { target, yes } => cmd::rollback::run(target, yes),
         Commands::Diff { from, to } => cmd::diff::run(from, to),
         Commands::Search { query } => cmd::search::run(&query),
         Commands::Why { package } => cmd::why::run(&package),

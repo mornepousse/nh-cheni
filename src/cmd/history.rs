@@ -34,17 +34,22 @@ pub struct HistoryOptions {
 }
 
 /// A single NixOS generation.
-struct Generation {
+///
+/// Exposed at crate visibility so `cmd::rollback` can reuse the same
+/// listing instead of parsing /nix/var/nix/profiles/ twice.
+#[derive(Debug)]
+pub(crate) struct Generation {
     /// Generation number.
-    number: u32,
+    pub(crate) number: u32,
     /// Date the generation was created (human readable).
-    date: String,
+    pub(crate) date: String,
     /// Whether this is the currently active generation.
-    is_current: bool,
+    pub(crate) is_current: bool,
     /// Path to the generation in the store.
-    store_path: String,
+    #[allow(dead_code)] // read by cmd::history only today; kept on the shared struct.
+    pub(crate) store_path: String,
     /// NixOS version label (e.g. "26.05.20260414.4bd9165").
-    nixos_label: Option<String>,
+    pub(crate) nixos_label: Option<String>,
 }
 
 /// Run `cheni history`.
@@ -520,7 +525,7 @@ fn pick_interactively(generations: &[Generation], current: Option<u32>) -> Resul
 }
 
 /// Read all system generations by listing symlinks in /nix/var/nix/profiles.
-fn read_generations() -> Result<Vec<Generation>> {
+pub(crate) fn read_generations() -> Result<Vec<Generation>> {
     let profiles_dir = std::path::Path::new("/nix/var/nix/profiles");
     let current_num = current_generation_number(profiles_dir);
 
