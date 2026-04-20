@@ -391,7 +391,9 @@ safe to delete.
 Early alpha — expect rough edges. Feedback and PRs welcome.
 
 See [DESIGN.md](DESIGN.md) for architecture,
-[CHANGELOG.md](CHANGELOG.md) for the history of changes, and
+[CHANGELOG.md](CHANGELOG.md) for the history of changes,
+[DIAGNOSE.md](DIAGNOSE.md) for the full `cheni diagnose` pattern
+catalogue, and
 [SECURITY.md](SECURITY.md) for the release signing / verification
 model (`cheni verify`, `cheni self-update` trust chain).
 
