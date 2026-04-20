@@ -91,3 +91,34 @@ fn errors_on_malformed_json() {
     let err = extract_cheni_tag("not json at all").unwrap_err().to_string();
     assert!(err.contains("parsing flake.lock"));
 }
+
+#[test]
+fn reads_cheni_timestamp_from_lockfile() {
+    // Pure helper: parse the lock's `cheni` input and return its
+    // `lastModified`. Used to detect whether `nix flake update cheni`
+    // actually bumped anything.
+    let lock = flake_lock_with_cheni("v0.4.0");
+    let value: serde_json::Value = serde_json::from_str(&lock).unwrap();
+    assert_eq!(get_input_timestamp(&value, "cheni"), Some(1_700_000_000));
+}
+
+#[test]
+fn cheni_timestamp_is_none_when_input_absent() {
+    let lock = serde_json::json!({
+        "nodes": { "root": { "inputs": {} } },
+        "root": "root"
+    });
+    assert_eq!(get_input_timestamp(&lock, "cheni"), None);
+}
+
+#[test]
+fn format_elapsed_under_a_minute() {
+    assert_eq!(format_elapsed(std::time::Duration::from_secs(0)), "0s");
+    assert_eq!(format_elapsed(std::time::Duration::from_secs(42)), "42s");
+}
+
+#[test]
+fn format_elapsed_over_a_minute() {
+    assert_eq!(format_elapsed(std::time::Duration::from_secs(60)), "1m00s");
+    assert_eq!(format_elapsed(std::time::Duration::from_secs(125)), "2m05s");
+}

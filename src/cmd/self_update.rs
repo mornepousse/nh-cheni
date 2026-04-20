@@ -5,6 +5,7 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::time::Instant;
 
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
@@ -14,6 +15,7 @@ use crate::release;
 
 /// Run `cheni self-update`.
 pub async fn run(allow_unsigned: bool) -> Result<()> {
+    let started = Instant::now();
     let nix_config = config::detect()?;
     let config_path = nix_config
         .flake_dir
@@ -22,22 +24,110 @@ pub async fn run(allow_unsigned: bool) -> Result<()> {
 
     println!("{}\n", "=== cheni self-update ===".bold());
 
-    println!("{} Updating cheni flake input...", "[1/3]".dimmed());
+    print_step(1, 3, "Updating cheni flake input");
+    let before = read_cheni_timestamp(&nix_config.flake_dir);
     run_flake_update(&nix_config.flake_dir)?;
+    let after = read_cheni_timestamp(&nix_config.flake_dir);
+    let cheni_moved = before != after;
+    print_separator();
 
-    println!("\n{} Verifying release signature...", "[2/3]".dimmed());
+    print_step(2, 3, "Verifying release signature");
     enforce_signature(&nix_config.flake_dir, allow_unsigned).await?;
+    print_separator();
 
-    println!("\n{} Rebuilding system to install new cheni...\n", "[3/3]".dimmed());
+    if !cheni_moved {
+        println!(
+            "  {} {}",
+            "⚠".yellow().bold(),
+            "cheni flake input did not move — you are already on the latest signed release. \
+             Rebuilding would be a no-op."
+                .yellow()
+        );
+        println!(
+            "{} {} in {} — already up to date (no rebuild).",
+            "✓".green().bold(),
+            "Self-update complete".bold(),
+            format_elapsed(started.elapsed()).dimmed(),
+        );
+        return Ok(());
+    }
+
+    print_step(3, 3, "Rebuilding system to install new cheni");
+    println!();
     run_nh_switch(config_path)?;
+    print_separator();
 
-    println!("\n{} cheni updated successfully!", "✓".green());
+    println!(
+        "{} {} in {} — cheni rebuilt from a fresh flake input.",
+        "✓".green().bold(),
+        "Self-update complete".bold(),
+        format_elapsed(started.elapsed()).dimmed()
+    );
     println!(
         "  Open a new shell, then run '{}' to see the new build.",
         "cheni --version".bold()
     );
 
     Ok(())
+}
+
+/// Render `[N/total] Title` — matches the shape used by `cheni upgrade`.
+fn print_step(n: usize, total: usize, title: &str) {
+    println!("{} {}", format!("[{}/{}]", n, total).dimmed(), title.bold());
+}
+
+/// Horizontal rule between steps — matches `cheni upgrade`.
+fn print_separator() {
+    println!("{}", "───────────────────────────────────────────".dimmed());
+}
+
+/// Format `Duration` as `MmSs` or `Ss`. Matches the helper in `upgrade`
+/// / `update` — kept local so each command stays self-contained.
+fn format_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+/// Read `cheni`'s `lastModified` timestamp from flake.lock. Returns 0
+/// when the lock can't be read or the input isn't declared — callers
+/// use this purely as a "did the input move?" signal, so the missing
+/// case registers as "changed" on the second read, which keeps the
+/// command from silently silently-skipping a real rebuild.
+fn read_cheni_timestamp(flake_dir: &Path) -> u64 {
+    let lock_path = flake_dir.join("flake.lock");
+    let content = match std::fs::read_to_string(&lock_path) {
+        Ok(c) => c,
+        Err(_) => return 0,
+    };
+    let lock: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return 0,
+    };
+    get_input_timestamp(&lock, "cheni").unwrap_or(0)
+}
+
+/// Extract the lastModified timestamp for a flake input from flake.lock.
+/// Mirrors the helper in `cmd::update` — duplicated on purpose to keep
+/// each command self-contained (see `feedback_propre.md`).
+fn get_input_timestamp(lock: &serde_json::Value, input_name: &str) -> Option<u64> {
+    let root_input = lock
+        .get("nodes")?
+        .get("root")?
+        .get("inputs")?
+        .get(input_name)?;
+    let node_name = match root_input.as_str() {
+        Some(s) => s,
+        None => input_name,
+    };
+    lock.get("nodes")?
+        .get(node_name)?
+        .get("locked")?
+        .get("lastModified")?
+        .as_u64()
 }
 
 /// Step 1 — refresh the `cheni` flake input via `nix flake update`.
