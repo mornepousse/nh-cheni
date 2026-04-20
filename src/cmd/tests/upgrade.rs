@@ -86,7 +86,8 @@ fn aggregate_header_drops_zero_groups() {
         "new-pkg-9.9".to_string(),
     ];
     let changes = build_changes(&entries, &installed);
-    let header = aggregate_header(&changes);
+    let refs: Vec<&_> = changes.iter().collect();
+    let header = aggregate_header(&refs);
     assert!(header.contains("1 major"));
     // "new-pkg" is a new install — it belongs in the "new" bucket,
     // not any of the diff buckets.
@@ -97,7 +98,81 @@ fn aggregate_header_drops_zero_groups() {
 #[test]
 fn aggregate_header_is_empty_when_nothing_changes() {
     let empty: Vec<crate::nix::store::StorePackage> = vec![];
-    assert_eq!(aggregate_header(&build_changes(&[], &empty)), "");
+    let changes = build_changes(&[], &empty);
+    let refs: Vec<&_> = changes.iter().collect();
+    assert_eq!(aggregate_header(&refs), "");
+}
+
+#[test]
+fn system_artefact_exacts_are_collapsed() {
+    // These are bare store names emitted by `nix build --dry-run`
+    // for home-manager / nixos system closures. They're noise in
+    // the preview — not things the user installed.
+    for name in [
+        "options.json",
+        "man-cache",
+        "man-paths",
+        "etc",
+        "boot.json",
+        "firmware",
+    ] {
+        assert!(is_system_artefact_name(name), "{name} should classify as artefact");
+    }
+}
+
+#[test]
+fn system_artefact_prefixes_match_home_manager_and_nixos() {
+    for name in [
+        "hm_.manpath",
+        "home-manager-path",
+        "home-configuration-reference-manpage",
+        "nixos-system-my-host",
+        "system-path",
+        "closure-info",
+        "initrd-linux-6.12.1",
+        "linux-6.12.1-modules",
+        "user-environment",
+    ] {
+        assert!(is_system_artefact_name(name), "{name} should classify as artefact");
+    }
+}
+
+#[test]
+fn system_artefact_suffixes_cover_completions_and_manpages() {
+    for name in [
+        "foo-fish-completions",
+        "bar-bash-completions",
+        "baz-zsh-completions",
+        "quux-completions",
+        "something.manpath",
+        "something.dirs",
+        "something-manpage",
+    ] {
+        assert!(is_system_artefact_name(name), "{name} should classify as artefact");
+    }
+}
+
+#[test]
+fn real_packages_are_not_classified_as_artefacts() {
+    // The whole point: real packages with normal names stay out of
+    // the artefact bucket.
+    for name in ["firefox", "openssl", "vivaldi", "kicad", "claude-code"] {
+        assert!(!is_system_artefact_name(name), "{name} should NOT be an artefact");
+    }
+}
+
+#[test]
+fn artefact_fallback_covers_versionless_unparseable_entries() {
+    // When `split_name_version` fails and we keep the raw entry as
+    // `new` with an empty `name`, `is_system_artefact` should still
+    // route home-manager-ish fallouts (no trailing digit) to the
+    // artefact bucket rather than printing them as "packages".
+    let installed: Vec<crate::nix::store::StorePackage> = vec![];
+    let entries = vec!["hm_.manpath".to_string(), "options.json".to_string()];
+    let changes = build_changes(&entries, &installed);
+    for c in &changes {
+        assert!(is_system_artefact(c), "{} should be an artefact via fallback", c.new);
+    }
 }
 
 #[test]

@@ -303,27 +303,104 @@ fn print_section_from_changes(
     display_limit: usize,
     glyph_color: Color,
 ) {
-    let header = aggregate_header(changes);
+    // Split into real packages + system artefacts. Packages get the
+    // full one-line treatment; artefacts get collapsed to a single
+    // tally at the bottom.
+    let (packages, artefacts): (Vec<_>, Vec<_>) =
+        changes.iter().partition(|c| !is_system_artefact(c));
+
     let glyph_colored = match glyph_color {
         Color::Cyan => glyph.cyan().to_string(),
         Color::Yellow => glyph.yellow().to_string(),
     };
-    let head = format!("  {} {} package(s) {}", glyph_colored, changes.len(), label);
+
+    // Header accounts for both buckets so the count lines up with the
+    // dry-run's total, but it distinguishes them so the user sees the
+    // real package count at a glance.
+    let header = aggregate_header(&packages);
+    let pkg_count = packages.len();
+    let art_count = artefacts.len();
+    let count_phrase = match (pkg_count, art_count) {
+        (0, n) => format!("{} system artefact(s)", n),
+        (p, 0) => format!("{} package(s)", p),
+        (p, n) => format!("{} package(s) + {} system artefact(s)", p, n),
+    };
+    let head = format!("  {} {} {}", glyph_colored, count_phrase, label);
     if header.is_empty() {
         println!("{}:", head);
     } else {
         println!("{} ({}):", head, header.dimmed());
     }
-    for change in changes.iter().take(display_limit) {
+
+    for change in packages.iter().take(display_limit) {
         println!("    {}", format_change(change));
     }
-    if changes.len() > display_limit {
+    if packages.len() > display_limit {
         println!(
-            "    {} and {} more...",
+            "    {} and {} more package(s)...",
             "...".dimmed(),
-            changes.len() - display_limit
+            packages.len() - display_limit
         );
     }
+
+    if !artefacts.is_empty() {
+        // Preview a handful of artefact names so the user has a hint
+        // about what's being rebuilt, without the whole wall of
+        // `hm_.manpath` / `user-environment` / etc.
+        let sample_names: Vec<&str> = artefacts
+            .iter()
+            .take(3)
+            .map(|c| if c.name.is_empty() { c.new.as_str() } else { c.name.as_str() })
+            .collect();
+        let sample = if artefacts.len() > 3 {
+            format!("{}, …", sample_names.join(", "))
+        } else {
+            sample_names.join(", ")
+        };
+        println!(
+            "    {} {} system / home-manager artefact(s) ({})",
+            "+".dimmed(),
+            artefacts.len().to_string().bold(),
+            sample.dimmed()
+        );
+    }
+}
+
+/// Count real packages by diff bucket (major/minor/patch/new) and
+/// render as "N major, M minor, K new", omitting zero slots. Artefacts
+/// are counted separately and don't carry a meaningful `major/minor/
+/// patch` classification, so they're excluded from this header.
+fn aggregate_header(packages: &[&PackageChange]) -> String {
+    use crate::version::compare::VersionDiff;
+    let mut major = 0;
+    let mut minor = 0;
+    let mut patch = 0;
+    let mut new = 0;
+    for c in packages {
+        if c.old.is_none() {
+            new += 1;
+            continue;
+        }
+        match c.diff {
+            VersionDiff::Major => major += 1,
+            VersionDiff::Minor => minor += 1,
+            VersionDiff::Equal | VersionDiff::Newer => patch += 1,
+        }
+    }
+    let mut parts: Vec<String> = Vec::new();
+    if major > 0 {
+        parts.push(format!("{} major", major));
+    }
+    if minor > 0 {
+        parts.push(format!("{} minor", minor));
+    }
+    if patch > 0 {
+        parts.push(format!("{} patch", patch));
+    }
+    if new > 0 {
+        parts.push(format!("{} new", new));
+    }
+    parts.join(", ")
 }
 
 /// How the "old → new" version delta should be styled.
@@ -345,6 +422,13 @@ struct PackageChange {
 /// `PackageChange` lists once (so the downstream `UpgradeStats`
 /// aggregates match what the user saw) and emits them through
 /// `print_section_from_changes`.
+///
+/// Each section is split between real packages (the ones the user
+/// actually thinks of as software) and "system artefacts" (home-manager
+/// internal files, nixos-system closures, completion caches…). The
+/// artefacts get collapsed into a single-line tally so the preview
+/// stays readable even when home-manager rebuilds a dozen generated
+/// files on every upgrade.
 fn print_preview_lists(to_build: &[String], to_fetch: &[String]) -> UpgradeStats {
     let installed = crate::nix::store::read_installed_packages().unwrap_or_default();
     let fetch_changes = build_changes(to_fetch, &installed);
@@ -359,6 +443,70 @@ fn print_preview_lists(to_build: &[String], to_fetch: &[String]) -> UpgradeStats
     }
 
     aggregate_stats(&fetch_changes, &build_changes_vec)
+}
+
+/// Return `true` for entries that aren't user-facing packages:
+/// home-manager generated files, nixos-system closures, shell
+/// completion caches, etc. Classifying them out of the main list
+/// keeps the preview focused on things the user can make a
+/// decision about.
+fn is_system_artefact(c: &PackageChange) -> bool {
+    // `build_changes` sets `name = ""` when `split_name_version`
+    // couldn't pull a version — almost always means it's a
+    // generated file rather than a package with a real semver.
+    if c.name.is_empty() {
+        // The raw entry is in `c.new` in that case. Still accept it
+        // as a real package if it has version-looking digits
+        // (salvage for obscure packages like `firefox-149`), otherwise
+        // it's an artefact.
+        let has_trailing_digit = c.new.chars().last().is_some_and(|ch| ch.is_ascii_digit());
+        return !has_trailing_digit;
+    }
+    is_system_artefact_name(&c.name)
+}
+
+/// Pure half of `is_system_artefact`: name-based classification.
+/// Kept as a free function for testing. The list grows as we
+/// encounter new artefact shapes in real rebuild logs.
+fn is_system_artefact_name(name: &str) -> bool {
+    const PREFIXES: &[&str] = &[
+        "hm_",
+        "home-manager-",
+        "home-configuration-",
+        "nixos-system-",
+        "system-path",
+        "closure-info",
+        "initrd-linux-",
+        "linux-",  // linux-<ver>-modules / -shrunk / …
+        "user-environment",
+    ];
+    const EXACTS: &[&str] = &[
+        "options.json",
+        "man-cache",
+        "man-paths",
+        "etc",
+        "boot.json",
+        "firmware",
+    ];
+    const SUFFIXES: &[&str] = &[
+        "-fish-completions",
+        "-bash-completions",
+        "-zsh-completions",
+        "-completions",
+        ".manpath",
+        ".dirs",
+        "-manpage",
+    ];
+    if EXACTS.contains(&name) {
+        return true;
+    }
+    if PREFIXES.iter().any(|p| name.starts_with(p)) {
+        return true;
+    }
+    if SUFFIXES.iter().any(|s| name.ends_with(s)) {
+        return true;
+    }
+    false
 }
 
 /// Collapse fetch+build changes into `UpgradeStats` for the final
@@ -436,41 +584,6 @@ fn format_elapsed(d: std::time::Duration) -> String {
     } else {
         format!("{}s", secs)
     }
-}
-
-/// Build the "major / minor / patch / new" aggregate line, omitting
-/// zero-count groups so the header stays tight.
-fn aggregate_header(changes: &[PackageChange]) -> String {
-    use crate::version::compare::VersionDiff;
-    let mut major = 0;
-    let mut minor = 0;
-    let mut patch = 0;
-    let mut new = 0;
-    for c in changes {
-        if c.old.is_none() {
-            new += 1;
-            continue;
-        }
-        match c.diff {
-            VersionDiff::Major => major += 1,
-            VersionDiff::Minor => minor += 1,
-            VersionDiff::Equal | VersionDiff::Newer => patch += 1,
-        }
-    }
-    let mut parts: Vec<String> = Vec::new();
-    if major > 0 {
-        parts.push(format!("{} major", major));
-    }
-    if minor > 0 {
-        parts.push(format!("{} minor", minor));
-    }
-    if patch > 0 {
-        parts.push(format!("{} patch", patch));
-    }
-    if new > 0 {
-        parts.push(format!("{} new", new));
-    }
-    parts.join(", ")
 }
 
 /// Match each dry-run entry against the currently-installed set,
