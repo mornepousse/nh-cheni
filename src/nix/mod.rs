@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod flake;
+pub mod gc;
 pub mod pins;
 pub mod store;
 pub mod tools;

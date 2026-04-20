@@ -223,7 +223,7 @@ fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
     }
     apply_deletion(&to_delete)?;
     if opts.gc {
-        run_gc()?;
+        run_gc(opts.yes)?;
     } else {
         println!(
             "{}",
@@ -328,8 +328,36 @@ fn apply_deletion(to_delete: &[u32]) -> Result<()> {
 }
 
 /// Optional `--gc` follow-up.
-fn run_gc() -> Result<()> {
+///
+/// Runs a `--dry-run` first so the user sees how many store paths
+/// would actually be removed before sudo-prompting for the real GC.
+/// `yes` bypasses the confirmation (`cheni history ... --gc --yes`).
+fn run_gc(yes: bool) -> Result<()> {
     println!("\n{}", "Running garbage collection...".bold());
+
+    let preview = crate::nix::gc::preview(&[])?;
+    if preview.paths == 0 {
+        println!("  {}", "No dead store paths to remove.".dimmed());
+        return Ok(());
+    }
+
+    println!(
+        "  {} store path(s) would be removed.",
+        preview.paths.to_string().bold()
+    );
+    if !yes {
+        let theme = ColorfulTheme::default();
+        let go = Confirm::with_theme(&theme)
+            .with_prompt("Proceed with garbage collection?")
+            .default(false)
+            .interact()
+            .context("reading confirmation")?;
+        if !go {
+            println!("{}", "  Cancelled — store paths kept.".yellow());
+            return Ok(());
+        }
+    }
+
     let gc_status = Command::new("sudo")
         .args(["/run/current-system/sw/bin/nix-collect-garbage"])
         .status()

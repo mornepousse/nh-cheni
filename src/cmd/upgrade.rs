@@ -47,7 +47,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
     rebuild_system(config_path)?;
     run_pin_cleanup_step(&nix_config.flake_dir, opts.no_clean_pins)?;
     if opts.gc {
-        run_gc_step()?;
+        run_gc_step(opts.yes)?;
     }
 
     println!("\n{} Upgrade complete!", "✓".green());
@@ -175,7 +175,11 @@ fn run_pin_cleanup_step(flake_dir: &Path, no_clean: bool) -> Result<()> {
 
 /// Step 4: GC generations older than 30 days (only when --gc is set —
 /// the rollback guarantee comes from keeping this off by default).
-fn run_gc_step() -> Result<()> {
+///
+/// Previews via `--dry-run` first so the user sees the scope of the
+/// deletion (and how many store paths it'll reclaim) before sudo kicks
+/// in for the real run. `yes` bypasses the confirmation.
+fn run_gc_step(yes: bool) -> Result<()> {
     println!(
         "\n{} {}",
         "[4/4]".dimmed(),
@@ -185,6 +189,22 @@ fn run_gc_step() -> Result<()> {
         "  {} This will delete old generations — rollback won't work past this point!",
         "!".yellow()
     );
+
+    let preview = crate::nix::gc::preview(&["--delete-older-than", "30d"])?;
+    if preview.paths == 0 {
+        println!("  {}", "Nothing older than 30 days to collect.".dimmed());
+        return Ok(());
+    }
+    println!(
+        "  {} store path(s) would be removed.",
+        preview.paths.to_string().bold()
+    );
+
+    if !yes && !confirm("Proceed with garbage collection?")? {
+        println!("{}", "  Cancelled — old generations kept.".yellow());
+        return Ok(());
+    }
+
     let status = Command::new("sudo")
         .args(["nix-collect-garbage", "--delete-older-than", "30d"])
         .status()
