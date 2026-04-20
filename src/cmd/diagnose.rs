@@ -104,6 +104,31 @@ pub fn find_issues(log: &str) -> Vec<&'static Finding> {
         .collect()
 }
 
+/// Print a compact postscript of diagnose hints for `raw_output`, or
+/// nothing at all when no pattern matches. Shared by `cheni upgrade`
+/// and `cheni self-update` for the failure-mode hint injection.
+pub fn print_hints_for(raw_output: &str) {
+    let findings = find_issues(raw_output);
+    if findings.is_empty() {
+        return;
+    }
+    println!(
+        "\n{} matched {} known issue(s):",
+        "─── cheni diagnose ───".dimmed(),
+        findings.len().to_string().bold()
+    );
+    for (i, f) in findings.iter().enumerate() {
+        println!(
+            "  {} {}",
+            format!("[{}/{}]", i + 1, findings.len()).dimmed(),
+            f.title.bold()
+        );
+        println!("      {}: {}", "why".yellow(), f.explanation);
+        println!("      {}: {}", "fix".green(), f.action);
+    }
+    println!();
+}
+
 /// Read the log text — either from a user-supplied path or stdin.
 fn load_input(path: Option<&Path>) -> Result<String> {
     match path {

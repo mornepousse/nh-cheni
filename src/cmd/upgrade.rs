@@ -143,13 +143,20 @@ fn print_preview_lists(to_build: &[String], to_fetch: &[String]) {
 }
 
 /// Step 2: invoke `nh os switch` with the activation step inline.
+///
+/// Uses the merged-pipe streamer so `/nix/store/<hash>-...` noise is
+/// stripped from the output live. On failure, the raw (non-prettified)
+/// buffer is fed to the diagnose pattern library so the user gets an
+/// actionable hint along with the raw error.
 fn rebuild_system(config_path: &str) -> Result<()> {
     println!("\n{} Rebuilding system...\n", "[2/4]".dimmed());
-    let status = Command::new("nh")
-        .args(["os", "switch", config_path])
-        .status()
-        .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
-    if !status.success() {
+    let out = crate::output::stream::run_streaming(
+        "nh",
+        &["os", "switch", config_path],
+        None,
+    )?;
+    if !out.status.success() {
+        crate::cmd::diagnose::print_hints_for(&out.raw_buffer);
         anyhow::bail!("System rebuild failed. Fix the issue and run 'cheni build' again.");
     }
     Ok(())

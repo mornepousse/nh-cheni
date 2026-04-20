@@ -6,6 +6,7 @@
 mod api;
 mod cmd;
 mod nix;
+mod output;
 mod release;
 mod util;
 mod version;

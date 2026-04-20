@@ -42,6 +42,11 @@ dirs = "6"
 # Pure-Rust crate, no FFI, no external `minisign` binary needed at runtime.
 minisign-verify = "0.2"
 
+# Merged stdout+stderr piping for `cheni upgrade` / `cheni build` /
+# `cheni self-update`. Lets us stream nh output live through a single
+# pipe, preserving emission order naturally (no select! on two streams).
+os_pipe = "1"
+
 # CLI utilities (clap_mangen for man-page generation in `cheni man`)
 [dependencies.clap_mangen]
 version = "0.2"

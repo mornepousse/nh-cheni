@@ -4,6 +4,7 @@
 
 pub mod api;
 pub mod nix;
+pub mod output;
 pub mod release;
 pub mod util;
 pub mod version;

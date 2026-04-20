@@ -86,7 +86,10 @@ fn run_nh_capturing_stderr(
     for line in reader.lines() {
         match line {
             Ok(line) => {
-                eprintln!("{}", line);
+                // Prettify for display (strip /nix/store/<hash>-) but
+                // capture the raw line — the structured parser below
+                // uses the raw store paths to extract package names.
+                eprintln!("{}", crate::output::prettify::prettify_line(&line));
                 captured.push_str(&line);
                 captured.push('\n');
             }

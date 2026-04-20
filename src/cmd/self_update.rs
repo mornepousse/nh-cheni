@@ -111,12 +111,18 @@ async fn enforce_signature(flake_dir: &Path, allow_unsigned: bool) -> Result<()>
 }
 
 /// Step 3 — rebuild the system so the new cheni lands in `$PATH`.
+///
+/// Uses the merged-pipe streamer so store-path noise is stripped live,
+/// and feeds the raw buffer to the diagnose pattern library on failure
+/// so the user gets actionable hints instead of a wall of text.
 fn run_nh_switch(config_path: &str) -> Result<()> {
-    let status = Command::new("nh")
-        .args(["os", "switch", config_path])
-        .status()
-        .map_err(|e| crate::nix::tools::tool_error("nh", e))?;
-    if !status.success() {
+    let out = crate::output::stream::run_streaming(
+        "nh",
+        &["os", "switch", config_path],
+        None,
+    )?;
+    if !out.status.success() {
+        crate::cmd::diagnose::print_hints_for(&out.raw_buffer);
         anyhow::bail!("System rebuild failed. Run 'cheni build' to see the error.");
     }
     Ok(())
