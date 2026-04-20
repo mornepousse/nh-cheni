@@ -82,7 +82,7 @@ keys; cheni prompts for any extra input it needs.
 | `cheni check --json`        | Machine-readable output for scripts / CI               |
 | `cheni status`              | Config, active gen, flake input ages, suggestions      |
 
-### Pinning
+### Pinning (route to a newer version via `nixpkgs-latest`)
 
 | Command                   | What it does                                |
 |---------------------------|---------------------------------------------|
@@ -92,6 +92,21 @@ keys; cheni prompts for any extra input it needs.
 | `cheni pin --flakes`      | Update all flake inputs (zen-browser, etc.) |
 | `cheni unpin <pkg>`       | Remove a specific pin                       |
 | `cheni unpin --all`       | Remove all pins                             |
+
+### Freezing (hold at the current version — inverse of pin)
+
+| Command                   | What it does                                         |
+|---------------------------|------------------------------------------------------|
+| `cheni freeze`            | List currently frozen packages                       |
+| `cheni freeze <pkg>`      | Hold `<pkg>` at its current nixpkgs rev              |
+| `cheni unfreeze <pkg>`    | Release a specific freeze                            |
+| `cheni unfreeze --all`    | Release every freeze at once                         |
+
+`pin` routes a package through `nixpkgs-latest` so it gets a *newer*
+version. `freeze` does the opposite — it locks the package at the
+**current** nixpkgs revision while the rest of the system moves. Use
+it for "nvidia 560 works, don't move me to 570 before I test" or
+"new discord broke my config, hold it until upstream fixes".
 
 ### Apply
 

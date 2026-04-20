@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod flake;
+pub mod freezes;
 pub mod gc;
 pub mod pins;
 pub mod store;

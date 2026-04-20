@@ -107,6 +107,133 @@ fn sanitize_username_rejects_special_chars() {
 }
 
 #[test]
+fn extract_root_input_rev_reads_full_rev() {
+    // Minimal flake.lock-shaped fixture exercising the indirection:
+    // root.inputs.nixpkgs points to "nixpkgs_4", which carries the
+    // actual `locked.rev`. This is the common flake.lock shape when
+    // an input is referenced by other inputs (follows).
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": {
+                "inputs": {
+                    "nixpkgs": "nixpkgs_4"
+                }
+            },
+            "nixpkgs_4": {
+                "locked": {
+                    "rev": "abcdef0123456789abcdef0123456789abcdef01",
+                    "lastModified": 1710000000
+                }
+            }
+        }
+    });
+    let rev = extract_root_input_rev(&lock, "nixpkgs").unwrap();
+    assert_eq!(rev, "abcdef0123456789abcdef0123456789abcdef01");
+}
+
+#[test]
+fn extract_root_input_rev_handles_direct_node() {
+    // When the input has no indirection (root.inputs.nixpkgs is not a
+    // string pointing to another node), we fall back to a node of the
+    // same name.
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": {
+                "inputs": {
+                    "nixpkgs": {}
+                }
+            },
+            "nixpkgs": {
+                "locked": {
+                    "rev": "1111111111111111111111111111111111111111"
+                }
+            }
+        }
+    });
+    let rev = extract_root_input_rev(&lock, "nixpkgs").unwrap();
+    assert_eq!(rev, "1111111111111111111111111111111111111111");
+}
+
+#[test]
+fn extract_root_input_rev_returns_none_for_missing_input() {
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": {} }
+        }
+    });
+    assert!(extract_root_input_rev(&lock, "nixpkgs").is_none());
+}
+
+#[test]
+fn read_nixpkgs_rev_roundtrips_from_fixture() {
+    // End-to-end: write a fixture flake.lock, read it back.
+    let dir = tempfile::tempdir().unwrap();
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": { "nixpkgs": "nixpkgs" } },
+            "nixpkgs": {
+                "locked": {
+                    "rev": "cafebabe0000000000000000000000000000cafe"
+                }
+            }
+        }
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string_pretty(&lock).unwrap(),
+    )
+    .unwrap();
+    let rev = read_nixpkgs_rev(dir.path()).unwrap();
+    assert_eq!(rev, "cafebabe0000000000000000000000000000cafe");
+}
+
+#[test]
+fn read_nixpkgs_rev_reports_missing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let err = read_nixpkgs_rev(dir.path()).unwrap_err();
+    assert!(format!("{:#}", err).contains("flake.lock"));
+}
+
+#[test]
+fn read_nixpkgs_rev_reports_missing_nixpkgs_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let lock = serde_json::json!({
+        "nodes": { "root": { "inputs": {} } }
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string(&lock).unwrap(),
+    )
+    .unwrap();
+    let err = read_nixpkgs_rev(dir.path()).unwrap_err();
+    assert!(format!("{:#}", err).contains("nixpkgs"));
+}
+
+#[test]
+fn prefetch_nixpkgs_rev_rejects_non_hex_rev() {
+    // Defence in depth: even without running `nix`, the rev validation
+    // kicks in synchronously before we shell out.
+    let err = prefetch_nixpkgs_rev("not-a-hash").unwrap_err();
+    assert!(format!("{:#}", err).contains("non-hex"));
+}
+
+#[test]
+fn prefetch_nixpkgs_rev_rejects_empty_rev() {
+    let err = prefetch_nixpkgs_rev("").unwrap_err();
+    assert!(format!("{:#}", err).contains("non-hex"));
+}
+
+#[test]
+fn prefetch_nixpkgs_rev_rejects_injection_attempt() {
+    // The rev is interpolated into a URL passed as an argv arg to `nix`.
+    // Command::args is safe (no shell interpretation), but we still
+    // refuse anything non-hex so the URL stays clean in logs and any
+    // future change to how the rev is consumed stays safe.
+    let err = prefetch_nixpkgs_rev("abc; rm -rf /").unwrap_err();
+    assert!(format!("{:#}", err).contains("non-hex"));
+}
+
+#[test]
 fn sanitize_username_rejects_empty_and_oversized() {
     assert_eq!(sanitize_username(""), None);
     // POSIX usernames traditionally cap at 32; anything longer is a

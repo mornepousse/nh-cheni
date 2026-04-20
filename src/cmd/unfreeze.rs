@@ -1,0 +1,125 @@
+//! `cheni unfreeze` command.
+//!
+//! Releases packages held by `cheni freeze`, routing them back through
+//! the regular `nixpkgs` input. Next `cheni upgrade` will move them to
+//! whatever the rest of the system is on.
+
+use std::io::{self, Write};
+
+use anyhow::Result;
+use colored::Colorize;
+
+use crate::nix::{config, freezes};
+
+/// Run `cheni unfreeze <package>`.
+pub fn unfreeze_one(name: &str, yes: bool) -> Result<()> {
+    let nix_config = config::detect()?;
+    let current = freezes::read(&nix_config.flake_dir)?;
+
+    let Some(entry) = current.get(name).cloned() else {
+        println!("'{}' was not frozen.", name);
+        return Ok(());
+    };
+
+    println!("{}\n", "=== cheni unfreeze ===".bold());
+    println!(
+        "  {} is currently held at {} (since {}, rev {}).",
+        name.bold(),
+        entry.version.dimmed(),
+        entry.frozen_at.dimmed(),
+        short_rev(&entry.rev).dimmed()
+    );
+    println!(
+        "  Unfreezing routes {} back through plain nixpkgs. Next '{}' will move it",
+        name,
+        "cheni upgrade".bold()
+    );
+    println!("  to whatever version nixpkgs is on at that moment.");
+    println!();
+
+    if !yes && !confirm(&format!("Unfreeze {}?", name), false)? {
+        println!("{}", "  Cancelled — freeze kept.".yellow());
+        return Ok(());
+    }
+
+    let removed = freezes::remove(&nix_config.flake_dir, &[name.to_string()])?;
+    if removed.is_empty() {
+        // Race window: someone else removed the freeze between read and write.
+        println!("'{}' was not frozen.", name);
+    } else {
+        println!("{} Unfroze {}.", "✓".green(), name.bold());
+        println!("Run '{}' to apply.", "cheni build".bold());
+    }
+    Ok(())
+}
+
+/// Run `cheni unfreeze --all`.
+pub fn unfreeze_all(yes: bool) -> Result<()> {
+    let nix_config = config::detect()?;
+    let current = freezes::read(&nix_config.flake_dir)?;
+
+    if current.is_empty() {
+        println!("No freezes to remove.");
+        return Ok(());
+    }
+
+    println!("{}\n", "=== cheni unfreeze ===".bold());
+    println!(
+        "  This will release {} freeze(s):",
+        current.len().to_string().bold()
+    );
+
+    let total = current.len();
+    for (idx, (name, entry)) in current.iter().enumerate() {
+        let glyph = if idx + 1 == total { "└──" } else { "├──" };
+        println!(
+            "    {} {:<28} {}",
+            glyph.dimmed(),
+            name.bold(),
+            entry.version.dimmed()
+        );
+    }
+    println!();
+    println!(
+        "  All of these will be routed back through plain nixpkgs. Next '{}'",
+        "cheni upgrade".bold()
+    );
+    println!("  will move them to whatever version nixpkgs is on.");
+    println!();
+
+    if !yes && !confirm(&format!("Unfreeze all {} freeze(s)?", current.len()), false)? {
+        println!("{}", "  Cancelled — freezes kept.".yellow());
+        return Ok(());
+    }
+
+    let count = freezes::clear(&nix_config.flake_dir)?;
+    println!(
+        "{} Removed {} freeze(s).",
+        "✓".green(),
+        count.to_string().bold()
+    );
+    println!("Run '{}' to apply.", "cheni build".bold());
+    Ok(())
+}
+
+fn confirm(question: &str, default_yes: bool) -> Result<bool> {
+    let hint = if default_yes { "[Y/n]" } else { "[y/N]" };
+    print!("{} {} ", question, hint.dimmed());
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let answer = input.trim().to_lowercase();
+    if answer.is_empty() {
+        return Ok(default_yes);
+    }
+    Ok(answer == "y" || answer == "yes")
+}
+
+/// Char-based first-12-chars truncation, consistent with `flake::short_hash`.
+fn short_rev(rev: &str) -> String {
+    rev.chars().take(12).collect()
+}
+
+#[cfg(test)]
+#[path = "tests/unfreeze.rs"]
+mod tests;

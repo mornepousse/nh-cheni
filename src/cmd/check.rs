@@ -13,7 +13,7 @@ use tracing::debug;
 use serde::Serialize;
 
 use crate::api::repology;
-use crate::nix::{config, flake, pins, store};
+use crate::nix::{config, flake, freezes, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::{is_prerelease, parse_version};
 
@@ -38,7 +38,15 @@ struct JsonOutput<'a> {
     major_updates: &'a [CheckResult],
     newer: &'a [CheckResult],
     unknown: &'a [String],
+    frozen: Vec<JsonFrozen<'a>>,
     summary: JsonSummary,
+}
+
+#[derive(Serialize)]
+struct JsonFrozen<'a> {
+    name: &'a str,
+    version: &'a str,
+    frozen_at: &'a str,
 }
 
 #[derive(Serialize)]
@@ -56,6 +64,7 @@ struct JsonSummary {
     major: usize,
     newer: usize,
     unknown: usize,
+    frozen: usize,
 }
 
 /// Run the `cheni check` command.
@@ -70,10 +79,17 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
     }
     warn_about_obsolete_pins(&nix_config.flake_dir)?;
 
-    let Some(scan) = gather_packages_to_check(&nix_config, category)? else {
+    let Some(mut scan) = gather_packages_to_check(&nix_config, category)? else {
         println!("{}", "No packages found to check.".dimmed());
         return Ok(());
     };
+
+    // Exclude frozen packages from the Repology check: the user has
+    // deliberately held them at a past version, so there's no update
+    // decision to make. We still surface them in a "Frozen" block so
+    // they're not invisible in the report.
+    let current_freezes = freezes::read(&nix_config.flake_dir)?;
+    let frozen_rows = split_out_frozen(&mut scan.packages, &current_freezes);
 
     print_check_header(&scan, category, json);
     let (lookups, flake_inputs) = fetch_updates_concurrently(&nix_config, &scan, json).await?;
@@ -92,11 +108,46 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
         filter_visible_flake_inputs(&flake_inputs, &nix_config.flake_dir, scan.active_set.as_ref(), category);
 
     if json {
-        print_json(&classification, &visible_flake_inputs)?;
+        print_json(&classification, &visible_flake_inputs, &frozen_rows)?;
     } else {
-        print_human(&classification, &visible_flake_inputs, category, details);
+        print_human(&classification, &visible_flake_inputs, &frozen_rows, category, details);
     }
     Ok(())
+}
+
+/// Frozen-package row for display. Mirrors `CheckResult` at a higher
+/// level — we don't do Repology lookups for frozen entries, so the
+/// report comes straight from `package-freezes.json` + the store.
+struct FrozenRow {
+    name: String,
+    version: String,
+    frozen_at: String,
+}
+
+/// Remove frozen packages from the to-check list in place, returning
+/// a `FrozenRow` for each one so the report can still surface them.
+/// Operates on the vector rather than rebuilding it to preserve the
+/// original ordering of the non-frozen packages.
+fn split_out_frozen(
+    packages: &mut Vec<(String, String)>,
+    current_freezes: &freezes::Freezes,
+) -> Vec<FrozenRow> {
+    if current_freezes.is_empty() {
+        return Vec::new();
+    }
+    let mut rows = Vec::new();
+    packages.retain(|(name, version)| match current_freezes.get(name) {
+        Some(entry) => {
+            rows.push(FrozenRow {
+                name: name.clone(),
+                version: version.clone(),
+                frozen_at: entry.frozen_at.clone(),
+            });
+            false
+        }
+        None => true,
+    });
+    rows
 }
 
 /// Apply the two flags that affect the rest of the run before any
@@ -359,6 +410,7 @@ fn classify_lookups(
 fn print_json(
     c: &Classification,
     visible_flake_inputs: &[&flake::FlakeInput],
+    frozen_rows: &[FrozenRow],
 ) -> Result<()> {
     let out = JsonOutput {
         flake_inputs: visible_flake_inputs
@@ -374,12 +426,21 @@ fn print_json(
         major_updates: &c.major,
         newer: &c.newer,
         unknown: &c.unknown,
+        frozen: frozen_rows
+            .iter()
+            .map(|r| JsonFrozen {
+                name: &r.name,
+                version: &r.version,
+                frozen_at: &r.frozen_at,
+            })
+            .collect(),
         summary: JsonSummary {
             up_to_date: c.up_to_date,
             minor: c.minor.len(),
             major: c.major.len(),
             newer: c.newer.len(),
             unknown: c.unknown.len(),
+            frozen: frozen_rows.len(),
         },
     };
     println!("{}", serde_json::to_string_pretty(&out)?);
@@ -390,11 +451,15 @@ fn print_json(
 fn print_human(
     c: &Classification,
     visible_flake_inputs: &[&flake::FlakeInput],
+    frozen_rows: &[FrozenRow],
     category: Option<&str>,
     details: bool,
 ) {
     if category.is_none() && !visible_flake_inputs.is_empty() {
         print_flake_inputs_block(visible_flake_inputs);
+    }
+    if !frozen_rows.is_empty() {
+        print_frozen_block(frozen_rows);
     }
     if !c.minor.is_empty() {
         print_update_block("Updates available", &c.minor, "minor", true);
@@ -422,8 +487,15 @@ fn print_human(
             "Tip: pass --details to list 'Newer' and 'Unknown' packages.".dimmed()
         );
     }
+    let frozen_tail = if frozen_rows.is_empty() {
+        String::new()
+    } else {
+        format!(" | {} {}",
+            "Frozen:".dimmed(),
+            frozen_rows.len().to_string().cyan())
+    };
     println!(
-        "{} {} | {} {} | {} {} | {} {} | {} {}",
+        "{} {} | {} {} | {} {} | {} {} | {} {}{}",
         "Up to date:".dimmed(),
         c.up_to_date.to_string().green(),
         "Minor:".dimmed(),
@@ -434,7 +506,24 @@ fn print_human(
         c.newer.len().to_string().cyan(),
         "Unknown:".dimmed(),
         c.unknown.len().to_string().dimmed(),
+        frozen_tail,
     );
+}
+
+/// Render the "Frozen" block. No Repology column — the user's intent
+/// for these packages is "don't tell me about updates", so we just
+/// reaffirm the held version and freeze date.
+fn print_frozen_block(rows: &[FrozenRow]) {
+    println!("{}:", "Frozen (held at their snapshot)".cyan().bold());
+    for r in rows {
+        println!(
+            "  {:<24} {:<14} {}",
+            r.name,
+            r.version.dimmed(),
+            format!("(since {})", r.frozen_at).dimmed()
+        );
+    }
+    println!();
 }
 
 fn print_flake_inputs_block(inputs: &[&flake::FlakeInput]) {
@@ -726,6 +815,10 @@ fn strip_inputs_block(text: &str) -> String {
     out.push_str(&text[end..]);
     out
 }
+
+#[cfg(test)]
+#[path = "tests/check.rs"]
+mod tests;
 
 /// Friendly explanation shown when `cheni init` has never been run.
 /// Centralised here and reused by other gateway commands (pin, update).

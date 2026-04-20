@@ -10,7 +10,7 @@ use anyhow::Result;
 use colored::Colorize;
 
 use crate::api::cache;
-use crate::nix::{config, flake, pins, store};
+use crate::nix::{config, flake, freezes, pins, store};
 
 /// Severity of a check result.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -61,6 +61,7 @@ fn run_all_checks(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
     checks.push(check_nixpkgs_latest_input(flake_dir));
     checks.push(check_pins_file_exists(flake_dir));
     checks.extend(check_pins_valid(flake_dir)?);
+    checks.extend(check_freezes_valid(flake_dir)?);
     checks.extend(check_flake_input_freshness(flake_dir));
     checks.push(check_obsolete_pins(flake_dir));
     checks.push(check_store_size());
@@ -205,6 +206,111 @@ fn check_pins_valid(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
     }
 
     Ok(results)
+}
+
+/// Check that every frozen package is well-formed and still installed.
+///
+/// Two pathologies worth surfacing here:
+/// - **Malformed entries**: a user hand-edit left a non-hex rev or a
+///   non-SRI narHash. The overlay would fail at eval. Catching it in
+///   `doctor` is a lot friendlier than a cryptic `fetchTree` error on
+///   the next rebuild.
+/// - **Orphan freezes**: the frozen name is no longer in the store
+///   (declaration removed from modules). The freeze has no effect but
+///   remains in the JSON file and confuses `cheni status`.
+fn check_freezes_valid(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
+    let frozen = match freezes::read(flake_dir) {
+        Ok(f) => f,
+        Err(e) => {
+            return Ok(vec![CheckResult {
+                severity: Severity::Warning,
+                name: "Freezes".to_string(),
+                message: format!("could not read package-freezes.json: {}", e),
+                hint: Some(
+                    "Inspect or reset the file. See the error for the exact path.".to_string(),
+                ),
+            }]);
+        }
+    };
+
+    if frozen.is_empty() {
+        return Ok(vec![CheckResult {
+            severity: Severity::Ok,
+            name: "Freezes".to_string(),
+            message: "no frozen packages".to_string(),
+            hint: None,
+        }]);
+    }
+
+    let mut results = Vec::new();
+    let mut malformed = Vec::new();
+    for (name, entry) in &frozen {
+        if !is_hex_rev(&entry.rev) || !is_sri_hash(&entry.nar_hash) {
+            malformed.push(name.clone());
+        }
+    }
+    if malformed.is_empty() {
+        results.push(CheckResult {
+            severity: Severity::Ok,
+            name: "Freezes validity".to_string(),
+            message: format!("{} freeze(s) well-formed", frozen.len()),
+            hint: None,
+        });
+    } else {
+        results.push(CheckResult {
+            severity: Severity::Warning,
+            name: "Malformed freezes".to_string(),
+            message: format!(
+                "{} freeze(s) with a bad rev or narHash: {}",
+                malformed.len(),
+                malformed.join(", ")
+            ),
+            hint: Some(
+                "Re-run 'cheni freeze <pkg>' to rewrite the entry with a \
+                 fresh rev + narHash fetched from nixpkgs."
+                    .to_string(),
+            ),
+        });
+    }
+
+    // Orphan detection: a freeze for a package that's not in the store
+    // anymore. Soft warning only — the freeze still works for a name
+    // that's about to be re-declared.
+    let store_packages = store::read_installed_packages()?;
+    let store_names: std::collections::HashSet<String> = store_packages
+        .iter()
+        .map(|p| p.name.to_lowercase())
+        .collect();
+    let orphans: Vec<String> = frozen
+        .keys()
+        .filter(|n| !store_names.contains(&n.to_lowercase()))
+        .cloned()
+        .collect();
+    if !orphans.is_empty() {
+        results.push(CheckResult {
+            severity: Severity::Warning,
+            name: "Orphan freezes".to_string(),
+            message: format!(
+                "{} freeze(s) for packages not in the store: {}",
+                orphans.len(),
+                orphans.join(", ")
+            ),
+            hint: Some("Run 'cheni unfreeze <pkg>' to drop orphan freezes.".to_string()),
+        });
+    }
+    Ok(results)
+}
+
+/// Return true when `s` is a plausibly-shaped hex git revision.
+fn is_hex_rev(s: &str) -> bool {
+    (7..=64).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Return true when `s` looks like an SRI narHash.
+fn is_sri_hash(s: &str) -> bool {
+    (s.starts_with("sha256-") || s.starts_with("sha512-"))
+        && s.len() < 200
+        && !s.chars().any(|c| c.is_control() || c == '"' || c == '\\')
 }
 
 /// Check if any flake input is older than 30 days.

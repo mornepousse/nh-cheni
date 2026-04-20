@@ -11,7 +11,7 @@ use std::path::Path;
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::nix::{config, pins};
+use crate::nix::{config, freezes, pins};
 
 use super::obsolete::count_obsolete_pins;
 
@@ -19,6 +19,7 @@ use super::obsolete::count_obsolete_pins;
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     let current_pins = pins::read(&nix_config.flake_dir)?;
+    let current_freezes = freezes::read(&nix_config.flake_dir)?;
     let lock_path = nix_config.flake_dir.join("flake.lock");
     let obsolete_count = if current_pins.is_empty() {
         0
@@ -32,6 +33,7 @@ pub fn run() -> Result<()> {
     print_config_section(&nix_config, &active);
     print_flake_inputs_section(&lock_path);
     print_pins_section(&current_pins, obsolete_count);
+    print_freezes_section(&current_freezes);
     print_suggestions(
         &nix_config,
         obsolete_count,
@@ -105,6 +107,27 @@ fn print_pins_section(current_pins: &[String], obsolete_count: usize) {
     println!("  {:<18} {}", "Pins:".bold(), header);
     for name in current_pins {
         println!("    {} {}", "→".yellow(), name);
+    }
+}
+
+/// Render the "Freezes" block. Silent-if-none — unlike the always-shown
+/// Pins line, freeze is an occasional-use feature and listing an empty
+/// "no freezes" row every time the user runs `cheni status` is just noise.
+fn print_freezes_section(current_freezes: &freezes::Freezes) {
+    if current_freezes.is_empty() {
+        return;
+    }
+    println!();
+    let header = format!("{} held", current_freezes.len()).cyan().to_string();
+    println!("  {:<18} {}", "Freezes:".bold(), header);
+    for (name, entry) in current_freezes {
+        println!(
+            "    {} {:<24} {} {}",
+            "⏸".cyan(),
+            name,
+            entry.version.dimmed(),
+            format!("(since {})", entry.frozen_at).dimmed()
+        );
     }
 }
 

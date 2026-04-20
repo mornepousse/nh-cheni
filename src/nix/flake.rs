@@ -449,6 +449,80 @@ pub fn is_flake_input(flake_dir: &Path, name: &str) -> bool {
     }
 }
 
+/// Read the full git rev of the `nixpkgs` input from `flake.lock`.
+///
+/// Used by `cheni freeze` to pin a package to the nixpkgs commit the
+/// system is currently running from. Returns the full 40-char rev,
+/// unlike `FlakeInput::rev` which is truncated to 12 for display.
+pub fn read_nixpkgs_rev(flake_dir: &Path) -> Result<String> {
+    let lock_path = flake_dir.join("flake.lock");
+    let content = std::fs::read_to_string(&lock_path)
+        .with_context(|| format!("Failed to read {}", lock_path.display()))?;
+    let lock: serde_json::Value =
+        serde_json::from_str(&content).context("Failed to parse flake.lock")?;
+    extract_root_input_rev(&lock, "nixpkgs")
+        .context("Could not find the 'nixpkgs' input in flake.lock")
+}
+
+/// Extract the full `rev` of a root-level input from a parsed flake.lock.
+/// Resolves the root indirection (root.inputs[name] may be a string that
+/// names the real node) before reading `locked.rev`.
+fn extract_root_input_rev(lock: &serde_json::Value, input_name: &str) -> Option<String> {
+    let nodes = lock.get("nodes")?.as_object()?;
+    let root_inputs = nodes.get("root")?.get("inputs")?.as_object()?;
+    let node_name = root_inputs
+        .get(input_name)?
+        .as_str()
+        .unwrap_or(input_name);
+    let locked = nodes.get(node_name)?.get("locked")?;
+    Some(locked.get("rev")?.as_str()?.to_string())
+}
+
+/// Prefetch a github:NixOS/nixpkgs/<rev> tarball and return its
+/// narHash (SRI form — `sha256-...`).
+///
+/// Shells out to `nix flake prefetch --json <url>`, which both downloads
+/// the tarball into the store *and* returns the hash in a single call.
+/// The returned narHash is stable regardless of whether flake metadata
+/// re-computation kicks in on later evals.
+pub fn prefetch_nixpkgs_rev(rev: &str) -> Result<String> {
+    // Defence in depth: the caller already validates `rev` against
+    // freezes::validate_entry, but this function is public and the rev
+    // flows into a URL passed to `nix` via `Command::args`. A strict
+    // hex check keeps the surface airtight even if a future caller
+    // forgets.
+    if rev.is_empty() || rev.len() > 64 || !rev.chars().all(|c| c.is_ascii_hexdigit()) {
+        anyhow::bail!("Refusing to prefetch a non-hex git rev: {:?}", rev);
+    }
+    let url = format!("github:NixOS/nixpkgs/{}", rev);
+    let output = std::process::Command::new("nix")
+        .args(["flake", "prefetch", "--json", &url])
+        .output()
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!(
+            "`nix flake prefetch {}` failed.\n  \
+             This usually means the rev doesn't exist on github:NixOS/nixpkgs,\n  \
+             or the network is unavailable.\n\n\
+             nix stderr:\n{}",
+            url,
+            stderr.trim()
+        );
+    }
+
+    let stdout = std::str::from_utf8(&output.stdout)
+        .context("`nix flake prefetch` produced non-UTF-8 output")?;
+    let parsed: serde_json::Value = serde_json::from_str(stdout)
+        .with_context(|| format!("Could not parse `nix flake prefetch` JSON output: {}", stdout))?;
+    let hash = parsed
+        .get("hash")
+        .and_then(|v| v.as_str())
+        .context("`nix flake prefetch` JSON had no 'hash' field")?;
+    Ok(hash.to_string())
+}
+
 #[cfg(test)]
 #[path = "tests/flake.rs"]
 mod tests;

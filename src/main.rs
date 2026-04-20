@@ -29,9 +29,11 @@ use tracing_subscriber::EnvFilter;
 Common workflows:\n  \
   cheni check                  See what's outdated (packages + flake inputs)\n  \
   cheni check -c dev           Restrict to modules/dev/\n  \
-  cheni pin vivaldi            Pin a single package to nixpkgs-latest\n  \
+  cheni pin vivaldi            Pin a single package to nixpkgs-latest (newer version)\n  \
   cheni pin -c dev             Pin all minor updates in modules/dev/\n  \
   cheni pin --flakes           Update flake inputs (zen-browser, claude-code, ...)\n  \
+  cheni freeze nvidia-x11      Hold a package at its CURRENT version (inverse of pin)\n  \
+  cheni unfreeze nvidia-x11    Release a frozen package\n  \
   cheni build                  Just rebuild the current flake state (old 'update' alias)\n  \
   cheni update                 Refresh nixpkgs-latest + apply pinned updates\n  \
   cheni upgrade                Full upgrade: update ALL inputs, preview, build (old 'upgrade')\n\
@@ -136,6 +138,26 @@ enum Commands {
         yes: bool,
 
         /// Remove all pins at once
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Hold a package at its current version (inverse of `pin`: freezes ≠ pins)
+    Freeze {
+        /// Package name to freeze. Omit to list current freezes.
+        package: Option<String>,
+    },
+
+    /// Release a frozen package (or all freezes with --all)
+    Unfreeze {
+        /// Package name to unfreeze
+        package: Option<String>,
+
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+
+        /// Remove every freeze at once
         #[arg(long)]
         all: bool,
     },
@@ -389,6 +411,8 @@ async fn dispatch(command: Commands) -> Result<()> {
             dispatch_pin(package, category, flakes, force).await
         }
         Commands::Unpin { package, all, yes } => dispatch_unpin(package, all, yes),
+        Commands::Freeze { package } => dispatch_freeze(package),
+        Commands::Unfreeze { package, all, yes } => dispatch_unfreeze(package, all, yes),
         Commands::Update => cmd::update::run(),
         Commands::Upgrade { gc, no_clean_pins, yes } => {
             cmd::upgrade::run(cmd::upgrade::UpgradeOptions { gc, no_clean_pins, yes })
@@ -448,6 +472,31 @@ fn dispatch_unpin(package: Option<String>, all: bool, yes: bool) -> Result<()> {
             "Specify a package name or --all.\n\
              Usage: cheni unpin <package>\n\
              Usage: cheni unpin --all"
+        );
+    }
+}
+
+/// `cheni freeze` — one arg selects freeze-a-package, no arg lists freezes.
+/// Matches `cheni pin`'s empty-arg listing behaviour so the two commands
+/// feel like a matched pair.
+fn dispatch_freeze(package: Option<String>) -> Result<()> {
+    match package {
+        Some(name) => cmd::freeze::freeze_one(&name),
+        None => cmd::freeze::list_freezes(),
+    }
+}
+
+/// `cheni unfreeze` — same shape as `dispatch_unpin`.
+fn dispatch_unfreeze(package: Option<String>, all: bool, yes: bool) -> Result<()> {
+    if all {
+        cmd::unfreeze::unfreeze_all(yes)
+    } else if let Some(name) = package {
+        cmd::unfreeze::unfreeze_one(&name, yes)
+    } else {
+        anyhow::bail!(
+            "Specify a package name or --all.\n\
+             Usage: cheni unfreeze <package>\n\
+             Usage: cheni unfreeze --all"
         );
     }
 }

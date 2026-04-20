@@ -121,6 +121,44 @@ $ cheni unpin --all
 Removed 5 pins.
 ```
 
+### `cheni freeze <pkg>` / `cheni unfreeze <pkg>`
+Hold a package at its **current** version (the inverse of `pin`).
+
+`pin` routes a package through `nixpkgs-latest` so it gets a newer
+version. `freeze` does the opposite — it locks the package at the
+**current** nixpkgs revision while everything else continues to
+move. Use cases: "nvidia driver works on 560, don't move me to 570
+before I test"; "new discord broke my config, hold it until upstream
+fixes".
+
+```
+$ cheni freeze nvidia-x11
+=== cheni freeze ===
+  Freezing nvidia-x11 at the current store version 560.35.03.
+  Reading current nixpkgs revision from flake.lock…
+    · rev 4bd91653a9f0
+  Prefetching tarball for pure eval (nix flake prefetch)…
+    · sha256-AAAA…ZZZZ
+  What this does:
+    Holds nvidia-x11 at 560.35.03 regardless of nixpkgs updates.
+    ...
+Freeze nvidia-x11 at 560.35.03? [Y/n] y
+✓ Froze nvidia-x11 at 560.35.03.
+Run 'cheni build' to apply.
+```
+
+Data model: `package-freezes.json` at the flake root maps package
+names to `{rev, narHash, version, frozen_at}`. The cheni overlay
+reads this file at every eval and routes each frozen package
+through `builtins.fetchTree { rev; narHash; ... }` — fully
+content-addressed, no per-package flake input, `flake.lock` stays
+clean. The overlay degrades to identity when the file is absent.
+
+Freeze and pin are mutually exclusive: `cheni freeze` refuses a
+package that's already pinned (and vice versa is cosmetic — the
+user just runs `cheni unfreeze` first). `cheni doctor` validates
+every entry's `rev`/`narHash` shape and flags orphans.
+
 ### `cheni update`
 Apply all current pins: update nixpkgs-latest + rebuild.
 
@@ -233,6 +271,8 @@ cheni/
 │   │   ├── check.rs         # cheni check
 │   │   ├── bug_report.rs    # cheni bug-report
 │   │   ├── pin.rs           # cheni pin / unpin
+│   │   ├── freeze.rs        # cheni freeze (hold at current version)
+│   │   ├── unfreeze.rs      # cheni unfreeze (release a freeze)
 │   │   ├── update.rs        # cheni update
 │   │   ├── upgrade.rs       # cheni upgrade (full system upgrade)
 │   │   ├── build.rs         # cheni build (rebuild + error parsing)
@@ -257,6 +297,7 @@ cheni/
 │   │   ├── config.rs        # Detect flake, hostname, modules
 │   │   ├── flake.rs         # Parse flake.lock, check remote inputs
 │   │   ├── pins.rs          # Read/write package-pins.json
+│   │   ├── freezes.rs       # Read/write package-freezes.json
 │   │   ├── gc.rs            # nix-collect-garbage --dry-run preview
 │   │   ├── tools.rs         # Friendly ENOENT → install-hint mapper
 │   │   └── tests/           # unit tests per nix module
@@ -384,31 +425,6 @@ critical paths, and the `cheni init` flow has been validated on multiple
 real-world flake layouts.
 
 ## Future ideas
-
-### Version freeze (distinct from pin)
-
-cheni's `pin` routes a package through `nixpkgs-latest` so it gets a
-newer version — the opposite of what "pin" means in most other
-ecosystems. There's a genuine gap for the other semantic: **keep
-this package at its current version while everything else moves**
-("my nvidia driver works on 560, I don't want 570 to land until I
-test"; "new discord broke my config, hold it until upstream fixes").
-
-Three implementation paths considered, all non-trivial:
-
-1. **Dedicated flake input per frozen package** — `nixpkgs-frozen-firefox.url
-   = github:NixOS/nixpkgs/<rev>` and overlay routes firefox there.
-   Simple conceptually, but `flake.lock` grows one input per frozen
-   package.
-2. **`overrideAttrs` with stored version + src hash** — clean in the
-   flake, but requires scanning nixpkgs history to find the commit
-   when version X was introduced. Non-obvious UX when the source
-   URL format changes upstream.
-3. **Store-path lock** — remember the current `/nix/store/<hash>-<pkg>-<ver>`,
-   overlay returns a trivial derivation pointing there. Simple but
-   breaks if the store path gets garbage-collected.
-
-Likely needs its own design session before any code.
 
 ### Multi-host support
 Today cheni assumes one hostname per flake. Could grow to handle several

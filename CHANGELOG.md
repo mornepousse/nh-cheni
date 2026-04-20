@@ -12,6 +12,19 @@ changes; every item below is additive or a readability improvement
 to an existing command.
 
 ### Added
+- **`cheni freeze <pkg>` / `cheni unfreeze <pkg|--all>`** — hold a
+  package at its **current** nixpkgs revision while the rest of the
+  system continues to move, the inverse of `cheni pin` (which routes
+  through `nixpkgs-latest` to get a *newer* version). Uses a new
+  `package-freezes.json` + a data-driven overlay that calls
+  `builtins.fetchTree` with a pinned `rev + narHash` — no
+  per-package flake input added, `flake.lock` stays clean, the
+  overlay degrades to identity when the JSON file is missing.
+  `cheni freeze` with no arg lists active freezes; `cheni status`
+  grows a "Freezes" section; `cheni check` skips frozen packages
+  from the Repology comparison and surfaces them in a dedicated
+  "Frozen (held at their snapshot)" block; `cheni doctor` validates
+  each entry's `rev`/`narHash` shape and flags orphans.
 - **`cheni diagnose [file]`** — scan a rebuild log (from a path or
   stdin) and surface known-issue hints in a `what / why / fix`
   format. Starts with five curated patterns (`aes_generic`,
