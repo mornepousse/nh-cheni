@@ -162,6 +162,41 @@ fn real_packages_are_not_classified_as_artefacts() {
 }
 
 #[test]
+fn aggregate_stats_separates_artefacts_from_packages() {
+    // Mix of one real package, two artefacts. Stats should have
+    // 1 minor (firefox) + 2 artefacts, and 0 in every other bucket.
+    let installed = vec![pkg("firefox", "149.0.1")];
+    let fetch_entries = vec!["firefox-149.0.2".to_string()];
+    let build_entries = vec!["options.json".to_string(), "hm_.manpath".to_string()];
+    let fetch = build_changes(&fetch_entries, &installed);
+    let build = build_changes(&build_entries, &installed);
+    let stats = aggregate_stats(&fetch, &build);
+
+    assert_eq!(stats.minor, 1);
+    assert_eq!(stats.artefacts, 2);
+    assert_eq!(stats.major, 0);
+    assert_eq!(stats.patch, 0);
+    assert_eq!(stats.new, 0);
+    assert_eq!(stats.total_packages(), 1);
+}
+
+#[test]
+fn aggregate_stats_counts_only_artefacts_when_no_real_packages() {
+    // The "home-manager refresh, nothing else" case — what triggered
+    // the fix. All 19 entries bucketed as artefacts, zero packages.
+    let installed: Vec<StorePackage> = vec![];
+    let build_entries = vec![
+        "options.json".to_string(),
+        "home-manager-path".to_string(),
+        "user-environment".to_string(),
+    ];
+    let stats = aggregate_stats(&[], &build_changes(&build_entries, &installed));
+
+    assert_eq!(stats.total_packages(), 0);
+    assert_eq!(stats.artefacts, 3);
+}
+
+#[test]
 fn artefact_fallback_covers_versionless_unparseable_entries() {
     // When `split_name_version` fails and we keep the raw entry as
     // `new` with an empty `name`, `is_system_artefact` should still

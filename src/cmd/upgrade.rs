@@ -238,10 +238,11 @@ pub struct UpgradeStats {
     pub minor: usize,
     pub patch: usize,
     pub new: usize,
+    pub artefacts: usize,
 }
 
 impl UpgradeStats {
-    fn total(&self) -> usize {
+    fn total_packages(&self) -> usize {
         self.major + self.minor + self.patch + self.new
     }
 }
@@ -523,6 +524,10 @@ fn aggregate_stats(
     use crate::version::compare::VersionDiff;
     let mut stats = UpgradeStats::default();
     for c in fetch.iter().chain(build.iter()) {
+        if is_system_artefact(c) {
+            stats.artefacts += 1;
+            continue;
+        }
         if c.old.is_none() {
             stats.new += 1;
             continue;
@@ -539,7 +544,7 @@ fn aggregate_stats(
 /// Render the final "✓ Upgrade complete in X — Y packages changed"
 /// line with the counts captured at preview time.
 fn print_final_summary(elapsed: std::time::Duration, stats: &UpgradeStats) {
-    let total = stats.total();
+    let packages = stats.total_packages();
     let mut parts: Vec<String> = Vec::new();
     if stats.major > 0 {
         parts.push(format!("{} major", stats.major).yellow().bold().to_string());
@@ -553,21 +558,38 @@ fn print_final_summary(elapsed: std::time::Duration, stats: &UpgradeStats) {
     if stats.new > 0 {
         parts.push(format!("{} new", stats.new).green().to_string());
     }
-
     let breakdown = if parts.is_empty() {
         String::new()
     } else {
         format!(" ({})", parts.join(", "))
     };
-    let pkg_count = if total == 0 {
-        "no changes".to_string()
-    } else {
-        format!(
+
+    // Summary shape:
+    //   no changes at all          → "no changes"
+    //   packages only              → "N packages changed (…)"
+    //   packages + artefacts       → "N packages changed (…), M system artefacts rebuilt"
+    //   artefacts only             → "no user-facing package changes (M system artefacts rebuilt)"
+    let headline = match (packages, stats.artefacts) {
+        (0, 0) => "no changes".to_string(),
+        (0, a) => format!(
+            "no user-facing package changes ({} system artefact{} rebuilt)",
+            a,
+            if a == 1 { "" } else { "s" },
+        ),
+        (p, 0) => format!(
             "{} package{} changed{}",
-            total,
-            if total == 1 { "" } else { "s" },
-            breakdown
-        )
+            p,
+            if p == 1 { "" } else { "s" },
+            breakdown,
+        ),
+        (p, a) => format!(
+            "{} package{} changed{}, {} system artefact{} rebuilt",
+            p,
+            if p == 1 { "" } else { "s" },
+            breakdown,
+            a,
+            if a == 1 { "" } else { "s" },
+        ),
     };
 
     println!(
@@ -575,7 +597,7 @@ fn print_final_summary(elapsed: std::time::Duration, stats: &UpgradeStats) {
         "✓".green().bold(),
         "Upgrade complete".bold(),
         format_elapsed(elapsed).dimmed(),
-        pkg_count
+        headline
     );
 }
 
@@ -660,7 +682,6 @@ fn format_change(c: &PackageChange) -> String {
 /// buffer is fed to the diagnose pattern library so the user gets an
 /// actionable hint along with the raw error.
 fn rebuild_system(config_path: &str) -> Result<()> {
-    println!("\n{} Rebuilding system...\n", "[2/4]".dimmed());
     let out = crate::output::stream::run_streaming(
         "nh",
         &["os", "switch", config_path],
@@ -677,10 +698,9 @@ fn rebuild_system(config_path: &str) -> Result<()> {
 /// decides which branch is taken so the step label stays aligned.
 fn run_pin_cleanup_step(flake_dir: &Path, no_clean: bool) -> Result<()> {
     if no_clean {
-        println!("\n{} {}", "[3/4]".dimmed(), "Skipping pin cleanup (--no-clean-pins)".dimmed());
+        println!("  {}", "Skipping pin cleanup (--no-clean-pins)".dimmed());
         return Ok(());
     }
-    println!("\n{} Checking for obsolete pins...", "[3/4]".dimmed());
     clean_obsolete_pins(flake_dir)
 }
 
@@ -691,11 +711,6 @@ fn run_pin_cleanup_step(flake_dir: &Path, no_clean: bool) -> Result<()> {
 /// deletion (and how many store paths it'll reclaim) before sudo kicks
 /// in for the real run. `yes` bypasses the confirmation.
 fn run_gc_step(yes: bool) -> Result<()> {
-    println!(
-        "\n{} {}",
-        "[4/4]".dimmed(),
-        "Collecting garbage (generations > 30 days)...".yellow()
-    );
     println!(
         "  {} This will delete old generations — rollback won't work past this point!",
         "!".yellow()
