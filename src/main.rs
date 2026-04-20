@@ -131,6 +131,10 @@ enum Commands {
         /// Package name to unpin
         package: Option<String>,
 
+        /// Skip the confirmation prompt
+        #[arg(short, long)]
+        yes: bool,
+
         /// Remove all pins at once
         #[arg(long)]
         all: bool,
@@ -384,7 +388,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Pin { package, category, flakes, force } => {
             dispatch_pin(package, category, flakes, force).await
         }
-        Commands::Unpin { package, all } => dispatch_unpin(package, all),
+        Commands::Unpin { package, all, yes } => dispatch_unpin(package, all, yes),
         Commands::Update => cmd::update::run(),
         Commands::Upgrade { gc, no_clean_pins, yes } => {
             cmd::upgrade::run(cmd::upgrade::UpgradeOptions { gc, no_clean_pins, yes })
@@ -434,11 +438,11 @@ async fn dispatch_pin(
     }
 }
 
-fn dispatch_unpin(package: Option<String>, all: bool) -> Result<()> {
+fn dispatch_unpin(package: Option<String>, all: bool, yes: bool) -> Result<()> {
     if all {
-        cmd::pin::unpin_all()
+        cmd::pin::unpin_all(yes)
     } else if let Some(name) = package {
-        cmd::pin::unpin_one(&name)
+        cmd::pin::unpin_one(&name, yes)
     } else {
         anyhow::bail!(
             "Specify a package name or --all.\n\

@@ -112,6 +112,19 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
         return Ok(());
     }
 
+    // Educational contract block: show what the pin actually does
+    // before the user commits to it. Default-yes prompt because the
+    // user explicitly asked to pin — this is a sanity check, not a
+    // safety gate.
+    print_pin_contract(name, &installed_version);
+    if !confirm(
+        &format!("Pin {} at {}?", name, installed_version),
+        true,
+    )? {
+        println!("{}", "  Cancelled — nothing pinned.".yellow());
+        return Ok(());
+    }
+
     let added = pins::add(&nix_config.flake_dir, &[name.to_string()])?;
     if added.is_empty() {
         println!("{} was already pinned.", name);
@@ -120,6 +133,28 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
     }
     println!("Run '{}' to apply.", "cheni build".bold());
     Ok(())
+}
+
+/// Print the "what this pin means" block. Kept short on purpose —
+/// two lines of effect, one line of how to undo.
+fn print_pin_contract(name: &str, installed: &str) {
+    println!();
+    println!("  {}", "What this does:".bold());
+    println!(
+        "    Freezes {} at version {} via the nixpkgs-latest overlay.",
+        name.bold(),
+        installed.bold()
+    );
+    println!(
+        "    Next '{}' will NOT move {}; other packages upgrade normally.",
+        "cheni upgrade".bold(),
+        name
+    );
+    println!(
+        "    Release later with '{}'.",
+        format!("cheni unpin {}", name).bold()
+    );
+    println!();
 }
 
 /// Locate a package in the nix store by case-insensitive name.
@@ -403,34 +438,106 @@ fn confirm_pin_block(
 }
 
 /// Run `cheni unpin <package>`.
-pub fn unpin_one(name: &str) -> Result<()> {
+pub fn unpin_one(name: &str, yes: bool) -> Result<()> {
     let nix_config = config::detect()?;
+    let current_pins = pins::read(&nix_config.flake_dir)?;
+
+    if !current_pins.iter().any(|p| p == name) {
+        println!("'{}' was not pinned.", name);
+        return Ok(());
+    }
+
+    let installed = store::read_installed_packages().unwrap_or_default();
+    let version = installed
+        .iter()
+        .find(|p| p.name == name)
+        .map(|p| p.version.clone())
+        .unwrap_or_else(|| "(unknown)".to_string());
+
+    println!("{}\n", "=== cheni unpin ===".bold());
+    println!(
+        "  {} is currently pinned at {}.",
+        name.bold(),
+        version.dimmed()
+    );
+    println!(
+        "  Removing the pin lets the next '{}' move it to whatever",
+        "cheni upgrade".bold()
+    );
+    println!("  nixpkgs-latest provides (usually a newer version).");
+    println!();
+
+    if !yes && !confirm(&format!("Unpin {}?", name), false)? {
+        println!("{}", "  Cancelled — pin kept.".yellow());
+        return Ok(());
+    }
 
     let removed = pins::remove(&nix_config.flake_dir, &[name.to_string()])?;
-
     if removed.is_empty() {
+        // Race condition: pin disappeared between the read and the remove.
         println!("'{}' was not pinned.", name);
     } else {
         println!("{} Unpinned {}.", "✓".green(), name.bold());
         println!("Run '{}' to apply.", "cheni build".bold());
     }
-
     Ok(())
 }
 
 /// Run `cheni unpin --all`.
-pub fn unpin_all() -> Result<()> {
+pub fn unpin_all(yes: bool) -> Result<()> {
     let nix_config = config::detect()?;
+    let current_pins = pins::read(&nix_config.flake_dir)?;
 
-    let count = pins::clear(&nix_config.flake_dir)?;
-
-    if count == 0 {
+    if current_pins.is_empty() {
         println!("No pins to remove.");
-    } else {
-        println!("{} Removed {} pin(s).", "✓".green(), count.to_string().bold());
-        println!("Run '{}' to apply.", "cheni build".bold());
+        return Ok(());
     }
 
+    let installed = store::read_installed_packages().unwrap_or_default();
+
+    println!("{}\n", "=== cheni unpin ===".bold());
+    println!(
+        "  This will release {} pin(s):",
+        current_pins.len().to_string().bold()
+    );
+    for (idx, name) in current_pins.iter().enumerate() {
+        let glyph = if idx + 1 == current_pins.len() {
+            "└──"
+        } else {
+            "├──"
+        };
+        let version = installed
+            .iter()
+            .find(|p| p.name == *name)
+            .map(|p| p.version.clone())
+            .unwrap_or_else(|| "(unknown)".to_string());
+        println!(
+            "    {} {:<28} {}",
+            glyph.dimmed(),
+            name.bold(),
+            version.dimmed()
+        );
+    }
+    println!();
+    println!(
+        "  The next '{}' will move these packages according to nixpkgs-latest.",
+        "cheni upgrade".bold()
+    );
+    println!();
+
+    if !yes
+        && !confirm(
+            &format!("Unpin all {} pin(s)?", current_pins.len()),
+            false,
+        )?
+    {
+        println!("{}", "  Cancelled — pins kept.".yellow());
+        return Ok(());
+    }
+
+    let count = pins::clear(&nix_config.flake_dir)?;
+    println!("{} Removed {} pin(s).", "✓".green(), count.to_string().bold());
+    println!("Run '{}' to apply.", "cheni build".bold());
     Ok(())
 }
 

@@ -275,7 +275,7 @@ fn dispatch_unpin(theme: &ColorfulTheme) -> Result<()> {
     let name: String = Input::with_theme(theme)
         .with_prompt("Package to unpin")
         .interact_text()?;
-    super::pin::unpin_one(&name)
+    super::pin::unpin_one(&name, false)
 }
 
 fn dispatch_rollback(theme: &ColorfulTheme) -> Result<()> {
