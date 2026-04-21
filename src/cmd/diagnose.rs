@@ -116,6 +116,20 @@ pub const KNOWN_FINDINGS: &[Finding] = &[
                  the WHY — fixes tend to land fast on popular packages.",
     },
     Finding {
+        matcher: "is marked as insecure",
+        title: "insecure package (CVEs or unmaintained upstream)",
+        explanation: "nixpkgs refuses to evaluate a package with known unpatched CVEs \
+                      or an unmaintained upstream. Typical offenders: qtwebengine-5.x, \
+                      older electron/chromium, python2.7, outdated openssl. The error \
+                      lists the exact derivation name (e.g. `qtwebengine-5.15.19`).",
+        action: "Preferred: drop the dependency — if a module pulls it transitively, \
+                 disable the offending option (e.g. Qt5 webview features). Escape \
+                 hatch: `nixpkgs.config.permittedInsecurePackages = [ \"NAME-VERSION\" ];` \
+                 in your config, using the exact name from the error. The pin is \
+                 version-specific so a later nixpkgs bump won't auto-allow a future \
+                 vulnerable release.",
+    },
+    Finding {
         matcher: "collision between",
         title: "package collision (two packages provide the same file)",
         explanation: "`environment.systemPackages` has two packages that both install \

@@ -249,6 +249,19 @@ const ERROR_PATTERNS: &[ErrorPattern] = &[
         handle: parse_broken,
     },
     ErrorPattern {
+        // Nix prints: `error: Refusing to evaluate package 'PKG' in …
+        // because it is marked as insecure`. `permittedInsecure` is an
+        // extra safety net in case nixpkgs rewords the sentence but
+        // keeps the knob name.
+        matches: |l| {
+            l.contains("is marked as insecure")
+                || l.contains("marked as insecure")
+                || (l.contains("Refusing to evaluate") && l.contains("insecure"))
+                || l.contains("permittedInsecurePackages")
+        },
+        handle: parse_insecure,
+    },
+    ErrorPattern {
         matches: |l| l.contains("undefined variable"),
         handle: parse_undefined_var,
     },
@@ -476,6 +489,53 @@ fn parse_broken(lines: &[&str], idx: usize) -> Option<ParsedError> {
         category: "Broken package",
         message: "This package is marked as broken in nixpkgs and cannot be built.".to_string(),
         hint: Some("Remove it from your config, or override with 'meta.broken = false;' (at your own risk).".to_string()),
+    })
+}
+
+/// Parse a `marked as insecure` error.
+///
+/// Nix phrasing: `error: Refusing to evaluate package 'PKG-X.Y.Z' in
+/// … because it is marked as insecure`. nixpkgs attaches this marker
+/// to packages with known unpatched CVEs or upstream-unmaintained
+/// codebases. The user can either allow the specific pin or drop the
+/// dependency — both paths are shown in the hint so the answer is
+/// actionable without a second trip to the nixpkgs docs.
+fn parse_insecure(lines: &[&str], idx: usize) -> Option<ParsedError> {
+    // Scan a small window around the match — the "marked as insecure"
+    // line may be the error body while the package name is on the
+    // `Refusing to evaluate package 'PKG'` line a few lines earlier.
+    let start = idx.saturating_sub(8);
+    let end = (idx + 3).min(lines.len());
+    let pkg_name = lines[start..end]
+        .iter()
+        .find_map(|l| {
+            if !l.contains("Refusing to evaluate package") {
+                return None;
+            }
+            l.split('\'').nth(1).map(|s| s.to_string())
+        })
+        .or_else(|| {
+            // Fallback: pull a quoted token out of the matching line itself.
+            lines[idx].split('\'').nth(1).map(|s| s.to_string())
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+
+    Some(ParsedError {
+        what: pkg_name.clone(),
+        category: "Insecure package",
+        message:
+            "Marked as insecure in nixpkgs (known CVEs or upstream unmaintained). \
+             Refused by default."
+                .to_string(),
+        hint: Some(format!(
+            "Allow it explicitly with:\n      \
+             {}\n      \
+             Or drop the dependency (preferable if the package is unmaintained).",
+            format_args!(
+                "nixpkgs.config.permittedInsecurePackages = [ \"{}\" ];",
+                pkg_name
+            )
+        )),
     })
 }
 

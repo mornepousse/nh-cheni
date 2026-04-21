@@ -54,6 +54,41 @@ fn test_parse_broken() {
 }
 
 #[test]
+fn test_parse_insecure_single_line() {
+    // Compact nixpkgs phrasing: package name + "marked as insecure"
+    // on the same error line.
+    let lines = [
+        "error: Package 'qtwebengine-5.15.19' is marked as insecure, refusing to evaluate.",
+    ];
+    let errors = parse_errors(&lines.join("\n"));
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].category, "Insecure package");
+    assert_eq!(errors[0].what, "qtwebengine-5.15.19");
+    let hint = errors[0].hint.as_deref().unwrap_or("");
+    assert!(hint.contains("permittedInsecurePackages"), "hint: {hint}");
+    assert!(hint.contains("qtwebengine-5.15.19"), "hint: {hint}");
+}
+
+#[test]
+fn test_parse_insecure_multiline_refusal() {
+    // Exact phrasing from a real nh failure (v0.4.1 reproduction):
+    // the "Refusing to evaluate package 'PKG'" line is a few lines
+    // above the "marked as insecure" body.
+    let stderr = "\
+error: Refusing to evaluate package 'qtwebengine-5.15.19' in /nix/store/abc-source/pkgs/development/libraries/qt-5/modules/qtwebengine.nix:448 because it is marked as insecure
+
+Known issues:
+ - qt5 qtwebengine is unmaintained upstream since april 2025.";
+    let errors = parse_errors(stderr);
+    assert!(
+        errors.iter().any(|e| e.category == "Insecure package"
+            && e.what == "qtwebengine-5.15.19"),
+        "expected insecure qtwebengine-5.15.19, got {:?}",
+        errors
+    );
+}
+
+#[test]
 fn test_parse_undefined_var() {
     let lines = [
         "at /home/mae/nixos-config/modules/dev/test.nix:5:3:",

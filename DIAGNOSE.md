@@ -21,7 +21,7 @@ string appears anywhere in the text. False positives are possible
 by design — the library errs on the side of surfacing a hint that
 might help rather than staying silent.
 
-## Current catalogue — 33 patterns
+## Current catalogue — 34 patterns
 
 ### Build runtime
 
@@ -75,6 +75,7 @@ might help rather than staying silent.
 |---|---|
 | `has an unfree license` | unfree package refused |
 | `is marked as broken` | broken package |
+| `is marked as insecure` | insecure package (CVEs or unmaintained upstream) |
 | `collision between` | package collision (two packages provide the same file) |
 
 ### Activation / configuration
