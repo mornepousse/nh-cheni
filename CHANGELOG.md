@@ -7,6 +7,49 @@ semver.
 
 ## Unreleased
 
+## [0.5.0] — 2026-04-25
+
+Breaking refactor: `cheni update` is removed. The "apply pins"
+workflow now lives behind `cheni upgrade --pins-only`, and every
+upgrade run surfaces the dirty-`flake.lock` trap up front.
+
+### Breaking
+- **`cheni update` removed.** Replaced by `cheni upgrade --pins-only`.
+  The two commands had heavily overlapping semantics — both rebuilt,
+  both followed `nh os switch`, both differed only in the scope of
+  the input refresh. The merged surface is one verb (`upgrade`) with
+  a scope flag, mirroring `nix flake update [<input>]`.
+- The `cheni up` shell alias is gone with it. Update any
+  alias / hooks pointing at `cheni update` to
+  `cheni upgrade --pins-only` (or drop the `--pins-only` to get
+  the full upgrade behaviour).
+
+### Added
+- `cheni upgrade --pins-only`: refresh `nixpkgs-latest` only, run
+  the anti-downgrade check (was specific to the old `update`),
+  preview, rebuild, clean obsolete pins. Equivalent to the old
+  `cheni update` plus the upgrade preview/cleanup.
+- **Dirty-`flake.lock` warning** at the start of every upgrade. If
+  a previous upgrade was cancelled at the preview prompt, the lock
+  file is already updated on disk while the rebuild didn't happen.
+  Any subsequent rebuild — even a `--pins-only` one — applies all
+  those pending bumps. The warning explains the trap and points at
+  `git checkout flake.lock` to discard them.
+- Cross-context wrappers (six in total: `history` annotation,
+  `rollback` policy-drift, `history --delete` policy-loss,
+  `search` Repology + badges, `diff` policy-delta header, `build`
+  pre-flight). Each surfaces pins/freezes state that `nh` cannot
+  see, on flows that were previously plain wrappers.
+
+### Fixed
+- `cheni upgrade` step 1 streams `nix flake update` events live so
+  the user sees per-input bullets as they arrive instead of staring
+  at `[1/4] Updating flake inputs` for the duration of a network
+  fetch.
+- `cheni search` columns now align regardless of name length —
+  ANSI escapes from `colored` no longer confuse the format-string
+  width.
+
 ## [0.4.1] — 2026-04-20
 
 UX polish across every long-running command. No breaking changes.
