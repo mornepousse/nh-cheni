@@ -30,6 +30,11 @@ pub struct UpgradeOptions {
     pub no_clean_pins: bool,
     /// Skip the preview + confirmation step.
     pub yes: bool,
+    /// Refresh ONLY `nixpkgs-latest` (the per-package overlay source)
+    /// instead of every flake input. Equivalent to the old `cheni
+    /// update` semantics. Bails with a friendly hint when no pin is
+    /// active — the flag has nothing to do then.
+    pub pins_only: bool,
 }
 
 /// Run `cheni upgrade`.
@@ -49,8 +54,41 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
 
     println!("{}\n", "=== cheni upgrade ===".bold());
 
-    print_step(1, total_steps, "Updating flake inputs");
-    let context = update_flake_inputs(&nix_config.flake_dir)?;
+    // --pins-only with no pins is meaningless — bail before touching
+    // anything so the user gets a clear "use plain upgrade" pointer
+    // instead of a no-op rebuild.
+    if opts.pins_only && pins::read(&nix_config.flake_dir)?.is_empty() {
+        println!(
+            "  {} No pins to apply. Use '{}' for a full system upgrade.",
+            "✓".green(),
+            "cheni upgrade".bold()
+        );
+        return Ok(());
+    }
+
+    // Pre-step state check: an uncommitted flake.lock means a previous
+    // run (or a manual `nix flake update`) bumped inputs that haven't
+    // been built yet. The rebuild *will* apply those bumps even when
+    // the current flag scope (--pins-only) implies a smaller refresh.
+    // Surfacing the state up front prevents the "why did my kernel
+    // update?" surprise.
+    warn_if_dirty_lock(&nix_config.flake_dir);
+
+    let step1_title = if opts.pins_only {
+        "Updating nixpkgs-latest"
+    } else {
+        "Updating flake inputs"
+    };
+    print_step(1, total_steps, step1_title);
+    let context = update_flake_inputs(&nix_config.flake_dir, opts.pins_only)?;
+
+    // Anti-downgrade guard for the targeted refresh: if nixpkgs has
+    // since caught up with (or moved past) nixpkgs-latest, applying
+    // pins would either be a no-op or actively roll packages back.
+    if opts.pins_only && !verify_nixpkgs_order(&nix_config.flake_dir) {
+        return Ok(());
+    }
+
     refresh_constrained_freezes_step(&nix_config.flake_dir);
     print_separator();
 
@@ -97,19 +135,29 @@ fn print_separator() {
     println!("{}", "───────────────────────────────────────────".dimmed());
 }
 
-/// Step 1: refresh every flake input.
+/// Step 1: refresh flake inputs.
+///
+/// `pins_only = false` runs a plain `nix flake update`, which bumps
+/// every input. `pins_only = true` narrows the scope to the
+/// `nixpkgs-latest` input — that's the one the per-package overlay
+/// reads to apply pins, so it's the only refresh worth doing when
+/// the user just wants their pin policy to take effect.
 ///
 /// Streams meaningful stderr events live (the per-input bullets and
 /// any warnings/errors) so the user sees progress instead of staring
-/// at "[1/4] Updating flake inputs" for the duration of a network
-/// fetch. The full stderr is also captured for the clean post-step
-/// summary that follows — `nix flake update` prints its narrative on
-/// stderr, never on stdout.
-fn update_flake_inputs(flake_dir: &Path) -> Result<UpgradeContext> {
+/// at the step header for the duration of a network fetch. The full
+/// stderr is also captured for the clean post-step summary that
+/// follows — `nix flake update` prints its narrative on stderr,
+/// never on stdout.
+fn update_flake_inputs(flake_dir: &Path, pins_only: bool) -> Result<UpgradeContext> {
     use std::io::{BufRead, BufReader};
 
-    let mut child = Command::new("nix")
-        .args(["flake", "update"])
+    let mut cmd = Command::new("nix");
+    cmd.arg("flake").arg("update");
+    if pins_only {
+        cmd.arg("nixpkgs-latest");
+    }
+    let mut child = cmd
         .current_dir(flake_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -145,6 +193,176 @@ fn update_flake_inputs(flake_dir: &Path) -> Result<UpgradeContext> {
         inputs_updated: updates.len(),
         git_tree_dirty: detect_dirty_tree_warning(&captured),
     })
+}
+
+/// Warn the user when `flake.lock` already has uncommitted changes
+/// before the upgrade begins.
+///
+/// Without this surface, a previous `cheni upgrade` cancelled at the
+/// confirmation prompt leaves the lock dirty — and the next rebuild
+/// silently applies all those pre-existing input bumps on top of
+/// whatever the new run fetches. That's how a `--pins-only` invocation
+/// can end up rebuilding the kernel: it's not the pin scope, it's the
+/// dirty lock that does the heavy lifting at rebuild time.
+///
+/// The wording is deliberately verbose: this is the kind of subtlety
+/// that bites users only once, and only because nothing told them it
+/// was happening.
+fn warn_if_dirty_lock(flake_dir: &Path) {
+    if !is_flake_lock_dirty(flake_dir) {
+        return;
+    }
+    println!(
+        "  {} {}",
+        "⚠".yellow().bold(),
+        "flake.lock has uncommitted input changes.".yellow()
+    );
+    println!(
+        "    {}",
+        "Likely from a previous upgrade that didn't reach the rebuild step.".dimmed()
+    );
+    println!(
+        "    {}",
+        "Any rebuild from now on will apply ALL of them — regardless of this run's scope.".dimmed()
+    );
+    println!(
+        "    {}  {}    {}",
+        "·".dimmed(),
+        "git diff flake.lock".bold(),
+        "to inspect".dimmed()
+    );
+    println!(
+        "    {}  {}    {}",
+        "·".dimmed(),
+        "git checkout flake.lock".bold(),
+        "to discard the pending bumps".dimmed()
+    );
+    println!();
+}
+
+/// True when `git diff --name-only flake.lock` reports any change.
+/// Returns `false` for non-git flakes / git-not-installed — we'd
+/// rather miss the warning on exotic setups than block the upgrade.
+fn is_flake_lock_dirty(flake_dir: &Path) -> bool {
+    let output = Command::new("git")
+        .args(["diff", "--name-only", "flake.lock"])
+        .current_dir(flake_dir)
+        .output();
+    match output {
+        Ok(o) if o.status.success() => !o.stdout.is_empty(),
+        _ => false,
+    }
+}
+
+/// Verify that `nixpkgs-latest` is strictly newer than `nixpkgs` at
+/// the locked revisions. Returns `true` when the upgrade may proceed,
+/// `false` after printing user-facing guidance for the two stop cases
+/// (Same / LatestIsOlder). `Unknown` (unreadable lock) proceeds with a
+/// debug warning rather than stranding the user.
+///
+/// Ported from the old `cheni update`; only relevant on the
+/// `--pins-only` path. The full upgrade refreshes both inputs so the
+/// ordering is irrelevant there.
+fn verify_nixpkgs_order(flake_dir: &Path) -> bool {
+    match check_nixpkgs_order(flake_dir) {
+        InputOrder::LatestIsNewer => {
+            debug!("nixpkgs-latest is ahead of nixpkgs — safe to apply");
+            println!("  {} nixpkgs-latest is ahead of nixpkgs.", "✓".green());
+            true
+        }
+        InputOrder::Same => {
+            println!(
+                "  {} nixpkgs and nixpkgs-latest are at the same commit.",
+                "!".yellow()
+            );
+            println!(
+                "  Pins won't have any effect. Run '{}' for a full upgrade or '{}' to drop pins.",
+                "cheni upgrade".bold(),
+                "cheni unpin --all".bold(),
+            );
+            false
+        }
+        InputOrder::LatestIsOlder => {
+            println!(
+                "  {} nixpkgs-latest is BEHIND nixpkgs — skipping to prevent downgrades.",
+                "!".red()
+            );
+            println!(
+                "  This can happen after a full '{}'. Pins are no longer needed — '{}'.",
+                "cheni upgrade".bold(),
+                "cheni unpin --all".bold(),
+            );
+            false
+        }
+        InputOrder::Unknown => {
+            tracing::warn!("Could not compare nixpkgs revisions, proceeding anyway");
+            println!(
+                "  {} Could not compare revisions — proceeding anyway.",
+                "·".dimmed()
+            );
+            true
+        }
+    }
+}
+
+/// Outcome of comparing `nixpkgs.lastModified` vs `nixpkgs-latest.lastModified`.
+enum InputOrder {
+    /// nixpkgs-latest is at a newer commit (safe to apply pins).
+    LatestIsNewer,
+    /// Both at the same commit (pins would be no-ops).
+    Same,
+    /// nixpkgs-latest is older (would cause downgrades).
+    LatestIsOlder,
+    /// Couldn't determine (lock unreadable / inputs missing).
+    Unknown,
+}
+
+fn check_nixpkgs_order(flake_dir: &Path) -> InputOrder {
+    let lock_path = flake_dir.join("flake.lock");
+    let Ok(content) = std::fs::read_to_string(&lock_path) else {
+        return InputOrder::Unknown;
+    };
+    let Ok(lock) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return InputOrder::Unknown;
+    };
+    let nixpkgs_time = get_input_timestamp(&lock, "nixpkgs");
+    let latest_time = get_input_timestamp(&lock, "nixpkgs-latest");
+    match (nixpkgs_time, latest_time) {
+        (Some(base), Some(latest)) => {
+            debug!(
+                "nixpkgs lastModified: {}, nixpkgs-latest lastModified: {}",
+                base, latest
+            );
+            if latest > base {
+                InputOrder::LatestIsNewer
+            } else if latest == base {
+                InputOrder::Same
+            } else {
+                InputOrder::LatestIsOlder
+            }
+        }
+        _ => InputOrder::Unknown,
+    }
+}
+
+/// Read `<input>.lastModified` from a parsed flake.lock. Resolves via
+/// the root node (root.inputs[name]) since the top-level node may be
+/// a transitive entry rather than the root's direct input.
+fn get_input_timestamp(lock: &serde_json::Value, input_name: &str) -> Option<u64> {
+    let root_input = lock
+        .get("nodes")?
+        .get("root")?
+        .get("inputs")?
+        .get(input_name)?;
+    let node_name = match root_input.as_str() {
+        Some(s) => s,
+        None => input_name,
+    };
+    lock.get("nodes")?
+        .get(node_name)?
+        .get("locked")?
+        .get("lastModified")?
+        .as_u64()
 }
 
 /// Print the meaningful fragments of `nix flake update`'s stderr

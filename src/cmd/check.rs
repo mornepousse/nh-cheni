@@ -890,6 +890,11 @@ pub fn print_first_run_hint() {
     println!("  After that:");
     println!("    {} {}    {}", "•".cyan(), "cheni check".bold(), "see what's outdated".dimmed());
     println!("    {} {}      {}", "•".cyan(), "cheni pin <pkg>".bold(), "pin one package to update".dimmed());
-    println!("    {} {}        {}", "•".cyan(), "cheni update".bold(), "apply pinned updates".dimmed());
+    println!(
+        "    {} {}  {}",
+        "•".cyan(),
+        "cheni upgrade --pins-only".bold(),
+        "apply pinned updates".dimmed()
+    );
     println!();
 }

@@ -83,11 +83,11 @@ Pin a package to nixpkgs-latest (or update its flake input).
 ```
 $ cheni pin legcord
 Pinned legcord (nixpkgs-latest)
-Run 'cheni update' to apply.
+Run 'cheni upgrade --pins-only' to apply.
 
 $ cheni pin zen-browser
 Pinned zen-browser (flake input)
-Run 'cheni update' to apply.
+Run 'cheni upgrade --pins-only' to apply.
 ```
 
 Pin by module directory with grouped confirmation:
@@ -107,7 +107,7 @@ Major updates (breaking changes possible):
 Pin 1 major update? [y/N] n
 
 Pinned 3 packages.
-Run 'cheni update' to apply.
+Run 'cheni upgrade --pins-only' to apply.
 ```
 
 ### `cheni unpin <pkg>`
@@ -159,17 +159,46 @@ package that's already pinned (and vice versa is cosmetic — the
 user just runs `cheni unfreeze` first). `cheni doctor` validates
 every entry's `rev`/`narHash` shape and flags orphans.
 
-### `cheni update`
-Apply all current pins: update nixpkgs-latest + rebuild.
+### `cheni upgrade --pins-only`
+Apply all current pins: refresh nixpkgs-latest + rebuild. Replaces
+the old `cheni update` (removed in v0.5).
 
 ```
-$ cheni update
+$ cheni upgrade --pins-only
 
-[1/3] Updating nixpkgs-latest...
-[2/3] Updating flake inputs: zen-browser...
-[3/3] Rebuilding system...
+[1/4] Updating nixpkgs-latest
+  ✓ nixpkgs-latest is ahead of nixpkgs.
+[2/4] Previewing changes
+  ↓ 3 packages to download
+[3/4] Rebuilding system
+  ...
+[4/4] Checking obsolete pins
+  All 3 pin(s) still needed.
 
-3 packages updated successfully.
+✓ Upgrade complete in 1m24s — 3 packages changed (3 patch).
+```
+
+### `cheni upgrade` — and the dirty-flake.lock trap
+
+`cheni upgrade` runs `nix flake update` *before* the preview prompt.
+If you cancel at the prompt, the lock file is already updated on
+disk: every input has bumped, the rebuild simply didn't happen.
+The next time you run *any* rebuild — including
+`cheni upgrade --pins-only` or `cheni build` — those pending bumps
+all get applied. That's how a "small" pins-only run can end up
+rebuilding the kernel.
+
+cheni warns about this at the start of every upgrade so the trap is
+visible:
+
+```
+=== cheni upgrade ===
+
+  ⚠ flake.lock has uncommitted input changes.
+    Likely from a previous upgrade that didn't reach the rebuild step.
+    Any rebuild from now on will apply ALL of them — regardless of this run's scope.
+    ·  git diff flake.lock         to inspect
+    ·  git checkout flake.lock     to discard the pending bumps
 ```
 
 ### `cheni init`
@@ -273,8 +302,7 @@ cheni/
 │   │   ├── pin.rs           # cheni pin / unpin
 │   │   ├── freeze.rs        # cheni freeze (hold at current version)
 │   │   ├── unfreeze.rs      # cheni unfreeze (release a freeze)
-│   │   ├── update.rs        # cheni update
-│   │   ├── upgrade.rs       # cheni upgrade (full system upgrade)
+│   │   ├── upgrade.rs       # cheni upgrade (full system + --pins-only mode)
 │   │   ├── build.rs         # cheni build (rebuild + error parsing)
 │   │   ├── init.rs          # cheni init
 │   │   ├── status.rs        # cheni status
@@ -414,7 +442,7 @@ the `0.1.0-alpha` series shipped the full feature set incrementally:
 ```
 inspection      cheni check, status, doctor, search, why
 pin lifecycle   cheni pin / unpin / clean
-apply           cheni update, build (with error parser), upgrade (preview)
+apply           cheni build (no fetch), cheni upgrade (full + --pins-only)
 history         cheni history (list + diffs + prune/--delete/--keep/--older-than)
                 cheni rollback, diff
 self            cheni init, self-update

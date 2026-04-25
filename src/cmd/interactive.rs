@@ -29,8 +29,8 @@ enum Action {
     PinPackage,
     PinFlakes,
     Unpin,
-    Update,
     Upgrade,
+    UpgradePinsOnly,
     Build,
     History,
     Rollback,
@@ -114,14 +114,14 @@ fn build_menu() -> Vec<MenuEntry> {
             action: Action::Check,
         },
         MenuEntry {
-            label: "Update",
-            hint: "refresh nixpkgs-latest + apply pinned updates",
-            action: Action::Update,
+            label: "Upgrade",
+            hint: "refresh ALL flake inputs, preview, rebuild",
+            action: Action::Upgrade,
         },
         MenuEntry {
-            label: "Upgrade",
-            hint: "full upgrade (all inputs, preview, build)",
-            action: Action::Upgrade,
+            label: "Upgrade --pins-only",
+            hint: "refresh nixpkgs-latest only (apply pins)",
+            action: Action::UpgradePinsOnly,
         },
         MenuEntry {
             label: "Pin package",
@@ -211,8 +211,8 @@ async fn dispatch(action: Action) -> Result<()> {
     let theme = ColorfulTheme::default();
     match action {
         Action::Check => super::check::run(None, false, false, false).await?,
-        Action::Update => super::update::run()?,
-        Action::Upgrade => super::upgrade::run(default_upgrade_options())?,
+        Action::Upgrade => super::upgrade::run(default_upgrade_options(false))?,
+        Action::UpgradePinsOnly => super::upgrade::run(default_upgrade_options(true))?,
         Action::PinPackage => dispatch_pin_package(&theme).await?,
         Action::PinFlakes => super::pin::pin_flake_inputs().await?,
         Action::Unpin => dispatch_unpin(&theme)?,
@@ -234,13 +234,15 @@ async fn dispatch(action: Action) -> Result<()> {
 }
 
 /// Upgrade defaults when launched from the interactive menu: no GC,
-/// keep pins, ask for confirmation (yes=false). These mirror what the
-/// user would get with a bare `cheni upgrade` from the shell.
-fn default_upgrade_options() -> super::upgrade::UpgradeOptions {
+/// keep pins, ask for confirmation (yes=false). The `pins_only`
+/// argument flips between the full and the targeted refresh modes —
+/// they share every other knob.
+fn default_upgrade_options(pins_only: bool) -> super::upgrade::UpgradeOptions {
     super::upgrade::UpgradeOptions {
         gc: false,
         no_clean_pins: false,
         yes: false,
+        pins_only,
     }
 }
 

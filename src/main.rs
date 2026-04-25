@@ -35,14 +35,14 @@ Common workflows:\n  \
   cheni pin --flakes           Update flake inputs (zen-browser, claude-code, ...)\n  \
   cheni freeze nvidia-x11      Hold a package at its CURRENT version (inverse of pin)\n  \
   cheni unfreeze nvidia-x11    Release a frozen package\n  \
-  cheni build                  Just rebuild the current flake state (old 'update' alias)\n  \
-  cheni update                 Refresh nixpkgs-latest + apply pinned updates\n  \
-  cheni upgrade                Full upgrade: update ALL inputs, preview, build (old 'upgrade')\n\
+  cheni build                  Just rebuild the current flake state — no fetch\n  \
+  cheni upgrade                Full upgrade: refresh ALL inputs, preview, rebuild\n  \
+  cheni upgrade --pins-only    Apply pins: refresh nixpkgs-latest only, rebuild\n\
 \n\
-Build vs update vs upgrade — the short version:\n  \
-  build      =  nothing fetched, just rebuild with what's already in flake.lock\n  \
-  update     =  refresh nixpkgs-latest only, then rebuild  (applies pending pins)\n  \
-  upgrade    =  refresh every flake input, preview, then rebuild\n\
+Build vs upgrade — the short version:\n  \
+  build                  =  rebuild with whatever's already in flake.lock\n  \
+  upgrade --pins-only    =  refresh nixpkgs-latest only, then rebuild  (applies pending pins)\n  \
+  upgrade                =  refresh every flake input, preview, then rebuild\n\
 \n\
 History & rollback:\n  \
   cheni history                List recent generations with package diffs\n  \
@@ -170,11 +170,7 @@ enum Commands {
         all: bool,
     },
 
-    /// Refresh nixpkgs-latest + rebuild (applies pending pins — see 'build' for plain rebuild)
-    #[command(alias = "up")]
-    Update,
-
-    /// Full system upgrade: refresh ALL flake inputs, preview, build, clean pins
+    /// Full system upgrade: refresh flake inputs, preview, rebuild, clean pins
     #[command(alias = "ug")]
     Upgrade {
         /// Also run garbage collection (DELETES old generations — no rollback!)
@@ -188,9 +184,14 @@ enum Commands {
         /// Skip the preview + confirmation step (non-interactive)
         #[arg(short, long)]
         yes: bool,
+
+        /// Refresh ONLY nixpkgs-latest (the pin overlay source) instead of every input.
+        /// Replaces the old `cheni update` workflow.
+        #[arg(long)]
+        pins_only: bool,
     },
 
-    /// Rebuild the current flake state, no input refresh (equivalent of the old 'update' alias)
+    /// Rebuild the current flake state, no input refresh
     #[command(alias = "b")]
     Build,
 
@@ -421,9 +422,13 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Unpin { package, all, yes } => dispatch_unpin(package, all, yes),
         Commands::Freeze { package, major } => dispatch_freeze(package, major),
         Commands::Unfreeze { package, all, yes } => dispatch_unfreeze(package, all, yes),
-        Commands::Update => cmd::update::run(),
-        Commands::Upgrade { gc, no_clean_pins, yes } => {
-            cmd::upgrade::run(cmd::upgrade::UpgradeOptions { gc, no_clean_pins, yes })
+        Commands::Upgrade { gc, no_clean_pins, yes, pins_only } => {
+            cmd::upgrade::run(cmd::upgrade::UpgradeOptions {
+                gc,
+                no_clean_pins,
+                yes,
+                pins_only,
+            })
         }
         Commands::Build => cmd::build::run(),
         Commands::Doctor => cmd::doctor::run(),

@@ -173,7 +173,7 @@ fn print_suggestions(
         println!(
             "    {} pinned packages waiting — run '{}' to refresh nixpkgs-latest + rebuild",
             "→".cyan(),
-            "cheni update".bold()
+            "cheni upgrade --pins-only".bold()
         );
         any = true;
     }

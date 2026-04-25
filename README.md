@@ -45,7 +45,7 @@ Then pin what you want, and apply:
 
 ```
 $ cheni pin flatpak vivaldi
-$ cheni update
+$ cheni upgrade --pins-only
 ```
 
 Only those two packages get updated. Everything else stays on your
@@ -56,11 +56,11 @@ current `nixpkgs`.
 ## Quick start
 
 ```bash
-cheni init              # one-time flake setup
-cheni                   # interactive menu (no subcommand → picker)
-cheni check             # see what's outdated
-cheni pin <package>     # pin a package for update
-cheni update            # apply all pins (rebuild system)
+cheni init                     # one-time flake setup
+cheni                          # interactive menu (no subcommand → picker)
+cheni check                    # see what's outdated
+cheni pin <package>            # pin a package for update
+cheni upgrade --pins-only      # apply all pins (rebuild system)
 ```
 
 Run `cheni` with no arguments for an interactive menu showing the
@@ -110,12 +110,24 @@ it for "nvidia 560 works, don't move me to 570 before I test" or
 
 ### Apply
 
-| Command         | What it does                                          |
-|-----------------|-------------------------------------------------------|
-| `cheni update`  | Apply pins: refresh `nixpkgs-latest` + rebuild        |
-| `cheni build`   | Rebuild current state with human-readable errors      |
-| `cheni upgrade` | Full upgrade: update all inputs, preview, build       |
-| `cheni clean`   | Auto-remove obsolete pins (nixpkgs caught up)         |
+| Command                       | What it does                                          |
+|-------------------------------|-------------------------------------------------------|
+| `cheni build`                 | Rebuild current `flake.lock` state — no fetch         |
+| `cheni upgrade --pins-only`   | Refresh `nixpkgs-latest` only, then rebuild (apply pins) |
+| `cheni upgrade`               | Refresh ALL flake inputs, preview, then rebuild       |
+| `cheni upgrade --gc`          | Same + `nix-collect-garbage --delete-older-than 30d`  |
+| `cheni clean`                 | Auto-remove obsolete pins (nixpkgs caught up)         |
+
+> **A typical trap with `flake.lock`.** `cheni upgrade` runs
+> `nix flake update` *before* the rebuild prompt. If you cancel at
+> the prompt, the lock is already updated on disk — the rebuild
+> didn't happen, but every input has bumped. The next time you run
+> *any* rebuild (`cheni build`, `cheni upgrade --pins-only`,
+> `cheni upgrade`), all those pending bumps get applied — including
+> the kernel and other base packages well outside the scope of the
+> command you just typed. cheni warns about a dirty `flake.lock` at
+> the start of every upgrade so you can `git checkout flake.lock`
+> to discard the pending bumps before continuing.
 
 ### History & rollback
 
@@ -186,7 +198,6 @@ Every frequently-used command has a two-letter alias:
 |--------------|----------------|
 | `cheni ck`   | `check`        |
 | `cheni st`   | `status`       |
-| `cheni up`   | `update`       |
 | `cheni ug`   | `upgrade`      |
 | `cheni b`    | `build`        |
 | `cheni h`    | `history`      |
