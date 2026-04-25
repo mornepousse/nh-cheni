@@ -5,6 +5,26 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## Unreleased
+
+### Added
+- **`cheni upgrade --boot`** stages the new generation for next
+  boot via `nh os boot` instead of live-switching via `nh os
+  switch`. Required when a critical component is changing
+  (dbus → dbus-broker, init swap, …) — nh's pre-switch check
+  refuses the live activation in those cases. The flag is
+  available on the interactive menu via the existing Upgrade
+  entries.
+- **Auto-detection of critical-component changes** during the
+  upgrade preview. Today: flags `dbus-broker` landing in either
+  the build or fetch bucket (the swap that triggered the
+  Pre-switch check error in the v0.5.0 → v0.5.2 development
+  cycle). When detected and `--boot` is not already set, cheni
+  prints a yellow warning and offers to flip to boot mode for
+  this rebuild — saving the user the post-failure debug cycle
+  of "switch refused → reboot does nothing → manual `nh os
+  boot` → reboot again".
+
 ## [0.5.2] — 2026-04-25
 
 ### Added

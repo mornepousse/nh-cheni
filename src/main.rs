@@ -196,6 +196,13 @@ enum Commands {
         /// Replaces the old `cheni update` workflow.
         #[arg(long)]
         pins_only: bool,
+
+        /// Stage the new generation for next boot (nh os boot) instead of
+        /// live-switching. Required when a critical component is changing
+        /// (dbus → dbus-broker, init swap, …). cheni auto-detects the
+        /// case and offers to flip to boot mode interactively.
+        #[arg(long)]
+        boot: bool,
     },
 
     /// Rebuild the current flake state, no input refresh
@@ -429,12 +436,13 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Unpin { package, all, yes } => dispatch_unpin(package, all, yes),
         Commands::Freeze { package, major } => dispatch_freeze(package, major),
         Commands::Unfreeze { package, all, yes } => dispatch_unfreeze(package, all, yes),
-        Commands::Upgrade { gc, no_clean_pins, yes, pins_only } => {
+        Commands::Upgrade { gc, no_clean_pins, yes, pins_only, boot } => {
             cmd::upgrade::run(cmd::upgrade::UpgradeOptions {
                 gc,
                 no_clean_pins,
                 yes,
                 pins_only,
+                boot,
             })
         }
         Commands::Build => cmd::build::run(),

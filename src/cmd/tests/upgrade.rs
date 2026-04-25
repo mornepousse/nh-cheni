@@ -378,3 +378,57 @@ fn format_elapsed_over_a_minute() {
     assert_eq!(format_elapsed(std::time::Duration::from_secs(125)), "2m05s");
     assert_eq!(format_elapsed(std::time::Duration::from_secs(3_600)), "60m00s");
 }
+
+// --- detect_critical_component_changes ---
+
+fn change(name: &str, new: &str) -> PackageChange {
+    PackageChange {
+        name: name.to_string(),
+        old: None,
+        new: new.to_string(),
+        diff: crate::version::compare::VersionDiff::Equal,
+    }
+}
+
+#[test]
+fn detect_critical_flags_dbus_broker_landing() {
+    // The classic case: dbus-broker shows up in either bucket
+    // (download or build). Anywhere is enough to trigger the
+    // pre-switch refusal at activation time.
+    let fetch = vec![change("dbus-broker", "37")];
+    let build: Vec<PackageChange> = vec![];
+    let critical = detect_critical_component_changes(&fetch, &build);
+    assert_eq!(critical.len(), 1);
+    assert!(critical[0].contains("dbus-broker"));
+}
+
+#[test]
+fn detect_critical_handles_dbus_broker_in_build_section_too() {
+    let fetch: Vec<PackageChange> = vec![];
+    let build = vec![change("dbus-broker", "37")];
+    let critical = detect_critical_component_changes(&fetch, &build);
+    assert_eq!(critical.len(), 1);
+}
+
+#[test]
+fn detect_critical_returns_empty_when_no_trigger_present() {
+    // Routine upgrade — no critical-swap signal. The detector must
+    // stay silent so common-case upgrades aren't cluttered with the
+    // boot-mode prompt.
+    let fetch = vec![change("firefox", "150.0"), change("kicad", "10.0.1")];
+    let build = vec![change("teamspeak6-client", "6.0.0")];
+    assert!(detect_critical_component_changes(&fetch, &build).is_empty());
+}
+
+#[test]
+fn detect_critical_does_not_match_unrelated_dbus_packages() {
+    // A package that merely mentions "dbus" in its name (dbus-1,
+    // dbus-glib, python-dbus, …) must not falsely trigger. The
+    // signal we care about is exactly `dbus-broker`.
+    let fetch = vec![
+        change("dbus-glib", "0.112"),
+        change("python3.13-dbus", "1.4.0"),
+    ];
+    let build: Vec<PackageChange> = vec![];
+    assert!(detect_critical_component_changes(&fetch, &build).is_empty());
+}

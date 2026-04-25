@@ -243,6 +243,7 @@ fn default_upgrade_options(pins_only: bool) -> super::upgrade::UpgradeOptions {
         no_clean_pins: false,
         yes: false,
         pins_only,
+        boot: false,
     }
 }
 

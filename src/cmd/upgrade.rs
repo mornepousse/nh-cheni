@@ -35,6 +35,12 @@ pub struct UpgradeOptions {
     /// update` semantics. Bails with a friendly hint when no pin is
     /// active — the flag has nothing to do then.
     pub pins_only: bool,
+    /// Stage the new generation for next boot instead of live-switching.
+    /// `nh os boot` skips the activation pre-checks that refuse the
+    /// live switch on critical-component changes (dbus → dbus-broker,
+    /// init swap, …). When this flag is off, cheni still detects those
+    /// changes during preview and offers to flip the mode interactively.
+    pub boot: bool,
 }
 
 /// Run `cheni upgrade`.
@@ -45,7 +51,7 @@ pub struct UpgradeOptions {
 /// 3. Rebuild the system
 /// 4. Clean obsolete pins
 /// 5. (optional, with --gc) Garbage-collect old generations
-pub fn run(opts: UpgradeOptions) -> Result<()> {
+pub fn run(mut opts: UpgradeOptions) -> Result<()> {
     let started = Instant::now();
     let nix_config = config::detect()?;
     let config_path = nix_config.flake_dir.to_str()
@@ -93,14 +99,24 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
     print_separator();
 
     print_step(2, total_steps, "Previewing changes");
-    let stats = match preview_and_confirm(config_path, &nix_config.hostname, opts.yes, &context)? {
+    let stats = match preview_and_confirm(
+        config_path,
+        &nix_config.hostname,
+        &mut opts,
+        &context,
+    )? {
         Some(s) => s,
         None => return Ok(()),
     };
     print_separator();
 
-    print_step(3, total_steps, "Rebuilding system");
-    rebuild_system(config_path)?;
+    let step3_title = if opts.boot {
+        "Staging system for next boot"
+    } else {
+        "Rebuilding system"
+    };
+    print_step(3, total_steps, step3_title);
+    rebuild_system(config_path, opts.boot)?;
     print_separator();
 
     print_step(4, total_steps, "Checking obsolete pins");
@@ -113,7 +129,7 @@ pub fn run(opts: UpgradeOptions) -> Result<()> {
     }
 
     print_separator();
-    print_final_summary(started.elapsed(), &stats, &context);
+    print_final_summary(started.elapsed(), &stats, &context, opts.boot);
     if !opts.gc {
         println!(
             "{}",
@@ -544,34 +560,135 @@ pub struct UpgradeContext {
 ///
 /// Returns `Ok(Some(stats))` when the caller should proceed with the
 /// rebuild, `Ok(None)` when the user cancelled or there's nothing
-/// to do. `yes` skips the prompt for non-interactive use.
+/// to do. The function may also flip `opts.boot = true` when a
+/// critical-component change is detected and the user opts into the
+/// boot-mode rebuild — that's why `opts` is a mutable borrow rather
+/// than a value or `yes: bool`.
 fn preview_and_confirm(
     config_path: &str,
     hostname: &str,
-    yes: bool,
+    opts: &mut UpgradeOptions,
     context: &UpgradeContext,
 ) -> Result<Option<UpgradeStats>> {
-    let Some(stats) = print_pending_changes(config_path, hostname)? else {
+    let dry_run = run_dry_run(config_path, hostname)?;
+    let (to_build, to_fetch) = parse_dry_run_summary(&dry_run);
+    if to_build.is_empty() && to_fetch.is_empty() {
+        println!("  {}", "Nothing to build or download — already up to date.".green());
         return Ok(None);
-    };
+    }
 
-    // If we already know this rebuild is going to be pure noise, warn
-    // BEFORE the confirmation prompt so the user can skip the wait.
+    let installed = crate::nix::store::read_installed_packages().unwrap_or_default();
+    let fetch_changes = build_changes(&to_fetch, &installed);
+    let build_changes_vec = build_changes(&to_build, &installed);
+    let critical = detect_critical_component_changes(&fetch_changes, &build_changes_vec);
+
+    if !fetch_changes.is_empty() {
+        print_section_from_changes("↓", "to download", &fetch_changes, 20, Color::Cyan);
+    }
+    if !build_changes_vec.is_empty() {
+        println!();
+        print_section_from_changes("⚒", "to build locally", &build_changes_vec, 10, Color::Yellow);
+    }
+    let stats = aggregate_stats(&fetch_changes, &build_changes_vec);
+
+    // If a critical component is moving (dbus → broker, …), nh's
+    // activation pre-check will refuse the live switch. Either flip
+    // to boot mode now (saves the user the post-failure debug cycle)
+    // or proceed and let it fail explicitly if they prefer.
+    if !critical.is_empty() && !opts.boot {
+        warn_critical_changes_and_offer_boot_mode(&critical, opts)?;
+    }
+
     if let Some(warning) = preview_noop_warning(&stats, context) {
         println!();
         println!("  {} {}", "⚠".yellow().bold(), warning.yellow());
     }
 
-    if yes {
+    if opts.yes {
         return Ok(Some(stats));
     }
     println!();
-    if !confirm("Download and apply these changes?")? {
+    let prompt_text = if opts.boot {
+        "Stage these changes for next boot?"
+    } else {
+        "Download and apply these changes?"
+    };
+    if !confirm(prompt_text)? {
         println!("\n{}", "  Upgrade cancelled. Flake is already updated.".yellow());
         println!("  Use '{}' to rebuild later.", "cheni upgrade --yes".bold());
         return Ok(None);
     }
     Ok(Some(stats))
+}
+
+/// Surface the critical component change and let the user opt into
+/// boot mode for this run. When `opts.yes` is set the message is
+/// purely advisory — non-interactive callers stay in switch mode and
+/// will see the activation refusal at rebuild time, where the
+/// `Pre-switch check` diagnose pattern points at the recovery path.
+fn warn_critical_changes_and_offer_boot_mode(
+    critical: &[String],
+    opts: &mut UpgradeOptions,
+) -> Result<()> {
+    println!();
+    println!("  {} {}", "⚠".yellow().bold(), "Critical component change detected:".yellow());
+    for c in critical {
+        println!("      · {}", c);
+    }
+    println!(
+        "    {}",
+        "nh's activation pre-check will refuse the live switch."
+            .dimmed()
+    );
+    println!(
+        "    {}",
+        "Recommended: stage for next boot instead — `cheni upgrade --boot`."
+            .dimmed()
+    );
+
+    if opts.yes {
+        // --yes preserves the strict semantics chosen at invocation.
+        // We've shown the warning; the user (or the script) made
+        // their choice up front.
+        return Ok(());
+    }
+    println!();
+    if confirm("Switch to boot mode for this rebuild?")? {
+        opts.boot = true;
+        println!("  {}", "boot mode engaged — will use `nh os boot`.".dimmed());
+    } else {
+        println!(
+            "  {}",
+            "staying in switch mode — activation will likely fail; rerun with `--boot` to recover."
+                .dimmed()
+        );
+    }
+    Ok(())
+}
+
+/// Inspect the preview's package-change set for components whose
+/// implementation swap triggers nixos-rebuild's switchInhibitor
+/// pre-check.
+///
+/// Today we recognise the dbus → dbus-broker swap (the common case
+/// — every NixOS desktop hits it once when nixpkgs flips the
+/// default). The list grows as we encounter new triggers in real
+/// rebuilds.
+fn detect_critical_component_changes(
+    fetch: &[PackageChange],
+    build: &[PackageChange],
+) -> Vec<String> {
+    let mut out = Vec::new();
+    let landing = |name: &str| -> bool {
+        fetch.iter().chain(build.iter()).any(|c| {
+            let n = if c.name.is_empty() { c.new.as_str() } else { c.name.as_str() };
+            n == name
+        })
+    };
+    if landing("dbus-broker") {
+        out.push("dbus-broker landing (dbus implementation swap)".to_string());
+    }
+    out
 }
 
 /// Run `nix build --dry-run` against the current flake state, parse
@@ -862,20 +979,32 @@ fn aggregate_stats(
 }
 
 /// Render the final "✓ Upgrade complete in X — Y packages changed"
-/// line with the counts captured at preview time.
+/// line with the counts captured at preview time. In boot mode the
+/// completion banner switches wording — the new generation is on
+/// disk and registered with the bootloader, but it isn't live yet,
+/// so the user needs the explicit "reboot to activate" prompt.
 fn print_final_summary(
     elapsed: std::time::Duration,
     stats: &UpgradeStats,
     context: &UpgradeContext,
+    boot: bool,
 ) {
     let headline = render_summary_headline(stats, context);
+    let banner = if boot { "Upgrade staged for next boot" } else { "Upgrade complete" };
     println!(
         "{} {} in {} — {}.",
         "✓".green().bold(),
-        "Upgrade complete".bold(),
+        banner.bold(),
         format_elapsed(elapsed).dimmed(),
         headline
     );
+    if boot {
+        println!(
+            "  {} {}",
+            "→".cyan(),
+            "Run 'sudo reboot' to activate the new generation.".bold()
+        );
+    }
     if let Some(reason) = explain_no_op_rebuild(stats, context) {
         println!("  {} {}", "ⓘ".cyan(), reason);
     }
@@ -1068,16 +1197,20 @@ fn format_change(c: &PackageChange) -> String {
     }
 }
 
-/// Step 2: invoke `nh os switch` with the activation step inline.
+/// Step 3: invoke `nh os switch` (live activation) or `nh os boot`
+/// (stage for next boot) depending on `boot`.
 ///
 /// Uses the merged-pipe streamer so `/nix/store/<hash>-...` noise is
 /// stripped from the output live. On failure, the raw (non-prettified)
 /// buffer is fed to the diagnose pattern library so the user gets an
-/// actionable hint along with the raw error.
-fn rebuild_system(config_path: &str) -> Result<()> {
+/// actionable hint along with the raw error — including the
+/// `Pre-switch check` recovery path that suggests `--boot` when a
+/// critical-component change tripped the activation guard.
+fn rebuild_system(config_path: &str, boot: bool) -> Result<()> {
+    let action = if boot { "boot" } else { "switch" };
     let out = crate::output::stream::run_streaming(
         "nh",
-        &["os", "switch", config_path],
+        &["os", action, config_path],
         None,
     )?;
     if !out.status.success() {
