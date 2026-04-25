@@ -5,6 +5,20 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## Unreleased
+
+### Added
+- **`Pre-switch check` pattern** in `cheni build` and `cheni
+  diagnose`. When `nh os switch` (via `cheni build`/`cheni
+  upgrade`) refuses the live activation because a critical
+  component is moving (dbus → dbus-broker, sysvinit → systemd,
+  pulseaudio → pipewire, …), cheni now extracts the actual
+  change line and points at the canonical recovery path: `sudo
+  nh os boot ~/nixos-config && sudo reboot`. Previously this
+  case fell through to two unrelated false-positive matches
+  (`aes_generic`, generic systemd-service-failed) which weren't
+  actionable.
+
 ## [0.5.1] — 2026-04-25
 
 ### Added

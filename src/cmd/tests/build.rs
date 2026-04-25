@@ -33,6 +33,65 @@ fn test_parse_hash_mismatch() {
 }
 
 #[test]
+fn test_parse_switch_inhibitor_extracts_change_line() {
+    // Real activation refusal from `nh os switch` when dbus is
+    // moving to dbus-broker. The detected change line must surface
+    // verbatim in `what` so the user reads exactly which critical
+    // bit is moving.
+    let stderr = [
+        "Checking switch inhibitors...",
+        "There are changes to critical components of the system:",
+        "",
+        "dbus-implementation : dbus -> broker",
+        "",
+        "Switching into this system is not recommended.",
+        "You probably want to run 'nixos-rebuild boot' and reboot your system instead.",
+        "",
+        "Pre-switch check 'switchInhibitors' failed",
+        "Pre-switch checks failed",
+    ]
+    .join("\n");
+    let errors = parse_errors(&stderr);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.category == "Pre-switch check"
+                && e.what.contains("dbus-implementation")
+                && e.what.contains("dbus -> broker")),
+        "expected a Pre-switch check entry mentioning the dbus-implementation change, got: {:?}",
+        errors
+    );
+    let entry = errors
+        .iter()
+        .find(|e| e.category == "Pre-switch check")
+        .unwrap();
+    assert!(
+        entry.hint.as_deref().unwrap_or("").contains("nh os boot"),
+        "hint should point at `nh os boot`, got: {:?}",
+        entry.hint
+    );
+}
+
+#[test]
+fn test_parse_switch_inhibitor_falls_back_to_generic_label() {
+    // When the change-line couldn't be parsed (truncated log, weird
+    // formatting), the entry still fires with a placeholder `what`
+    // — better than missing the diagnosis entirely.
+    let stderr = [
+        "some unrelated log line",
+        "Pre-switch check 'someOtherCheck' failed",
+        "Pre-switch checks failed",
+    ]
+    .join("\n");
+    let errors = parse_errors(&stderr);
+    let entry = errors
+        .iter()
+        .find(|e| e.category == "Pre-switch check");
+    assert!(entry.is_some(), "expected a Pre-switch check entry, got: {:?}", errors);
+    assert_eq!(entry.unwrap().what, "critical component change");
+}
+
+#[test]
 fn test_parse_unfree() {
     let lines = [
         "error: Package 'nvidia-x11' is not free and refused to install.",

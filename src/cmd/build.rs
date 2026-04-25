@@ -312,6 +312,21 @@ struct ErrorPattern {
 /// (e.g. cargoHash + a generic eval error around it).
 const ERROR_PATTERNS: &[ErrorPattern] = &[
     ErrorPattern {
+        // Activation-time refusal from `switch-to-configuration` /
+        // `nh os switch`. The build itself succeeded — what failed is
+        // a pre-flight that detected a critical-component change
+        // (dbus → dbus-broker, sysvinit → systemd, pulseaudio →
+        // pipewire, …) that can't safely happen at runtime. The new
+        // generation is on disk and rollback-able; only the live
+        // switch was blocked.
+        matches: |l| {
+            (l.contains("Pre-switch check") && l.contains("failed"))
+                || l.contains("Pre-switch checks failed")
+                || l.contains("Switching into this system is not recommended")
+        },
+        handle: parse_switch_inhibitor,
+    },
+    ErrorPattern {
         matches: |l| l.contains("hash mismatch") || l.contains("sha256 mismatch"),
         handle: parse_hash_mismatch,
     },
@@ -564,6 +579,64 @@ fn parse_broken(lines: &[&str], idx: usize) -> Option<ParsedError> {
         category: "Broken package",
         message: "This package is marked as broken in nixpkgs and cannot be built.".to_string(),
         hint: Some("Remove it from your config, or override with 'meta.broken = false;' (at your own risk).".to_string()),
+    })
+}
+
+/// Parse a `Pre-switch check '<name>' failed` error.
+///
+/// nh / nixos-rebuild runs activation pre-flights that refuse to
+/// switch the *running* system when a critical component change is
+/// detected — typically `dbus-implementation` (dbus → dbus-broker),
+/// `init` (sysvinit → systemd), or sound stack swaps. The build is
+/// already a success at this point: the new derivation is on disk,
+/// addressable as a generation, and the bootloader can pick it up.
+/// The error is purely about live switching being unsafe.
+///
+/// We extract the actual change (`<name> : <old> -> <new>`) when
+/// present so the user sees exactly which critical bit moved, plus
+/// the canonical "use `nh os boot` + reboot" recovery path.
+fn parse_switch_inhibitor(lines: &[&str], idx: usize) -> Option<ParsedError> {
+    // Scan a wider window — the detected-change line is typically
+    // 3–8 lines before the `Pre-switch check ... failed` summary.
+    let start = idx.saturating_sub(20);
+    let end = (idx + 5).min(lines.len());
+    let change = lines[start..end].iter().find_map(|l| {
+        let clean = strip_ansi(l);
+        let trimmed = clean.trim();
+        // Activation prints lines like `dbus-implementation : dbus -> broker`.
+        // The double `:` + ` -> ` separator is distinctive enough to
+        // avoid grabbing arbitrary log output.
+        if trimmed.contains(" : ") && trimmed.contains(" -> ") {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    });
+
+    let what = change
+        .clone()
+        .unwrap_or_else(|| "critical component change".to_string());
+    let mut message = String::from(
+        "The build succeeded — the new generation is on disk and rollback-able \
+         from grub — but nixos-rebuild refused the live switch because a \
+         critical system component is changing. Live-switching it would \
+         likely break running services (dbus crashes, audio loss, …).",
+    );
+    if let Some(ch) = &change {
+        message.push_str(&format!("\n      Detected: {}", ch));
+    }
+
+    Some(ParsedError {
+        what,
+        category: "Pre-switch check",
+        message,
+        hint: Some(
+            "Stage the new generation for next boot, then reboot:\n      \
+             sudo nh os boot ~/nixos-config\n      \
+             sudo reboot\n      \
+             Your previous generation stays bootable as a rollback target."
+                .to_string(),
+        ),
     })
 }
 

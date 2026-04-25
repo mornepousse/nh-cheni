@@ -45,6 +45,33 @@ pub struct Finding {
 /// every match found, in the order they appear here.
 pub const KNOWN_FINDINGS: &[Finding] = &[
     Finding {
+        matcher: "Pre-switch check",
+        title: "live switch refused (critical component change)",
+        explanation: "The build succeeded but nixos-rebuild's activation pre-flight \
+                      refused to switch the running system because a critical \
+                      component is moving (dbus → dbus-broker, sysvinit → systemd, \
+                      pulseaudio → pipewire, …). Live-switching such a change can \
+                      crash dbus and take half the desktop with it. The new \
+                      generation is on disk and bootable; only the live activation \
+                      was blocked.",
+        action: "Stage the new generation for next boot, then reboot: \
+                 `sudo nh os boot ~/nixos-config && sudo reboot`. \
+                 The previous generation stays bootable as a rollback target. \
+                 Setting NIXOS_NO_CHECK=1 forces the switch but is strongly \
+                 discouraged for these specific changes.",
+    },
+    Finding {
+        matcher: "Switching into this system is not recommended",
+        title: "live switch not recommended",
+        explanation: "Same root cause as `Pre-switch check ... failed` — \
+                      nixos-rebuild prints this human-readable line alongside \
+                      the structured pre-flight failure when a critical \
+                      component is changing.",
+        action: "Run `sudo nh os boot ~/nixos-config` then `sudo reboot` to \
+                 pick up the new generation through a clean boot rather than \
+                 a runtime swap.",
+    },
+    Finding {
         matcher: "aes_generic",
         title: "kernel module `aes_generic` not found",
         explanation: "Linux 7.0 folded `aes_generic` into the main `aes` module. \
