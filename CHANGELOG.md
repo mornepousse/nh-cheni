@@ -7,6 +7,14 @@ semver.
 
 ## Unreleased
 
+### Added
+- **`cheni status` echoes the self-update hint** in its Suggestions
+  block when the cache (filled by `cheni check`) reports a newer
+  release. Sync read — status never hits the network on its own,
+  so the line only surfaces after a recent `cheni check`. Closes
+  the loop B from the previous release: now both "where am I"
+  surfaces (status + check) reflect the same answer.
+
 ### Changed
 - **Kernel + linux-firmware now surface as real packages** in
   `cheni upgrade` preview and `cheni check --pending`. The artefact

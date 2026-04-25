@@ -267,6 +267,19 @@ pub async fn latest_release_tag_cached() -> Result<String> {
     Ok(latest)
 }
 
+/// Read-only cache lookup. Returns `Some(latest_tag)` when the
+/// cached entry is still fresh (< 24h), `None` otherwise — no
+/// network call.
+///
+/// Used by sync callers (`cheni status`) that want to echo the same
+/// self-update hint as `cheni check` without paying the async cost.
+/// The cache is filled by [`latest_release_tag_cached`] (async),
+/// typically via `cheni check`, so the two surfaces stay in sync as
+/// long as the user runs `check` periodically.
+pub fn cached_latest_release_tag() -> Option<String> {
+    read_self_update_check_cache().map(|c| c.latest)
+}
+
 /// Resolve the self-update cache file path, or `None` when the user
 /// has no cache directory (rare — typically a misconfigured XDG env
 /// or a chroot without HOME).

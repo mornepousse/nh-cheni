@@ -177,6 +177,20 @@ fn print_suggestions(
         );
         any = true;
     }
+    // Self-update hint, pulled from the cache that `cheni check`
+    // refreshes asynchronously. Sync read — status never hits the
+    // network on its own, so the suggestion only surfaces after a
+    // recent `cheni check`. That's fine: status reflects state,
+    // check discovers it.
+    if let Some(latest) = self_update_hint(&nix_config.flake_dir) {
+        println!(
+            "    {} cheni {} available — run '{}' to update",
+            "→".cyan(),
+            latest.bold(),
+            "cheni self-update".bold()
+        );
+        any = true;
+    }
     if !any {
         println!(
             "    {} everything looks clean — run '{}' to scan for new updates",
@@ -184,6 +198,30 @@ fn print_suggestions(
             "cheni check".bold()
         );
     }
+}
+
+/// Echo `cheni check`'s self-update hint when it's relevant: the user
+/// pinned cheni at a release tag, the cache says a strictly newer tag
+/// is available, and the comparison parses cleanly. Returns `None` in
+/// every other case so the suggestions block stays quiet.
+fn self_update_hint(flake_dir: &Path) -> Option<String> {
+    let current_tag = super::self_update::read_cheni_tag(flake_dir).ok()?;
+    if !crate::release::is_release_tag(&current_tag) {
+        return None;
+    }
+    let latest = crate::release::cached_latest_release_tag()?;
+    if latest == current_tag {
+        return None;
+    }
+    let cur_v = crate::version::parse::parse_version(
+        current_tag.strip_prefix('v').unwrap_or(&current_tag),
+    );
+    let lat_v =
+        crate::version::parse::parse_version(latest.strip_prefix('v').unwrap_or(&latest));
+    if lat_v <= cur_v {
+        return None;
+    }
+    Some(latest)
 }
 
 /// Look up the currently active generation number + a human-readable age.
