@@ -6,7 +6,10 @@
 //! Also handles selective generation deletion via the `--prune`,
 //! `--delete`, `--keep`, and `--older-than` flags.
 
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use colored::Colorize;
@@ -43,6 +46,11 @@ pub(crate) struct Generation {
     pub(crate) number: u32,
     /// Date the generation was created (human readable).
     pub(crate) date: String,
+    /// Raw mtime of the generation symlink as Unix seconds, when
+    /// available. Used by the pin/freeze annotation to time-travel
+    /// `package-pins.json` and `package-freezes.json` via git log.
+    /// `None` only on exotic filesystems that don't expose mtime.
+    pub(crate) mtime_secs: Option<u64>,
     /// Whether this is the currently active generation.
     pub(crate) is_current: bool,
     /// Path to the generation in the store.
@@ -84,17 +92,198 @@ pub fn run(opts: HistoryOptions) -> Result<()> {
     // Show most recent first
     let displayed: Vec<&Generation> = generations.iter().rev().take(to_show).collect();
 
+    // Resolve the flake dir once and gate the pin/freeze annotation on
+    // it being a git repo. Failures here are silent — annotation is an
+    // optional layer, the rest of `cheni history` works regardless.
+    let pin_freeze_ctx = pin_freeze_annotation_dir();
+
     for (i, gen) in displayed.iter().enumerate() {
         print_generation_header(gen);
         if i + 1 < displayed.len() {
             let previous = displayed[i + 1];
             print_generation_diff(previous, gen, opts.diff, opts.full);
+            if let Some(flake_dir) = &pin_freeze_ctx {
+                print_pin_freeze_delta(previous, gen, flake_dir);
+            }
         }
     }
 
     println!();
     print_history_footer(total, to_show, opts.full);
     Ok(())
+}
+
+/// Return the flake directory to use for pin/freeze history annotation,
+/// or `None` if annotation should be skipped.
+///
+/// Skipped when:
+/// - no flake can be detected (cheni was run outside a NixOS config),
+/// - the flake dir isn't inside a git work tree (manual config without
+///   versioning — we have no ground truth for "state at time T").
+fn pin_freeze_annotation_dir() -> Option<PathBuf> {
+    let dir = crate::nix::config::detect().ok()?.flake_dir;
+    if !crate::nix::git::is_repo(&dir) {
+        debug!(
+            "skipping pin/freeze annotation: {} is not a git repo",
+            dir.display()
+        );
+        return None;
+    }
+    Some(dir)
+}
+
+/// Render the pin/freeze delta line under a generation, when there is
+/// any change since the previous generation.
+///
+/// Silent when:
+/// - either generation has no usable mtime,
+/// - the pin and freeze states are identical between the two timestamps.
+fn print_pin_freeze_delta(previous: &Generation, current: &Generation, flake_dir: &Path) {
+    let (Some(p_secs), Some(c_secs)) = (previous.mtime_secs, current.mtime_secs) else {
+        return;
+    };
+    let prev_at = UNIX_EPOCH + Duration::from_secs(p_secs);
+    let cur_at = UNIX_EPOCH + Duration::from_secs(c_secs);
+
+    let prev_pins = crate::nix::pins::read_at_time(flake_dir, prev_at);
+    let cur_pins = crate::nix::pins::read_at_time(flake_dir, cur_at);
+    let prev_freezes = crate::nix::freezes::read_at_time(flake_dir, prev_at);
+    let cur_freezes = crate::nix::freezes::read_at_time(flake_dir, cur_at);
+
+    let Some(delta) = compute_pin_freeze_delta(
+        &prev_pins,
+        &cur_pins,
+        &prev_freezes,
+        &cur_freezes,
+    ) else {
+        return;
+    };
+    println!("      {}", format_pin_freeze_delta(&delta).dimmed());
+}
+
+/// Symmetric difference of two pin/freeze states. `None` when the
+/// states are identical and there's nothing worth annotating.
+///
+/// Pure on the inputs so the formatting and the time-travel can be
+/// tested independently — this lets the unit tests construct states
+/// in memory without spinning up a fixture git repo.
+pub(crate) fn compute_pin_freeze_delta(
+    prev_pins: &[String],
+    cur_pins: &[String],
+    prev_freezes: &crate::nix::freezes::Freezes,
+    cur_freezes: &crate::nix::freezes::Freezes,
+) -> Option<PinFreezeDelta> {
+    let prev_set: BTreeSet<&str> = prev_pins.iter().map(String::as_str).collect();
+    let cur_set: BTreeSet<&str> = cur_pins.iter().map(String::as_str).collect();
+
+    let pins_added: Vec<String> = cur_set
+        .difference(&prev_set)
+        .map(|s| (*s).to_string())
+        .collect();
+    let pins_removed: Vec<String> = prev_set
+        .difference(&cur_set)
+        .map(|s| (*s).to_string())
+        .collect();
+
+    let mut freezes_added: Vec<(String, String)> = Vec::new();
+    let mut freezes_changed: Vec<(String, String, String)> = Vec::new();
+    let mut freezes_removed: Vec<String> = Vec::new();
+
+    for (name, entry) in cur_freezes {
+        match prev_freezes.get(name) {
+            None => freezes_added.push((name.clone(), entry.version.clone())),
+            Some(prev) if prev.rev != entry.rev || prev.version != entry.version => {
+                freezes_changed.push((name.clone(), prev.version.clone(), entry.version.clone()));
+            }
+            _ => {}
+        }
+    }
+    for name in prev_freezes.keys() {
+        if !cur_freezes.contains_key(name) {
+            freezes_removed.push(name.clone());
+        }
+    }
+
+    if pins_added.is_empty()
+        && pins_removed.is_empty()
+        && freezes_added.is_empty()
+        && freezes_changed.is_empty()
+        && freezes_removed.is_empty()
+    {
+        return None;
+    }
+    Some(PinFreezeDelta {
+        pins_added,
+        pins_removed,
+        freezes_added,
+        freezes_changed,
+        freezes_removed,
+    })
+}
+
+/// Tallied pin/freeze changes between two generations.
+///
+/// Frozen entries that bumped their `rev` while keeping the same name
+/// land in `freezes_changed` (e.g. a `--major N` follow-up upgrade);
+/// outright additions go to `freezes_added`.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct PinFreezeDelta {
+    pub pins_added: Vec<String>,
+    pub pins_removed: Vec<String>,
+    pub freezes_added: Vec<(String, String)>,
+    pub freezes_changed: Vec<(String, String, String)>,
+    pub freezes_removed: Vec<String>,
+}
+
+/// Format the delta as a one-line annotation. Style mirrors the diff
+/// summary line — same separators (`·`), same lower-case markers
+/// (`+pinned …` / `-frozen …`) so the two annotation lines align
+/// visually under each generation.
+pub(crate) fn format_pin_freeze_delta(d: &PinFreezeDelta) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if !d.pins_added.is_empty() {
+        parts.push(format!("+pinned {}", join_with_overflow_owned(&d.pins_added, 3)));
+    }
+    if !d.pins_removed.is_empty() {
+        parts.push(format!("-pinned {}", join_with_overflow_owned(&d.pins_removed, 3)));
+    }
+    if !d.freezes_added.is_empty() {
+        let names: Vec<String> = d
+            .freezes_added
+            .iter()
+            .map(|(n, v)| if v.is_empty() { n.clone() } else { format!("{}@{}", n, v) })
+            .collect();
+        parts.push(format!("+frozen {}", join_with_overflow_owned(&names, 3)));
+    }
+    if !d.freezes_changed.is_empty() {
+        let names: Vec<String> = d
+            .freezes_changed
+            .iter()
+            .map(|(n, ov, nv)| {
+                if ov.is_empty() && nv.is_empty() {
+                    n.clone()
+                } else {
+                    format!("{} {}→{}", n, ov, nv)
+                }
+            })
+            .collect();
+        parts.push(format!("~frozen {}", join_with_overflow_owned(&names, 3)));
+    }
+    if !d.freezes_removed.is_empty() {
+        parts.push(format!(
+            "-frozen {}",
+            join_with_overflow_owned(&d.freezes_removed, 3)
+        ));
+    }
+    parts.join(" · ")
+}
+
+/// Owned-string version of `join_with_overflow` used by the delta
+/// formatter (the diff-summary helpers below take `&[&str]` since they
+/// already have references on hand).
+fn join_with_overflow_owned(items: &[String], max: usize) -> String {
+    let refs: Vec<&str> = items.iter().map(String::as_str).collect();
+    join_with_overflow(&refs, max)
 }
 
 /// One-line header per generation: marker, label, date, short nixpkgs commit.
@@ -568,17 +757,20 @@ fn build_generation(
     let name = entry.file_name();
     let number = parse_generation_number(name.to_str()?)?;
     let metadata = entry.metadata().ok()?;
-    let date = metadata
+    let mtime_secs = metadata
         .modified()
         .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| format_unix_date(d.as_secs()))
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs());
+    let date = mtime_secs
+        .map(format_unix_date)
         .unwrap_or_else(|| "?".to_string());
     let store_path = entry.path().to_string_lossy().to_string();
     let nixos_label = read_nixos_label(&entry.path());
     Some(Generation {
         number,
         date,
+        mtime_secs,
         is_current: current_num == Some(number),
         store_path,
         nixos_label,
@@ -833,3 +1025,7 @@ mod diff_parser_tests;
 #[cfg(test)]
 #[path = "tests/history_specs.rs"]
 mod spec_parser_tests;
+
+#[cfg(test)]
+#[path = "tests/history_pin_delta.rs"]
+mod pin_delta_tests;

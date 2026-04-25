@@ -26,6 +26,7 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -158,6 +159,31 @@ pub fn remove(config_dir: &Path, names: &[String]) -> Result<Vec<String>> {
     }
     write(config_dir, &freezes)?;
     Ok(removed)
+}
+
+/// Read the freeze map as it was at-or-before `at`, using the git
+/// history of `package-freezes.json` inside `config_dir`.
+///
+/// Mirrors `pins::read_at_time` — non-fatal, returns an empty map on any
+/// failure mode (no git, file not tracked yet, schema drift). Same
+/// rationale: this powers an optional UI annotation that should silently
+/// degrade rather than break `cheni history`.
+pub fn read_at_time(config_dir: &Path, at: SystemTime) -> Freezes {
+    let Some(content) =
+        crate::nix::git::read_file_at_time(config_dir, "package-freezes.json", at)
+    else {
+        return BTreeMap::new();
+    };
+    if content.trim().is_empty() {
+        return BTreeMap::new();
+    }
+    serde_json::from_str::<Freezes>(&content).unwrap_or_else(|e| {
+        debug!(
+            "historical package-freezes.json @ {:?} unparseable: {}",
+            at, e
+        );
+        BTreeMap::new()
+    })
 }
 
 /// Remove every freeze. Returns how many were removed.

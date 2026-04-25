@@ -137,6 +137,52 @@ fn add_accepts_valid_special_chars() {
 }
 
 #[test]
+fn read_at_time_returns_committed_pins() {
+    // Wires the git-time-travel helper through to the pins parser.
+    // The shape coverage (no-repo, missing file, before-first-commit,
+    // multi-commit) lives in nix::git::tests; this test only locks the
+    // pins-specific JSON parsing on top of git output.
+    use std::process::Command;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    let dir = setup_temp_dir();
+    Command::new("git")
+        .arg("-C").arg(dir.path())
+        .args(["init", "-q", "-b", "main"])
+        .status().unwrap();
+    write(dir.path(), &["firefox".into(), "vivaldi".into()]).unwrap();
+    Command::new("git")
+        .arg("-C").arg(dir.path())
+        .args(["add", "package-pins.json"])
+        .status().unwrap();
+    Command::new("git")
+        .arg("-C").arg(dir.path())
+        .args([
+            "-c", "user.email=test@cheni",
+            "-c", "user.name=test",
+            "-c", "commit.gpgsign=false",
+            "commit", "-q", "--no-gpg-sign", "-m", "pin",
+        ])
+        .status().unwrap();
+
+    let now: SystemTime = SystemTime::now() + Duration::from_secs(60);
+    let _ = now.duration_since(UNIX_EPOCH).unwrap(); // anchor, fail loudly if clock is broken
+
+    let pins = read_at_time(dir.path(), now);
+    assert_eq!(pins, vec!["firefox".to_string(), "vivaldi".to_string()]);
+}
+
+#[test]
+fn read_at_time_returns_empty_outside_of_a_repo() {
+    // A user whose flake isn't versioned: the helper must degrade
+    // silently — `cheni history` falls back to no annotation.
+    use std::time::SystemTime;
+    let dir = setup_temp_dir();
+    write(dir.path(), &["firefox".into()]).unwrap();
+    let pins = read_at_time(dir.path(), SystemTime::now());
+    assert!(pins.is_empty());
+}
+
+#[test]
 fn corrupt_file_gives_actionable_error() {
     // Garbage-in-file produces an error whose message contains the
     // path and the reset command — not just a raw serde error.

@@ -118,6 +118,25 @@ pub fn format_ymd_hm(secs: u64) -> String {
     format!("{:04}-{:02}-{:02} {:02}:{:02}", y, m, d, hours, minutes)
 }
 
+/// Format a Unix timestamp as `YYYY-MM-DDTHH:MM:SSZ` (UTC, ISO 8601).
+///
+/// Tools like `git log --before=` accept this form unambiguously,
+/// whereas the human-readable variants are subject to git's approxidate
+/// guesswork (which can flip a date by a timezone hour at the wrong
+/// moment — and history annotation is too quiet a feature to debug
+/// that kind of off-by-one).
+pub fn format_iso_utc(secs: u64) -> String {
+    let (y, m, d) = ymd_from_epoch(secs);
+    let time_of_day = secs % 86400;
+    let hours = time_of_day / 3600;
+    let minutes = (time_of_day % 3600) / 60;
+    let seconds = time_of_day % 60;
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        y, m, d, hours, minutes, seconds
+    )
+}
+
 /// Convert `secs` since the Unix epoch to `(year, month, day)` in UTC.
 /// Pure arithmetic — Howard Hinnant's algorithm, no allocation.
 fn ymd_from_epoch(secs: u64) -> (i64, u32, u32) {

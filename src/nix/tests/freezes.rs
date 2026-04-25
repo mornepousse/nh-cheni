@@ -191,6 +191,49 @@ fn add_accepts_valid_special_chars_in_name() {
 }
 
 #[test]
+fn read_at_time_returns_committed_freezes() {
+    // Wires the git-time-travel helper through to the freezes parser.
+    // Generic git semantics live in nix::git::tests; this only locks
+    // the freezes-specific BTreeMap parsing.
+    use std::process::Command;
+    use std::time::{Duration, SystemTime};
+    let dir = setup_temp_dir();
+    Command::new("git")
+        .arg("-C").arg(dir.path())
+        .args(["init", "-q", "-b", "main"])
+        .status().unwrap();
+    add(dir.path(), "firefox", sample_entry()).unwrap();
+    Command::new("git")
+        .arg("-C").arg(dir.path())
+        .args(["add", "package-freezes.json"])
+        .status().unwrap();
+    Command::new("git")
+        .arg("-C").arg(dir.path())
+        .args([
+            "-c", "user.email=test@cheni",
+            "-c", "user.name=test",
+            "-c", "commit.gpgsign=false",
+            "commit", "-q", "--no-gpg-sign", "-m", "freeze",
+        ])
+        .status().unwrap();
+
+    let now: SystemTime = SystemTime::now() + Duration::from_secs(60);
+
+    let loaded = read_at_time(dir.path(), now);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded.get("firefox"), Some(&sample_entry()));
+}
+
+#[test]
+fn read_at_time_returns_empty_outside_of_a_repo() {
+    use std::time::SystemTime;
+    let dir = setup_temp_dir();
+    add(dir.path(), "firefox", sample_entry()).unwrap();
+    let loaded = read_at_time(dir.path(), SystemTime::now());
+    assert!(loaded.is_empty());
+}
+
+#[test]
 fn corrupt_file_gives_actionable_error() {
     let dir = setup_temp_dir();
     std::fs::write(

@@ -6,6 +6,7 @@ fn gen(number: u32, is_current: bool) -> Generation {
     Generation {
         number,
         date: format!("2026-04-{:02}", number.min(28)),
+        mtime_secs: None,
         is_current,
         store_path: format!("/nix/store/xxx-nixos-system-test-{}", number),
         nixos_label: Some(format!("test-label-{}", number)),

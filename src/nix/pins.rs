@@ -5,6 +5,7 @@
 //! instead of the regular `nixpkgs`.
 
 use std::path::Path;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use tracing::debug;
@@ -144,6 +145,29 @@ pub fn remove(config_dir: &Path, names: &[String]) -> Result<Vec<String>> {
 
     write(config_dir, &pins)?;
     Ok(removed)
+}
+
+/// Read the list of pinned packages as it was at-or-before `at`,
+/// using the git history of `package-pins.json` inside `config_dir`.
+///
+/// Non-fatal: returns `Vec::new()` when the file wasn't tracked yet,
+/// the directory isn't a git repo, or the historical content is
+/// unparseable. Used by `cheni history` to annotate each generation
+/// with the pin state at that moment, where "no signal" is a fine
+/// outcome (annotation simply doesn't render).
+pub fn read_at_time(config_dir: &Path, at: SystemTime) -> Vec<String> {
+    let Some(content) =
+        crate::nix::git::read_file_at_time(config_dir, "package-pins.json", at)
+    else {
+        return Vec::new();
+    };
+    if content.trim().is_empty() {
+        return Vec::new();
+    }
+    serde_json::from_str::<Vec<String>>(&content).unwrap_or_else(|e| {
+        debug!("historical package-pins.json @ {:?} unparseable: {}", at, e);
+        Vec::new()
+    })
 }
 
 /// Remove all pins.
