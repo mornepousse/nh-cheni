@@ -286,6 +286,49 @@ fn join_with_overflow_owned(items: &[String], max: usize) -> String {
     join_with_overflow(&refs, max)
 }
 
+/// Format only the *loss* projection of a delta — pins and freezes
+/// that existed in the "then" snapshot but no longer in "now".
+///
+/// Used by gen-deletion flows (`cheni history --prune/--delete/...`)
+/// to flag generations whose pin/freeze state is no longer reproducible
+/// from the current policy file. Returns `None` when nothing was lost
+/// so the caller can stay silent in the common case.
+///
+/// `freezes_changed` is included on purpose: when a frozen entry's `rev`
+/// has moved, the binary that was built under the *old* rev is unique
+/// to the deleted generation — the current freeze rev produces a
+/// different one.
+pub(crate) fn format_pin_freeze_loss(d: &PinFreezeDelta) -> Option<String> {
+    if d.pins_removed.is_empty()
+        && d.freezes_removed.is_empty()
+        && d.freezes_changed.is_empty()
+    {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if !d.pins_removed.is_empty() {
+        parts.push(format!(
+            "pinned {}",
+            join_with_overflow_owned(&d.pins_removed, 3)
+        ));
+    }
+    let mut frozen_names: Vec<String> = d.freezes_removed.clone();
+    for (name, ov, _) in &d.freezes_changed {
+        frozen_names.push(if ov.is_empty() {
+            name.clone()
+        } else {
+            format!("{}@{}", name, ov)
+        });
+    }
+    if !frozen_names.is_empty() {
+        parts.push(format!(
+            "frozen {}",
+            join_with_overflow_owned(&frozen_names, 3)
+        ));
+    }
+    Some(parts.join(", "))
+}
+
 /// One-line header per generation: marker, label, date, short nixpkgs commit.
 fn print_generation_header(gen: &Generation) {
     let marker = if gen.is_current {
@@ -412,7 +455,7 @@ fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
         println!("{}", "Nothing to delete.".dimmed());
         return Ok(());
     }
-    if !confirm_targets(&to_delete, opts.yes)? {
+    if !confirm_targets(&to_delete, generations, opts.yes)? {
         return Ok(());
     }
     apply_deletion(&to_delete)?;
@@ -468,9 +511,14 @@ fn collect_delete_targets(
     Ok(to_delete)
 }
 
-/// Print the list of targets and ask for confirmation. Returns `false`
+/// Print the list of targets, surface any pin/freeze policy loss the
+/// deletion would entail, then ask for confirmation. Returns `false`
 /// when the user aborts (or `true` immediately when `yes` is set).
-fn confirm_targets(to_delete: &[u32], yes: bool) -> Result<bool> {
+fn confirm_targets(
+    to_delete: &[u32],
+    generations: &[Generation],
+    yes: bool,
+) -> Result<bool> {
     println!(
         "Will delete {} generation(s):",
         to_delete.len().to_string().bold()
@@ -479,6 +527,10 @@ fn confirm_targets(to_delete: &[u32], yes: bool) -> Result<bool> {
         println!("  {} {}", "-".red(), n.to_string().bold());
     }
     println!();
+
+    if let Some(flake_dir) = pin_freeze_annotation_dir() {
+        print_policy_loss_warning(to_delete, generations, &flake_dir);
+    }
 
     if yes {
         return Ok(true);
@@ -492,6 +544,79 @@ fn confirm_targets(to_delete: &[u32], yes: bool) -> Result<bool> {
         println!("{}", "Aborted.".dimmed());
     }
     Ok(confirm)
+}
+
+/// Flag the generations being deleted whose pin/freeze state at build
+/// time is no longer in the current policy file.
+///
+/// Why this is worth surfacing: deleting such a generation drops the
+/// only artefact that holds those exact binaries. `pinned X` is the
+/// most painful case — pins route through `nixpkgs-latest`, so even
+/// a `git checkout` of the old pins.json wouldn't reproduce the
+/// version: nixpkgs-latest has moved on. `frozen X@vN` is partially
+/// recoverable (you'd need both the old freeze rev and the binary's
+/// build to be reproducible), but the warning still applies.
+///
+/// Silent in the common case (no policy drift across the deleted
+/// gens) so routine pruning isn't cluttered.
+fn print_policy_loss_warning(
+    to_delete: &[u32],
+    generations: &[Generation],
+    flake_dir: &Path,
+) {
+    let cur_pins = crate::nix::pins::read(flake_dir).unwrap_or_default();
+    let cur_freezes = crate::nix::freezes::read(flake_dir).unwrap_or_default();
+
+    let mut affected: Vec<(u32, String)> = Vec::new();
+    for n in to_delete {
+        let Some(gen) = generations.iter().find(|g| g.number == *n) else {
+            continue;
+        };
+        let Some(mt) = gen.mtime_secs else { continue };
+        let at = UNIX_EPOCH + Duration::from_secs(mt);
+        let then_pins = crate::nix::pins::read_at_time(flake_dir, at);
+        let then_freezes = crate::nix::freezes::read_at_time(flake_dir, at);
+        // Treat "then" as the older snapshot and "now" as the newer one
+        // — the delta's `*_removed` and `freezes_changed` buckets then
+        // contain exactly what's been lost since `then`.
+        let Some(delta) = compute_pin_freeze_delta(
+            &then_pins,
+            &cur_pins,
+            &then_freezes,
+            &cur_freezes,
+        ) else {
+            continue;
+        };
+        if let Some(loss) = format_pin_freeze_loss(&delta) {
+            affected.push((*n, loss));
+        }
+    }
+
+    if affected.is_empty() {
+        return;
+    }
+
+    println!(
+        "  {}",
+        format!(
+            "Heads-up: {} of these had pins/freezes no longer in your config:",
+            affected.len()
+        )
+        .yellow()
+    );
+    for (n, loss) in &affected {
+        println!(
+            "    gen {}  had {}",
+            n.to_string().bold(),
+            loss.dimmed()
+        );
+    }
+    println!(
+        "    {}",
+        "Once removed, those exact binaries are gone — current policy alone can't reproduce them."
+            .dimmed()
+    );
+    println!();
 }
 
 /// Shell out to `sudo nix-env --delete-generations N M …`.

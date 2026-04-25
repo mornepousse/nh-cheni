@@ -168,6 +168,103 @@ fn format_freeze_change_uses_arrow_between_versions() {
     assert_eq!(format_pin_freeze_delta(&d), "~frozen firefox 140.1→140.2");
 }
 
+// --- format_pin_freeze_loss (gen-deletion warning) ---
+
+#[test]
+fn loss_is_none_when_only_additions() {
+    // Pure additions don't qualify as a loss — the deleted gen had
+    // *less* policy than current, nothing unique is lost.
+    let d = PinFreezeDelta {
+        pins_added: vec!["vivaldi".into()],
+        pins_removed: vec![],
+        freezes_added: vec![("firefox".into(), "140.2".into())],
+        freezes_changed: vec![],
+        freezes_removed: vec![],
+    };
+    assert!(format_pin_freeze_loss(&d).is_none());
+}
+
+#[test]
+fn loss_captures_pin_drops() {
+    let d = PinFreezeDelta {
+        pins_added: vec![],
+        pins_removed: vec!["legcord".into()],
+        freezes_added: vec![],
+        freezes_changed: vec![],
+        freezes_removed: vec![],
+    };
+    assert_eq!(format_pin_freeze_loss(&d).as_deref(), Some("pinned legcord"));
+}
+
+#[test]
+fn loss_captures_freeze_drops_with_version() {
+    let d = PinFreezeDelta {
+        pins_added: vec![],
+        pins_removed: vec![],
+        freezes_added: vec![],
+        freezes_changed: vec![],
+        freezes_removed: vec!["firefox".into()],
+    };
+    assert_eq!(format_pin_freeze_loss(&d).as_deref(), Some("frozen firefox"));
+}
+
+#[test]
+fn loss_treats_changed_freezes_as_loss_with_old_version() {
+    // The binary built with the old rev is unique to the deleted gen
+    // — current's rev produces a different one. The user must see it.
+    let d = PinFreezeDelta {
+        pins_added: vec![],
+        pins_removed: vec![],
+        freezes_added: vec![],
+        freezes_changed: vec![(
+            "firefox".to_string(),
+            "140.1".to_string(),
+            "140.2".to_string(),
+        )],
+        freezes_removed: vec![],
+    };
+    assert_eq!(
+        format_pin_freeze_loss(&d).as_deref(),
+        Some("frozen firefox@140.1")
+    );
+}
+
+#[test]
+fn loss_combines_pin_drops_and_freeze_drops_with_comma() {
+    let d = PinFreezeDelta {
+        pins_added: vec![],
+        pins_removed: vec!["legcord".into()],
+        freezes_added: vec![],
+        freezes_changed: vec![],
+        freezes_removed: vec!["firefox".into()],
+    };
+    assert_eq!(
+        format_pin_freeze_loss(&d).as_deref(),
+        Some("pinned legcord, frozen firefox")
+    );
+}
+
+#[test]
+fn loss_merges_changed_and_removed_freezes_into_one_section() {
+    // Both kinds of freeze loss share the "frozen …" header — running
+    // them through `join_with_overflow` keeps the line compact.
+    let d = PinFreezeDelta {
+        pins_added: vec![],
+        pins_removed: vec![],
+        freezes_added: vec![],
+        freezes_changed: vec![(
+            "firefox".to_string(),
+            "140.1".to_string(),
+            "140.2".to_string(),
+        )],
+        freezes_removed: vec!["mesa".into()],
+    };
+    assert_eq!(
+        format_pin_freeze_loss(&d).as_deref(),
+        Some("frozen mesa, firefox@140.1")
+    );
+}
+
 #[test]
 fn format_freeze_added_without_version_drops_the_at_suffix() {
     // Older freezes written by a pre-version-tracking cheni have an
