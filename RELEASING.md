@@ -7,15 +7,31 @@ the displayed version never depends on how the source was obtained.
 
 ## Cutting a release
 
-1. Update `VERSION` to the new string, e.g. `v0.2.0`.
-2. Update `Cargo.toml`'s `version = "..."` to match (strip the leading
+1. **Pre-release quality gate** — all four must pass on a clean tree:
+   ```sh
+   cargo build
+   cargo clippy --all-targets
+   cargo test
+   nix flake check
+   ```
+   The first three catch Rust-level regressions on the host shell.
+   `nix flake check` runs the same `cargo test` *inside the Nix
+   sandbox*, where PATH is empty by default — that's the only way
+   to catch tests that quietly rely on host tools (git, nvd, …)
+   not being declared as `nativeCheckInputs` in `flake.nix`. See
+   the v0.5.1 → v0.5.2 cycle: 7 tests passed locally and broke the
+   sandbox build because git was missing from the check phase. A
+   `nix flake check` before tagging would have flagged it before
+   the tarball reached the world.
+2. Update `VERSION` to the new string, e.g. `v0.2.0`.
+3. Update `Cargo.toml`'s `version = "..."` to match (strip the leading
    `v` — Cargo demands a bare SemVer literal). `cargo check` will
    update `Cargo.lock`.
-3. Commit: `git commit -am "release: v0.2.0"`.
-4. Tag: `git tag v0.2.0`.
-5. Push both: `git push && git push --tags`.
-6. Sign the auto-archive tarball with minisign (below).
-7. Create the GitLab release object and attach the signature.
+4. Commit: `git commit -am "release: v0.2.0"`.
+5. Tag: `git tag v0.2.0`.
+6. Push both: `git push && git push --tags`.
+7. Sign the auto-archive tarball with minisign (below).
+8. Create the GitLab release object and attach the signature.
 
 At that exact commit, `git describe --tags` returns `v0.2.0` verbatim,
 matching what `VERSION` contains and what `pkgs.lib.fileContents

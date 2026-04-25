@@ -130,7 +130,61 @@ pub async fn run(
     if pending && !json {
         append_pending_section(&nix_config)?;
     }
+
+    // Best-effort self-update hint at the very tail. Cached for 24h
+    // so the GitLab API isn't hit on every check. Silent on failure
+    // — `cheni check` must keep working offline / under rate limit.
+    if !json {
+        maybe_print_self_update_hint(&nix_config.flake_dir).await;
+    }
     Ok(())
+}
+
+/// When the user pinned cheni at a release tag and a newer tag is
+/// available on GitLab, print a one-line invitation to run
+/// `cheni self-update`. Skipped silently for branch-tracking pins
+/// (those bump on plain `nix flake update`), unparseable lock
+/// files, and any GitLab API trouble — this is decoration, not a
+/// gate.
+async fn maybe_print_self_update_hint(flake_dir: &std::path::Path) {
+    let current_tag = match super::self_update::read_cheni_tag(flake_dir) {
+        Ok(t) => t,
+        Err(e) => {
+            debug!("self-update hint skipped: {}", e);
+            return;
+        }
+    };
+    if !crate::release::is_release_tag(&current_tag) {
+        return;
+    }
+    let latest = match crate::release::latest_release_tag_cached().await {
+        Ok(t) => t,
+        Err(e) => {
+            debug!("self-update hint skipped: {}", e);
+            return;
+        }
+    };
+    if latest == current_tag {
+        return;
+    }
+    // Anti-downgrade: a transient API quirk shouldn't make us
+    // recommend going backwards.
+    let cur_v = crate::version::parse::parse_version(
+        current_tag.strip_prefix('v').unwrap_or(&current_tag),
+    );
+    let lat_v =
+        crate::version::parse::parse_version(latest.strip_prefix('v').unwrap_or(&latest));
+    if lat_v <= cur_v {
+        return;
+    }
+    println!();
+    println!(
+        "  {} cheni {} available (you're on {}) — run '{}' to update.",
+        "→".cyan(),
+        latest.bold(),
+        current_tag.dimmed(),
+        "cheni self-update".bold()
+    );
 }
 
 /// Print the "Pending closure changes" section under a regular

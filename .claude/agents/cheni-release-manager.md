@@ -68,10 +68,21 @@ lockstep because Cargo demands a strict SemVer literal.
    cargo build
    cargo clippy --all-targets
    cargo test
+   nix flake check
    ```
    If any of these fail, **stop immediately**. Report the failure to
    the user verbatim. Do not try to "fix" it as part of the release.
    Releases ship green code.
+
+   **`nix flake check` is non-skippable** even though it's slower
+   than the others (rebuilds the crate in the sandbox). It runs
+   `cargo test` with PATH=empty in a clean sandbox — that's the only
+   way to catch tests that quietly rely on host-shell tools (git,
+   nvd, …) not being declared as `nativeCheckInputs` in `flake.nix`.
+   This caught us once: v0.5.1 shipped with 7 git-using tests that
+   passed locally but broke `nh os switch` in user setups, requiring
+   a hot v0.5.2 fix one hour later. The gate exists specifically to
+   prevent that recurrence.
 
 4. **Check the tag doesn't already exist.**
    `git tag --list vX.Y.Z` should return empty. If it exists, stop and

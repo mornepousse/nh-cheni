@@ -8,6 +8,13 @@ semver.
 ## Unreleased
 
 ### Added
+- **`cheni check` surfaces a self-update hint** when the user pinned
+  cheni at a release tag (`gitlab:harrael/cheni/vX.Y.Z`) and a newer
+  release shipped on GitLab. One-line invitation to run
+  `cheni self-update`, printed at the very tail of the report.
+  Cached for 24h in `~/.cache/cheni/self-update-check.json` so the
+  GitLab tags API isn't hit on every `cheni check`. Silent on cache
+  miss + offline / rate-limited.
 - **`cheni upgrade --boot`** stages the new generation for next
   boot via `nh os boot` instead of live-switching via `nh os
   switch`. Required when a critical component is changing
@@ -24,6 +31,14 @@ semver.
   this rebuild — saving the user the post-failure debug cycle
   of "switch refused → reboot does nothing → manual `nh os
   boot` → reboot again".
+
+### Documentation
+- **Release gate now requires `nix flake check`**. RELEASING.md
+  promotes the build/clippy/test trio to a quartet that includes
+  the sandboxed flake check, and `cheni-release-manager.md` makes
+  it non-skippable. The v0.5.1 → v0.5.2 cycle hit a regression
+  exactly because git wasn't in the sandbox PATH and the local gate
+  didn't catch it; the stricter gate prevents the recurrence.
 
 ## [0.5.2] — 2026-04-25
 

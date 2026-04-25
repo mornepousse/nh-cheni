@@ -370,7 +370,11 @@ fn run_nh_switch(config_path: &str) -> Result<()> {
 
 /// Parse the user's `flake.lock` and return the `ref` (tag) pinned for
 /// the `cheni` input.
-fn read_cheni_tag(flake_dir: &Path) -> Result<String> {
+///
+/// Crate-visible so `cmd::check`'s self-update hint can compare the
+/// installed tag against the latest release without re-implementing
+/// the lock parser.
+pub(crate) fn read_cheni_tag(flake_dir: &Path) -> Result<String> {
     let lock_path = flake_dir.join("flake.lock");
     let content = std::fs::read_to_string(&lock_path)
         .with_context(|| format!("reading {}", lock_path.display()))?;

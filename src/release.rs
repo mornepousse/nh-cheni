@@ -234,6 +234,87 @@ pub async fn latest_release_tag() -> Result<String> {
     pick_latest_tag(&body)
 }
 
+/// File name used inside `~/.cache/cheni/` for the self-update tag check.
+const SELF_UPDATE_CHECK_CACHE_FILE: &str = "self-update-check.json";
+
+/// Cache TTL for the self-update tag check (24h). The check is a
+/// passive UX hint — checking GitLab once a day is plenty, hammering
+/// the API on every `cheni check` would just be rude.
+const SELF_UPDATE_CHECK_TTL_SECS: u64 = 86_400;
+
+/// On-disk shape of the self-update tag cache.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CachedSelfUpdateCheck {
+    latest: String,
+    fetched_at: u64,
+}
+
+/// Cached wrapper around [`latest_release_tag`]. Returns the cached
+/// answer when fresh (under 24h), otherwise hits GitLab and refreshes
+/// the cache. Failures to read/write the cache file are silently
+/// ignored — the call still works, just without persistence.
+///
+/// Intended for the "is a newer cheni shipped?" hint in `cheni check`,
+/// not for the self-update flow itself: that one needs the live answer
+/// at decision time and uses [`latest_release_tag`] directly.
+pub async fn latest_release_tag_cached() -> Result<String> {
+    if let Some(cached) = read_self_update_check_cache() {
+        debug!("self-update check: cache hit ({})", cached.latest);
+        return Ok(cached.latest);
+    }
+    let latest = latest_release_tag().await?;
+    write_self_update_check_cache(&latest);
+    Ok(latest)
+}
+
+/// Resolve the self-update cache file path, or `None` when the user
+/// has no cache directory (rare — typically a misconfigured XDG env
+/// or a chroot without HOME).
+fn self_update_check_cache_path() -> Option<std::path::PathBuf> {
+    dirs::cache_dir().map(|d| d.join("cheni").join(SELF_UPDATE_CHECK_CACHE_FILE))
+}
+
+/// Read the cache and return `Some` only when the entry is still fresh.
+/// Stale, missing, or unparseable entries return `None` — caller falls
+/// back to the live API.
+fn read_self_update_check_cache() -> Option<CachedSelfUpdateCheck> {
+    let path = self_update_check_cache_path()?;
+    let content = std::fs::read_to_string(&path).ok()?;
+    let entry: CachedSelfUpdateCheck = serde_json::from_str(&content).ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    if now > entry.fetched_at.saturating_add(SELF_UPDATE_CHECK_TTL_SECS) {
+        debug!("self-update check: cache expired");
+        return None;
+    }
+    Some(entry)
+}
+
+/// Persist a fresh self-update tag answer. Atomic write via
+/// `util::atomic_write` so a concurrent reader never sees a half-file.
+/// Best-effort: directory-creation and write failures are swallowed.
+fn write_self_update_check_cache(latest: &str) {
+    let Some(path) = self_update_check_cache_path() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let entry = CachedSelfUpdateCheck {
+        latest: latest.to_string(),
+        fetched_at: now,
+    };
+    if let Ok(json) = serde_json::to_string(&entry) {
+        let _ = crate::util::atomic_write(&path, &json);
+    }
+}
+
 /// Pure half of `latest_release_tag` — pick the highest release tag
 /// from a JSON tag-list payload. Extracted so the version-picking
 /// logic is tested with hand-rolled fixtures rather than a live API.
