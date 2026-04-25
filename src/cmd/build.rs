@@ -3,6 +3,7 @@
 //! Wraps `nh os switch` and parses Nix build errors into
 //! human-readable messages with hints for fixing them.
 
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
@@ -10,7 +11,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use tracing::debug;
 
-use crate::nix::config;
+use crate::nix::{config, freezes, pins};
 
 /// A parsed build error with a human-readable explanation.
 #[derive(Debug)]
@@ -38,6 +39,12 @@ pub fn run() -> Result<()> {
         .context("Config path is not valid UTF-8")?;
 
     println!("{}\n", "=== cheni build ===".bold());
+
+    // Pre-flight: surface any active pin/freeze policy so the user knows
+    // *what* is about to be applied before the rebuild kicks off. Silent
+    // when there's nothing in either file — common case stays unchanged.
+    print_active_policy(&nix_config.flake_dir);
+
     println!("{}", "Building...".dimmed());
 
     let (status, captured_stderr) = run_nh_capturing_stderr(config_path)?;
@@ -67,6 +74,74 @@ pub fn run() -> Result<()> {
 
     print_parsed_errors(&errors, started.elapsed());
     Ok(())
+}
+
+/// Render the active pin/freeze block before the rebuild, when either
+/// list is non-empty. Names are listed up to a small cap with "(+N more)"
+/// for longer lists — so a user with a single pin sees it without
+/// scrolling, and a user with 50 pins doesn't drown the build header.
+///
+/// Reads are non-fatal: a corrupt pins.json shouldn't block a build.
+/// We log at DEBUG and skip the section if either read fails.
+fn print_active_policy(flake_dir: &Path) {
+    let pins_list = match pins::read(flake_dir) {
+        Ok(v) => v,
+        Err(e) => {
+            debug!("skipping pre-flight: pins read failed: {}", e);
+            return;
+        }
+    };
+    let freezes_map = match freezes::read(flake_dir) {
+        Ok(m) => m,
+        Err(e) => {
+            debug!("skipping pre-flight: freezes read failed: {}", e);
+            return;
+        }
+    };
+
+    if pins_list.is_empty() && freezes_map.is_empty() {
+        return;
+    }
+
+    println!("  {}", "Active policy:".bold());
+    if !pins_list.is_empty() {
+        println!(
+            "    {} ({}): {}",
+            "pinned".cyan(),
+            pins_list.len(),
+            cap_names(&pins_list, 5).dimmed(),
+        );
+    }
+    if !freezes_map.is_empty() {
+        let frozen: Vec<String> = freezes_map
+            .iter()
+            .map(|(name, entry)| {
+                if entry.version.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}@{}", name, entry.version)
+                }
+            })
+            .collect();
+        println!(
+            "    {} ({}): {}",
+            "frozen".cyan(),
+            frozen.len(),
+            cap_names(&frozen, 5).dimmed(),
+        );
+    }
+    println!();
+}
+
+/// Join `items` with ", ", showing only the first `cap` and appending
+/// "(+N more)" when truncated. Matches the convention used by the
+/// `cheni history` annotation so the visual style stays consistent.
+fn cap_names(items: &[String], cap: usize) -> String {
+    if items.len() <= cap {
+        return items.join(", ");
+    }
+    let head: Vec<&str> = items[..cap].iter().map(String::as_str).collect();
+    format!("{} (+{} more)", head.join(", "), items.len() - cap)
 }
 
 /// Format `Duration` as `MmSs` or `Ss`. Matches the helper used by

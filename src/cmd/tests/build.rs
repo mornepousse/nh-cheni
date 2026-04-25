@@ -204,3 +204,33 @@ fn test_no_errors() {
     let errors = parse_errors("everything is fine");
     assert!(errors.is_empty());
 }
+
+// --- cap_names (active policy formatter) ---
+
+fn names(items: &[&str]) -> Vec<String> {
+    items.iter().map(|s| (*s).to_string()).collect()
+}
+
+#[test]
+fn cap_names_returns_full_list_when_under_cap() {
+    let v = names(&["a", "b", "c"]);
+    assert_eq!(cap_names(&v, 5), "a, b, c");
+}
+
+#[test]
+fn cap_names_returns_full_list_at_exactly_cap() {
+    let v = names(&["a", "b", "c", "d", "e"]);
+    assert_eq!(cap_names(&v, 5), "a, b, c, d, e");
+}
+
+#[test]
+fn cap_names_truncates_with_overflow_marker_past_cap() {
+    let v = names(&["a", "b", "c", "d", "e", "f", "g"]);
+    assert_eq!(cap_names(&v, 3), "a, b, c (+4 more)");
+}
+
+#[test]
+fn cap_names_handles_empty_slice() {
+    let v: Vec<String> = Vec::new();
+    assert_eq!(cap_names(&v, 5), "");
+}
