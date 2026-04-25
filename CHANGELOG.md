@@ -7,6 +7,16 @@ semver.
 
 ## Unreleased
 
+### Added
+- **`cheni check --pending`**: appends a closure dry-run section to
+  the regular Repology view, listing what would actually rebuild at
+  the next `cheni upgrade` or `cheni build`. Surfaces kernel + base
+  nixpkgs packages + transitive deps that the upstream-named
+  Repology scan can't see by construction. The two views are
+  intentionally separate — `check` answers "is upstream ahead of
+  what nixpkgs ships?", `--pending` answers "what would my next
+  rebuild change?" — and combining them costs ~30s of evaluation.
+
 ## [0.5.0] — 2026-04-25
 
 Breaking refactor: `cheni update` is removed. The "apply pins"

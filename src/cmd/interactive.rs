@@ -32,7 +32,6 @@ enum Action {
     Upgrade,
     UpgradePinsOnly,
     Build,
-    Preview,
     History,
     Rollback,
     Diff,
@@ -145,11 +144,6 @@ fn build_menu() -> Vec<MenuEntry> {
             action: Action::Build,
         },
         MenuEntry {
-            label: "Preview",
-            hint: "what would change at next rebuild (read-only)",
-            action: Action::Preview,
-        },
-        MenuEntry {
             label: "History",
             hint: "list recent generations with diffs",
             action: Action::History,
@@ -216,14 +210,13 @@ fn build_menu() -> Vec<MenuEntry> {
 async fn dispatch(action: Action) -> Result<()> {
     let theme = ColorfulTheme::default();
     match action {
-        Action::Check => super::check::run(None, false, false, false).await?,
+        Action::Check => super::check::run(None, false, false, false, false).await?,
         Action::Upgrade => super::upgrade::run(default_upgrade_options(false))?,
         Action::UpgradePinsOnly => super::upgrade::run(default_upgrade_options(true))?,
         Action::PinPackage => dispatch_pin_package(&theme).await?,
         Action::PinFlakes => super::pin::pin_flake_inputs().await?,
         Action::Unpin => dispatch_unpin(&theme)?,
         Action::Build => super::build::run()?,
-        Action::Preview => super::preview::run()?,
         Action::History => super::history::run(default_history_options(false))?,
         Action::Prune => super::history::run(default_history_options(true))?,
         Action::Rollback => dispatch_rollback(&theme)?,

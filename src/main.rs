@@ -36,13 +36,12 @@ Common workflows:\n  \
   cheni freeze nvidia-x11      Hold a package at its CURRENT version (inverse of pin)\n  \
   cheni unfreeze nvidia-x11    Release a frozen package\n  \
   cheni build                  Just rebuild the current flake state — no fetch\n  \
-  cheni preview                What would the next rebuild change? (read-only)\n  \
+  cheni check --pending        Repology view + closure dry-run (kernel + base included)\n  \
   cheni upgrade                Full upgrade: refresh ALL inputs, preview, rebuild\n  \
   cheni upgrade --pins-only    Apply pins: refresh nixpkgs-latest only, rebuild\n\
 \n\
-Build vs preview vs upgrade — the short version:\n  \
+Build vs upgrade — the short version:\n  \
   build                  =  rebuild with whatever's already in flake.lock\n  \
-  preview                =  read-only report on what a rebuild would change (incl. kernel + base)\n  \
   upgrade --pins-only    =  refresh nixpkgs-latest only, then rebuild  (applies pending pins)\n  \
   upgrade                =  refresh every flake input, preview, then rebuild\n\
 \n\
@@ -111,6 +110,12 @@ enum Commands {
         /// Ignore the on-disk Repology cache and re-fetch every lookup
         #[arg(long)]
         refresh: bool,
+
+        /// Append a closure dry-run section: what derivations would
+        /// change at the next rebuild (kernel + base system included,
+        /// not just module-named packages). Adds 30–60s of evaluation.
+        #[arg(long)]
+        pending: bool,
     },
 
     /// Pin a package (or list active pins when called with no arguments)
@@ -196,10 +201,6 @@ enum Commands {
     /// Rebuild the current flake state, no input refresh
     #[command(alias = "b")]
     Build,
-
-    /// Read-only preview of what `cheni upgrade` would change (kernel + base system included)
-    #[command(alias = "pv")]
-    Preview,
 
     /// Remove obsolete pins whose nixpkgs version has caught up
     Clean,
@@ -419,8 +420,8 @@ async fn resolve_command(cmd: Option<Commands>) -> Result<Option<Commands>> {
 /// for everything cheni can do.
 async fn dispatch(command: Commands) -> Result<()> {
     match command {
-        Commands::Check { category, details, json, refresh } => {
-            cmd::check::run(category.as_deref(), details, json, refresh).await
+        Commands::Check { category, details, json, refresh, pending } => {
+            cmd::check::run(category.as_deref(), details, json, refresh, pending).await
         }
         Commands::Pin { package, category, flakes, force } => {
             dispatch_pin(package, category, flakes, force).await
@@ -437,7 +438,6 @@ async fn dispatch(command: Commands) -> Result<()> {
             })
         }
         Commands::Build => cmd::build::run(),
-        Commands::Preview => cmd::preview::run(),
         Commands::Doctor => cmd::doctor::run(),
         Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned).await,
         Commands::Verify { tag } => cmd::verify::run(cmd::verify::VerifyOptions { tag }).await,

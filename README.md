@@ -79,8 +79,19 @@ keys; cheni prompts for any extra input it needs.
 | `cheni check -c dev`        | Filter to packages declared in `modules/dev/`          |
 | `cheni check --details`     | Expand the "Newer" and "Unknown" buckets               |
 | `cheni check --refresh`     | Ignore the on-disk cache, re-fetch every lookup        |
+| `cheni check --pending`     | Append a closure dry-run section (kernel + base, ~30s) |
 | `cheni check --json`        | Machine-readable output for scripts / CI               |
 | `cheni status`              | Config, active gen, flake input ages, suggestions      |
+
+> **`check` vs `check --pending`.** Plain `cheni check` looks
+> *upstream*: it scans your modules for named packages and asks
+> Repology whether the current nixpkgs version is the latest one.
+> `--pending` adds a second pass that looks *downstream*: a
+> `nix build --dry-run` against your current `flake.lock` to list
+> what would actually rebuild — kernel, base nixpkgs packages and
+> transitive dependencies included, none of which appear in the
+> Repology view because they aren't directly named in your modules.
+> The two views answer different questions and complement each other.
 
 ### Pinning (route to a newer version via `nixpkgs-latest`)
 

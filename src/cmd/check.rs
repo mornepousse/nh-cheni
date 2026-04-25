@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use colored::Colorize;
 use tracing::debug;
 
@@ -70,7 +70,13 @@ struct JsonSummary {
 /// Run the `cheni check` command.
 ///
 /// If `category` is Some, only show packages from that module directory.
-pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: bool) -> Result<()> {
+pub async fn run(
+    category: Option<&str>,
+    details: bool,
+    json: bool,
+    refresh: bool,
+    pending: bool,
+) -> Result<()> {
     apply_early_flags(json, refresh);
 
     let nix_config = config::detect()?;
@@ -112,6 +118,49 @@ pub async fn run(category: Option<&str>, details: bool, json: bool, refresh: boo
     } else {
         print_human(&classification, &visible_flake_inputs, &frozen_rows, category, details);
     }
+
+    // Optional second pass: closure-level dry-run, surfaces what
+    // would actually rebuild — kernel, base system, transitive deps.
+    // Distinct view from the Repology section above (which only
+    // sees module-named packages with Repology coverage). Skipped
+    // by default because it adds 30–60s of evaluation; --json
+    // ignores it because the section isn't represented in the
+    // schema yet (machine consumers usually want the structured
+    // Repology view alone).
+    if pending && !json {
+        append_pending_section(&nix_config)?;
+    }
+    Ok(())
+}
+
+/// Print the "Pending closure changes" section under a regular
+/// `cheni check` run. Re-uses the dry-run + render pipeline from
+/// `cheni upgrade` step 2 so the format stays in sync, and prefixes
+/// the `flake.lock` dirty warning when relevant — same caveats as
+/// in upgrade, since both are reading the same lock file state.
+fn append_pending_section(nix_config: &config::NixConfig) -> Result<()> {
+    println!();
+    println!(
+        "{}",
+        "─── Pending closure changes (dry-run) ──────────────".bold()
+    );
+    println!(
+        "{}",
+        "What would change at the next `cheni upgrade` or `cheni build` —"
+            .dimmed()
+    );
+    println!(
+        "{}",
+        "kernel, base nixpkgs packages, transitive deps included.".dimmed()
+    );
+    println!();
+
+    super::upgrade::warn_if_dirty_lock(&nix_config.flake_dir);
+    let config_path = nix_config
+        .flake_dir
+        .to_str()
+        .context("Config path is not valid UTF-8")?;
+    super::upgrade::print_pending_changes(config_path, &nix_config.hostname)?;
     Ok(())
 }
 
