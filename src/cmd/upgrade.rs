@@ -904,7 +904,32 @@ fn is_system_artefact(c: &PackageChange) -> bool {
         let has_trailing_digit = c.new.chars().last().is_some_and(|ch| ch.is_ascii_digit());
         return !has_trailing_digit;
     }
+    // Kernel-artefact discriminant — the kernel's modules / shrunk /
+    // module-shrunk variants split into the same name as the kernel
+    // itself ("linux-zen" / "linux-libre" / "linux-hardened" / …),
+    // and only the version field carries the suffix that distinguishes
+    // them. Without this check we'd either bucket the bare kernel as
+    // artefact (when `linux-` was a blanket PREFIX) or surface every
+    // kernel-modules churn as a "real package change".
+    if has_kernel_artefact_version_suffix(&c.new) {
+        return true;
+    }
     is_system_artefact_name(&c.name)
+}
+
+/// True for version strings that carry a kernel build-artefact
+/// suffix (`6.19.12-modules`, `6.19.12-shrunk`,
+/// `6.19.12-modules-shrunk`, …). Lets the bare kernel
+/// (`linux-zen-6.19.12` → name="linux-zen", new="6.19.12") show up
+/// as a real package while its modules/shrunk siblings stay collapsed
+/// in the artefacts tally. Pure for testability.
+fn has_kernel_artefact_version_suffix(version: &str) -> bool {
+    const KERNEL_ARTEFACT_SUFFIXES: &[&str] = &[
+        "-modules",
+        "-modules-shrunk",
+        "-shrunk",
+    ];
+    KERNEL_ARTEFACT_SUFFIXES.iter().any(|s| version.ends_with(s))
 }
 
 /// Pure half of `is_system_artefact`: name-based classification.
@@ -919,7 +944,13 @@ fn is_system_artefact_name(name: &str) -> bool {
         "system-path",
         "closure-info",
         "initrd-linux-",
-        "linux-",  // linux-<ver>-modules / -shrunk / …
+        // NB: `linux-` is intentionally absent. It used to be here
+        // as a blanket "modules / shrunk / …" catch, which also
+        // swallowed the bare kernel itself (`linux-zen-6.19.12`),
+        // `linux-firmware`, `linux-pam`, etc. The kernel-artefact
+        // distinction now happens via `has_kernel_artefact_version_suffix`
+        // on the version segment, where the `-modules`/`-shrunk`
+        // markers actually live after `split_name_version`.
         "user-environment",
     ];
     const EXACTS: &[&str] = &[

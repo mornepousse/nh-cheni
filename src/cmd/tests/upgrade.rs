@@ -122,6 +122,12 @@ fn system_artefact_exacts_are_collapsed() {
 
 #[test]
 fn system_artefact_prefixes_match_home_manager_and_nixos() {
+    // NB: kernel-modules / -shrunk classification is no longer driven
+    // by `is_system_artefact_name` — it lives in
+    // `has_kernel_artefact_version_suffix` because after
+    // `split_name_version` the modules marker ends up in the version
+    // segment, not the name. Tests for that path live alongside
+    // `linux_modules_artefact_still_classified_as_artefact` below.
     for name in [
         "hm_.manpath",
         "home-manager-path",
@@ -130,7 +136,6 @@ fn system_artefact_prefixes_match_home_manager_and_nixos() {
         "system-path",
         "closure-info",
         "initrd-linux-6.12.1",
-        "linux-6.12.1-modules",
         "user-environment",
     ] {
         assert!(is_system_artefact_name(name), "{name} should classify as artefact");
@@ -431,4 +436,71 @@ fn detect_critical_does_not_match_unrelated_dbus_packages() {
     ];
     let build: Vec<PackageChange> = vec![];
     assert!(detect_critical_component_changes(&fetch, &build).is_empty());
+}
+
+// --- has_kernel_artefact_version_suffix + kernel classification ---
+
+#[test]
+fn kernel_artefact_suffix_flags_modules_and_shrunk() {
+    assert!(has_kernel_artefact_version_suffix("6.19.12-modules"));
+    assert!(has_kernel_artefact_version_suffix("6.19.12-shrunk"));
+    assert!(has_kernel_artefact_version_suffix("6.19.12-modules-shrunk"));
+}
+
+#[test]
+fn kernel_artefact_suffix_does_not_flag_bare_versions() {
+    // The bare kernel (`linux-zen-6.19.12`) splits into name="linux-zen"
+    // and version="6.19.12" — the suffix check must say "real package"
+    // so the user actually sees the kernel bump in the preview.
+    assert!(!has_kernel_artefact_version_suffix("6.19.12"));
+    assert!(!has_kernel_artefact_version_suffix("6.19.12-rc1"));
+    assert!(!has_kernel_artefact_version_suffix("0-unstable-2026-04-22"));
+    assert!(!has_kernel_artefact_version_suffix("20240909"));
+}
+
+#[test]
+fn bare_kernel_classified_as_real_package() {
+    // The motivation for the whole filter refinement: `linux-zen`
+    // was being eaten by the artefact bucket, so kernel updates
+    // never showed up as user-visible changes in the preview.
+    let kernel = change("linux-zen", "6.19.12");
+    assert!(!is_system_artefact(&kernel));
+}
+
+#[test]
+fn linux_modules_artefact_still_classified_as_artefact() {
+    // The `-modules` suffix lives in the version after split_name_version
+    // — the discriminant has to look there, not at the name.
+    let modules = change("linux-zen", "6.19.12-modules");
+    assert!(is_system_artefact(&modules));
+    let shrunk = change("linux-zen", "6.19.12-modules-shrunk");
+    assert!(is_system_artefact(&shrunk));
+}
+
+#[test]
+fn linux_firmware_classified_as_real_package() {
+    // Now that the blanket `linux-` prefix is gone, firmware blobs
+    // surface as user-visible too — they're updated in lockstep with
+    // many kernel bumps and can introduce real behaviour changes.
+    let firmware = change("linux-firmware", "20240909");
+    assert!(!is_system_artefact(&firmware));
+}
+
+#[test]
+fn linux_pam_classified_as_real_package() {
+    // Ironic miss of the old blanket prefix: linux-pam is just an
+    // auth library, has nothing to do with the kernel.
+    let pam = change("linux-pam", "1.5.3");
+    assert!(!is_system_artefact(&pam));
+}
+
+#[test]
+fn initrd_linux_still_classified_as_artefact() {
+    // initrd-linux-zen-6.19.12 → split: name="initrd-linux-zen",
+    // version="6.19.12". The `initrd-linux-` prefix is still in
+    // PREFIXES because it really is a build artefact (the initrd
+    // is generated from kernel modules + userspace tools, not a
+    // package the user installs).
+    let initrd = change("initrd-linux-zen", "6.19.12");
+    assert!(is_system_artefact(&initrd));
 }

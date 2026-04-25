@@ -5,6 +5,20 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## Unreleased
+
+### Changed
+- **Kernel + linux-firmware now surface as real packages** in
+  `cheni upgrade` preview and `cheni check --pending`. The artefact
+  filter used a blanket `linux-` prefix that was eating the bare
+  kernel (`linux-zen-6.19.12` → name="linux-zen") along with
+  `linux-firmware` and `linux-pam`. Replaced with a version-suffix
+  discriminant: `-modules`, `-shrunk`, `-modules-shrunk` in the
+  version segment route the entry to the artefact bucket;
+  everything else stays a real package. Result: kernel bumps now
+  show up as user-visible changes in the preview, instead of being
+  hidden behind an artefacts tally.
+
 ## [0.5.3] — 2026-04-25
 
 ### Added
