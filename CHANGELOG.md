@@ -5,6 +5,28 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## Unreleased
+
+### Added
+- **Centralised User-Agent + sentinel test** (`crate::http::USER_AGENT`).
+  The v0.5.5 incident — a hardcoded `cheni/0.1` blocklisted by Repology
+  — turned out to also live in `nix/flake.rs`'s GitHub/GitLab probe
+  (same prototype-era literal). Both call sites now reference the
+  central constant, joined by the existing two in `release.rs` and
+  `cmd/search`. The new `no_hardcoded_user_agent_outside_http_module`
+  test in `src/tests/http.rs` walks every `.rs` file under `src/` and
+  fails CI if any `.user_agent(` call doesn't go through the central
+  constant.
+- **"All Unknown" runtime guard** in `cheni check`. When the report
+  shows zero classified packages (Up-to-date + Minor + Major + Newer)
+  with 10+ Unknown, cheni now prints a yellow warning suggesting
+  `cheni check -v --refresh` to inspect the real HTTP status. The
+  threshold spares minimal configs (< 10 packages) where all-Unknown
+  is plausibly real. Catches future API breakages of any flavour
+  (UA block, IP ban, TLS fingerprint filter, full outage) — the
+  v0.5.5 silent-fail signature would have been a loud yellow line
+  with this guard in place.
+
 ## [0.5.5] — 2026-04-25
 
 ### Fixed

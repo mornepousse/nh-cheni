@@ -81,3 +81,52 @@ fn split_out_frozen_skips_freezes_not_in_check_list() {
     assert_eq!(packages, vec![("firefox".to_string(), "127.0.1".to_string())]);
     assert!(rows.is_empty());
 }
+
+// --- suspicious_repology_silence ---
+
+fn classification(up_to_date: usize, unknown: usize) -> Classification {
+    Classification {
+        minor: Vec::new(),
+        major: Vec::new(),
+        newer: Vec::new(),
+        unknown: (0..unknown).map(|i| format!("pkg-{}", i)).collect(),
+        up_to_date,
+    }
+}
+
+#[test]
+fn silence_warning_fires_when_everything_is_unknown() {
+    // The v0.5.5 signature: zero classified, many Unknown. Future
+    // API breakages of any flavour (UA blocklist, IP ban, TLS
+    // fingerprint filter) will produce the same shape — the warning
+    // must surface so the user doesn't quietly rely on a broken
+    // report.
+    let c = classification(0, 123);
+    assert!(suspicious_repology_silence(&c).is_some());
+}
+
+#[test]
+fn silence_warning_silent_for_a_normal_run() {
+    // Most packages classified, a handful Unknown — the legitimate
+    // "Repology doesn't track these specific projects" outcome.
+    let c = classification(100, 19);
+    assert!(suspicious_repology_silence(&c).is_none());
+}
+
+#[test]
+fn silence_warning_silent_for_a_tiny_config() {
+    // < 10 packages: the all-Unknown outcome is plausibly real
+    // (think: a config with only obscure self-built flakes). We'd
+    // rather miss the false-alarm than nag every minimal setup.
+    let c = classification(0, 5);
+    assert!(suspicious_repology_silence(&c).is_none());
+}
+
+#[test]
+fn silence_warning_silent_when_one_classification_lands() {
+    // Even a single Up-to-date / Minor / Major / Newer hit means
+    // Repology returned a usable response for at least one package
+    // — the API is reachable. Don't fire on that.
+    let c = classification(1, 50);
+    assert!(suspicious_repology_silence(&c).is_none());
+}

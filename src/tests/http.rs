@@ -128,3 +128,79 @@ fn retry_after_falls_back_on_missing_or_invalid() {
     );
     assert_eq!(parse_retry_after(Some("soon")), RATE_LIMIT_RETRY_SECS);
 }
+
+// --- USER_AGENT centralisation guard ---
+
+#[test]
+fn user_agent_constant_carries_a_real_version() {
+    // env!("GIT_DESCRIBE") may be a tag (`v0.5.5`), a dev shape
+    // (`v0.5.5-3-gabc-dirty`), or the literal "unknown" when build.rs
+    // can't reach git. None of these should leave the prefix bare —
+    // that's what triggered the original Repology blocklist hit.
+    assert!(USER_AGENT.starts_with("cheni/"));
+    assert!(
+        USER_AGENT.len() > "cheni/".len(),
+        "USER_AGENT must include a non-empty version: got {:?}",
+        USER_AGENT
+    );
+}
+
+#[test]
+fn no_hardcoded_user_agent_outside_http_module() {
+    // Sentinel against the regression that prompted v0.5.5 — every
+    // `.user_agent(...)` call in `src/` must reference the central
+    // `crate::http::USER_AGENT` (or its module-local alias
+    // `http::USER_AGENT` for callers that already import the module).
+    // A literal string would silently desync from the real version
+    // and end up exactly where `cheni/0.1` did: blocklisted.
+    let src_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut violations: Vec<String> = Vec::new();
+    walk_source_files(&src_root, &mut |path, contents| {
+        // Skip the http module itself — it owns the constant
+        // declaration plus this very test, both of which contain the
+        // string ".user_agent(" in comments / fixtures.
+        if path.ends_with("http.rs") || path.ends_with("tests/http.rs") {
+            return;
+        }
+        for line in contents.lines() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") {
+                continue;
+            }
+            if !line.contains(".user_agent(") {
+                continue;
+            }
+            // Allowed forms: `.user_agent(crate::http::USER_AGENT)` or
+            // `.user_agent(http::USER_AGENT)`.
+            let allowed = line.contains("crate::http::USER_AGENT")
+                || line.contains("http::USER_AGENT");
+            if !allowed {
+                violations.push(format!("{}: {}", path.display(), line.trim()));
+            }
+        }
+    });
+    assert!(
+        violations.is_empty(),
+        "found `.user_agent(...)` calls that don't go through `crate::http::USER_AGENT`:\n  {}",
+        violations.join("\n  ")
+    );
+}
+
+/// Walk every `.rs` file under `root`, calling `visit(path, contents)`
+/// for each. Recursive directory walk without external crates so the
+/// guard test stays a single-file pure dep on std.
+fn walk_source_files(root: &std::path::Path, visit: &mut impl FnMut(&std::path::Path, &str)) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_source_files(&path, visit);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            if let Ok(contents) = std::fs::read_to_string(&path) {
+                visit(&path, &contents);
+            }
+        }
+    }
+}

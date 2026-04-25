@@ -20,6 +20,21 @@ use anyhow::{bail, Result};
 use std::time::Duration;
 use tracing::debug;
 
+/// Canonical User-Agent string for every cheni HTTP client.
+///
+/// Carries the live `git describe` so upstream services (Repology,
+/// GitHub/GitLab APIs) can distinguish cheni versions in their
+/// rate-limit / blocklist policies. **Never hardcode a different
+/// value at a call site** — Repology blanket-blocked the prototype
+/// `cheni/0.1` literal once enough installs hammered them with that
+/// stale identifier, which silently broke `cheni check` for an
+/// unknown span (every package classified as Unknown because the
+/// 403 HTML body failed to JSON-parse). The
+/// `no_hardcoded_user_agent_outside_http_module` test in
+/// `src/tests/http.rs` enforces that every `.user_agent(` call goes
+/// through this constant.
+pub const USER_AGENT: &str = concat!("cheni/", env!("GIT_DESCRIBE"));
+
 /// Default per-request timeout, in seconds.
 ///
 /// Higher than the previous 10s because on a slow DSL or mobile

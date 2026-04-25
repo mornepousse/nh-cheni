@@ -207,7 +207,7 @@ fn split_cache_hits(
 /// Same pattern as `release.rs` and `cmd::search`.
 fn build_http_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent(concat!("cheni/", env!("GIT_DESCRIBE")))
+        .user_agent(crate::http::USER_AGENT)
         .timeout(crate::http::http_timeout())
         .build()
         .context("Failed to create HTTP client")

@@ -631,6 +631,36 @@ fn print_human(
         c.unknown.len().to_string().dimmed(),
         frozen_tail,
     );
+    if let Some(message) = suspicious_repology_silence(c) {
+        println!();
+        println!("  {} {}", "⚠".yellow().bold(), message.yellow());
+    }
+}
+
+/// Detect the "Repology is silently broken" signature: every classified
+/// package landed in the Unknown bucket (zero matched Up-to-date /
+/// Minor / Major / Newer) over a non-trivial sample size. The legitimate
+/// "all my packages are obscure to Repology" outcome stays silent for
+/// small configs (< 10 packages) where it's plausible. Returns `None`
+/// when the report looks normal.
+///
+/// This catches future API breakages — the v0.5.5 episode was a
+/// hardcoded `User-Agent: cheni/0.1` that Repology blocklisted, and
+/// `cheni check` quietly returned `Up to date: 0 | Unknown: 123`
+/// for an unknown span. Future blocks (TLS-fingerprint filtering,
+/// IP-range bans, full API outages) would produce the same shape;
+/// this guard makes the failure visible.
+fn suspicious_repology_silence(c: &Classification) -> Option<String> {
+    let classified = c.up_to_date + c.minor.len() + c.major.len() + c.newer.len();
+    if classified > 0 || c.unknown.len() < 10 {
+        return None;
+    }
+    Some(format!(
+        "All {} Repology lookups returned Unknown — the API may be \
+         blocklisting cheni or returning errors. Inspect with `cheni \
+         check -v --refresh` (debug logs show the real HTTP status).",
+        c.unknown.len()
+    ))
 }
 
 /// Render the "Frozen" block. No Repology column — the user's intent

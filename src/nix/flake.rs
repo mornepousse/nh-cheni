@@ -289,7 +289,7 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
     // slow link the GitHub/GitLab API commits call can be just as slow
     // as Repology, and a 5s hard cap frequently tripped in practice.
     let Ok(client) = reqwest::blocking::Client::builder()
-        .user_agent("cheni/0.1")
+        .user_agent(crate::http::USER_AGENT)
         .timeout(crate::http::http_timeout())
         .build()
     else {

@@ -159,7 +159,7 @@ pub async fn verify_release(tag: &str) -> Result<VerifyReport> {
 
     let client = reqwest::Client::builder()
         .timeout(http::http_timeout())
-        .user_agent(concat!("cheni/", env!("GIT_DESCRIBE")))
+        .user_agent(http::USER_AGENT)
         .build()
         .context("building HTTP client")?;
 
@@ -218,7 +218,7 @@ const GITLAB_TAGS_URL: &str =
 pub async fn latest_release_tag() -> Result<String> {
     let client = reqwest::Client::builder()
         .timeout(http::http_timeout())
-        .user_agent(concat!("cheni/", env!("GIT_DESCRIBE")))
+        .user_agent(http::USER_AGENT)
         .build()
         .context("building HTTP client")?;
 
