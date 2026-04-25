@@ -97,32 +97,75 @@ fn print_separator() {
     println!("{}", "───────────────────────────────────────────".dimmed());
 }
 
-/// Step 1: refresh every flake input. Bails if `nix flake update`
-/// fails. Captures the stderr so we can print a clean summary of
-/// which inputs bumped to which date, instead of leaking the raw
-/// multiline URL/narHash chatter nix emits by default.
+/// Step 1: refresh every flake input.
+///
+/// Streams meaningful stderr events live (the per-input bullets and
+/// any warnings/errors) so the user sees progress instead of staring
+/// at "[1/4] Updating flake inputs" for the duration of a network
+/// fetch. The full stderr is also captured for the clean post-step
+/// summary that follows — `nix flake update` prints its narrative on
+/// stderr, never on stdout.
 fn update_flake_inputs(flake_dir: &Path) -> Result<UpgradeContext> {
-    let output = Command::new("nix")
+    use std::io::{BufRead, BufReader};
+
+    let mut child = Command::new("nix")
         .args(["flake", "update"])
         .current_dir(flake_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
-    if !output.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+    let stderr_pipe = child
+        .stderr
+        .take()
+        .expect("stderr was set to piped, must be Some");
+    let reader = BufReader::new(stderr_pipe);
+    let mut captured = String::new();
+    for line in reader.lines() {
+        let Ok(line) = line else { continue };
+        stream_flake_update_progress(&line);
+        captured.push_str(&line);
+        captured.push('\n');
+    }
+
+    let status = child
+        .wait()
+        .context("waiting on nix flake update")?;
+    if !status.success() {
+        if !captured.is_empty() {
+            eprintln!("{}", captured);
+        }
         anyhow::bail!("nix flake update failed");
     }
 
-    // nix flake update prints its narrative on stderr.
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let updates = parse_flake_update_events(&stderr);
+    let updates = parse_flake_update_events(&captured);
     print_flake_update_summary(&updates);
     Ok(UpgradeContext {
         inputs_updated: updates.len(),
-        git_tree_dirty: detect_dirty_tree_warning(&stderr),
+        git_tree_dirty: detect_dirty_tree_warning(&captured),
     })
+}
+
+/// Print the meaningful fragments of `nix flake update`'s stderr
+/// as they arrive. The full output is mostly `Locked node …` chatter
+/// that would drown the step header — we only surface:
+///
+/// - `• Updated input 'X':` bullets, condensed to a one-liner so the
+///   user sees inputs landing in real time;
+/// - `warning:` lines (typically "Git tree is dirty"), styled yellow
+///   so they're hard to miss;
+/// - `error:` lines styled red — they're rare here but if they come
+///   the user should see them inline rather than only after the bail.
+fn stream_flake_update_progress(line: &str) {
+    let trimmed = line.trim_start();
+    if let Some(name) = extract_updated_input_name(trimmed) {
+        println!("    {} updated {}", "·".dimmed(), name.dimmed());
+    } else if trimmed.starts_with("warning:") {
+        println!("    {}", trimmed.yellow());
+    } else if trimmed.starts_with("error:") {
+        println!("    {}", trimmed.red());
+    }
 }
 
 /// Nix prints `warning: Git tree '<path>' is dirty` (or `warning: dirty
