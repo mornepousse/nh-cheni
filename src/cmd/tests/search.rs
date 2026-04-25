@@ -49,6 +49,33 @@ fn parse_and_sort_results_tie_breaks_alphabetically() {
     assert_eq!(results[1].0, "firefox-esr");
 }
 
+// --- pad_to (column alignment) ---
+
+#[test]
+fn pad_to_short_name_reaches_full_column_width() {
+    assert_eq!(pad_to("abc", 10).chars().count(), 7);
+}
+
+#[test]
+fn pad_to_at_or_over_column_returns_a_single_space() {
+    // The original "{:<W}" format string would have produced zero
+    // padding once the content reached W, visually merging two
+    // adjacent columns. We always emit at least one separator.
+    assert_eq!(pad_to("0123456789", 10), " ");
+    assert_eq!(pad_to("01234567890123", 10), " ");
+}
+
+#[test]
+fn pad_to_handles_empty_input() {
+    assert_eq!(pad_to("", 5).chars().count(), 5);
+}
+
+#[test]
+fn pad_to_counts_unicode_code_points_not_bytes() {
+    // "café" is 4 chars, 5 bytes — the visible width is 4.
+    assert_eq!(pad_to("café", 6).chars().count(), 2);
+}
+
 // --- LocalState badges ---
 
 fn local_state(installed: &[&str], pinned: &[&str], frozen: &[(&str, &str)]) -> LocalState {

@@ -293,6 +293,11 @@ fn parse_and_sort_results(
 /// (which would chase ANSI-aware width calculations across rows).
 const ANNOT_INDENT: &str = "      ";
 
+/// Width of the name column in characters.
+const NAME_COL: usize = 30;
+/// Width of the version column in characters.
+const VER_COL: usize = 14;
+
 fn print_results(
     results: &[SearchRow],
     query_lower: &str,
@@ -314,11 +319,35 @@ fn print_results(
         } else {
             name.green().to_string()
         };
-        println!("  {:<30} {:<14} {}", name_styled, version.dimmed(), truncated);
+        // Pad based on the *visible* width (uncolored input) — the
+        // built-in `{:<W}` format would count ANSI escapes from
+        // `colored` as part of the string length, leaving short names
+        // overpadded and 28-char names under-padded.
+        println!(
+            "  {}{}{}{}{}",
+            name_styled,
+            pad_to(name, NAME_COL),
+            version.dimmed(),
+            pad_to(version, VER_COL),
+            truncated
+        );
 
         if let Some(annot) = build_annotation(name, version, upstream, local) {
             println!("{}{}", ANNOT_INDENT, annot.dimmed());
         }
+    }
+}
+
+/// Spaces needed after a column whose visible width is `text.chars().count()`
+/// to reach `width`. Always returns at least one space so two adjacent
+/// columns never visually merge — even when the content already exceeds
+/// the nominal column width.
+fn pad_to(text: &str, width: usize) -> String {
+    let visible = text.chars().count();
+    if visible >= width {
+        " ".to_string()
+    } else {
+        " ".repeat(width - visible)
     }
 }
 
