@@ -137,6 +137,34 @@ pub fn read_flake_inputs(flake_dir: &Path) -> Result<Vec<FlakeInput>> {
     Ok(result)
 }
 
+/// Read a single root input by name, regardless of whether it's in the
+/// `INFRASTRUCTURE_INPUTS` filter list.
+///
+/// Used by `cheni check` to surface the age of `nixpkgs` (which the
+/// blanket `read_flake_inputs` excludes by design — we don't suggest
+/// per-pin updates for the system foundation, those go through
+/// `cheni upgrade`). For the freshness-signal use case the user *needs*
+/// to see how old `nixpkgs` is, otherwise they can't tell whether a
+/// "no updates available" report is genuine or just behind reality.
+///
+/// Returns `None` when the lock can't be read, the input doesn't exist,
+/// or the entry is malformed.
+pub fn read_input_by_name(flake_dir: &Path, name: &str) -> Option<FlakeInput> {
+    let lock_path = flake_dir.join("flake.lock");
+    let content = std::fs::read_to_string(&lock_path).ok()?;
+    let lock: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let nodes = lock.get("nodes").and_then(|n| n.as_object())?;
+    let root_inputs = nodes
+        .get("root")
+        .and_then(|r| r.get("inputs"))
+        .and_then(|i| i.as_object())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    read_one_input(name, root_inputs, nodes, now)
+}
+
 /// Build a `FlakeInput` for a single root input.
 ///
 /// Returns None when the lock entry is missing or malformed (logged at

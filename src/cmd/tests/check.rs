@@ -130,3 +130,21 @@ fn silence_warning_silent_when_one_classification_lands() {
     let c = classification(1, 50);
     assert!(suspicious_repology_silence(&c).is_none());
 }
+
+// --- format_local_age ---
+
+#[test]
+fn local_age_today_for_zero_days() {
+    assert_eq!(format_local_age(0), "today");
+}
+
+#[test]
+fn local_age_singular_for_one_day() {
+    assert_eq!(format_local_age(1), "1d ago");
+}
+
+#[test]
+fn local_age_plural_for_more_than_one_day() {
+    assert_eq!(format_local_age(2), "2d ago");
+    assert_eq!(format_local_age(45), "45d ago");
+}

@@ -8,6 +8,18 @@ semver.
 ## Unreleased
 
 ### Added
+- **Freshness signals in `cheni check`**. Two new pieces of context
+  at the top of the report so a "no updates available" line can no
+  longer hide stale data:
+  - `nixpkgs floor: Xd ago (rev …)` header — shows how old the
+    user's `nixpkgs` flake input is, with an actionable hint
+    (`→ run cheni upgrade`) when ≥3 days. The Repology section
+    answers "what has upstream shipped" but the floor explains
+    *what nixpkgs the comparison is against*.
+  - Per-input local age column (`today` / `1d ago` / `Nd ago`) in
+    the Flake inputs block, mirroring `cheni status`. So a user
+    who runs `check` daily can spot drift across all inputs at a
+    glance, not just nixpkgs.
 - **Centralised User-Agent + sentinel test** (`crate::http::USER_AGENT`).
   The v0.5.5 incident — a hardcoded `cheni/0.1` blocklisted by Repology
   — turned out to also live in `nix/flake.rs`'s GitHub/GitLab probe

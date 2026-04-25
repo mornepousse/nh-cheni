@@ -113,10 +113,23 @@ pub async fn run(
     let visible_flake_inputs =
         filter_visible_flake_inputs(&flake_inputs, &nix_config.flake_dir, scan.active_set.as_ref(), category);
 
+    // Read `nixpkgs` straight from the lock — `read_flake_inputs`
+    // excludes it by design (no per-pin update suggestion), but the
+    // freshness signal still has to surface so the user can tell
+    // "no updates available" from "behind reality by 12 days".
+    let nixpkgs_age = flake::read_input_by_name(&nix_config.flake_dir, "nixpkgs");
+
     if json {
         print_json(&classification, &visible_flake_inputs, &frozen_rows)?;
     } else {
-        print_human(&classification, &visible_flake_inputs, &frozen_rows, category, details);
+        print_human(
+            &classification,
+            &visible_flake_inputs,
+            &frozen_rows,
+            category,
+            details,
+            nixpkgs_age.as_ref(),
+        );
     }
 
     // Optional second pass: closure-level dry-run, surfaces what
@@ -577,9 +590,13 @@ fn print_human(
     frozen_rows: &[FrozenRow],
     category: Option<&str>,
     details: bool,
+    nixpkgs: Option<&flake::FlakeInput>,
 ) {
-    if category.is_none() && !visible_flake_inputs.is_empty() {
-        print_flake_inputs_block(visible_flake_inputs);
+    if category.is_none() {
+        print_nixpkgs_age_block(nixpkgs);
+        if !visible_flake_inputs.is_empty() {
+            print_flake_inputs_block(visible_flake_inputs);
+        }
     }
     if !frozen_rows.is_empty() {
         print_frozen_block(frozen_rows);
@@ -679,6 +696,32 @@ fn print_frozen_block(rows: &[FrozenRow]) {
     println!();
 }
 
+/// Render a one-line nixpkgs age header above the flake-inputs block.
+/// This is the freshness baseline for everything `cheni check` says
+/// next: a 14-day-old nixpkgs explains why a "0 updates" report
+/// looks suspiciously quiet. Skipped silently when the input can't
+/// be located in the lock.
+fn print_nixpkgs_age_block(nixpkgs: Option<&flake::FlakeInput>) {
+    let Some(input) = nixpkgs else {
+        return;
+    };
+    let age = format_local_age(input.days_old);
+    println!(
+        "{} {} {}",
+        "nixpkgs floor:".bold(),
+        age.dimmed(),
+        format!("(rev {})", input.rev).dimmed(),
+    );
+    if input.days_old >= 3 {
+        println!(
+            "  {} run `{}` to advance the floor before re-checking",
+            "→".cyan(),
+            "cheni upgrade".bold()
+        );
+    }
+    println!();
+}
+
 fn print_flake_inputs_block(inputs: &[&flake::FlakeInput]) {
     let has_updates = inputs.iter().any(|i| i.has_update == Some(true));
     let header = if has_updates {
@@ -689,16 +732,38 @@ fn print_flake_inputs_block(inputs: &[&flake::FlakeInput]) {
     println!("{}:", header);
     for input in inputs {
         let version = input.installed_version.as_deref().unwrap_or("?");
+        let local_age = format_local_age(input.days_old);
         let status = match (&input.has_update, &input.remote_age) {
             (Some(true), Some(date)) => format!("{} ({})", "UPDATE".yellow(), date.dimmed()),
             (Some(true), None) => "UPDATE".yellow().to_string(),
             (Some(false), _) => "ok".green().to_string(),
             (None, _) => "?".dimmed().to_string(),
         };
-        println!("  {:<24} {:<14} {}", input.name, version.dimmed(), status);
+        println!(
+            "  {:<24} {:<14} {:<13} {}",
+            input.name,
+            version.dimmed(),
+            local_age.dimmed(),
+            status,
+        );
     }
     println!();
 }
+
+/// Format the local input age as `today` / `1d ago` / `Nd ago` —
+/// compact column inline with the input list, distinct from the
+/// "remote age" date string. Lets the user see at a glance how old
+/// their `flake.lock` snapshot is relative to today, which is the
+/// other half of the freshness equation that `cheni check`
+/// previously left implicit.
+fn format_local_age(days: u64) -> String {
+    match days {
+        0 => "today".to_string(),
+        1 => "1d ago".to_string(),
+        n => format!("{}d ago", n),
+    }
+}
+
 
 fn print_update_block(header: &str, updates: &[CheckResult], tag: &str, minor: bool) {
     if minor {
