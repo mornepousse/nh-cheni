@@ -5,7 +5,7 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
-## Unreleased
+## [0.5.2] — 2026-04-25
 
 ### Added
 - **`Pre-switch check` pattern** in `cheni build` and `cheni
@@ -29,6 +29,16 @@ semver.
   `…/main`) are unaffected — they bump on `nix flake update` as
   before. Anti-downgrade guard: the bump only fires when the
   reported latest is strictly newer than the current pin.
+
+### Fixed
+- **`flake.nix` adds `git` to `nativeCheckInputs`** for the Nix
+  sandbox check phase. The pin/freeze time-travel tests (added in
+  v0.5.0) spawn `git init`/`add`/`commit` through fixture helpers;
+  they passed locally (shell PATH has git) but failed in the Nix
+  sandbox where PATH is empty. Adding `pkgs.git` to
+  `nativeCheckInputs` makes `nix flake check` green without leaking
+  git into the runtime closure. This fix unblocks `nh os switch`
+  for any user who pinned cheni at v0.5.1 and ran `nix flake check`.
 
 ## [0.5.1] — 2026-04-25
 
