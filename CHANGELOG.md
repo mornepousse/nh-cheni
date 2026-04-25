@@ -5,7 +5,7 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
-## Unreleased
+## [0.5.3] — 2026-04-25
 
 ### Added
 - **`cheni check` surfaces a self-update hint** when the user pinned
