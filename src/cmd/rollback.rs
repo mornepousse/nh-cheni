@@ -3,13 +3,16 @@
 //! Rolls back to the previous NixOS generation (or a specific one),
 //! after showing a human-readable summary of what's changing.
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Instant;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context, Result};
 use colored::Colorize;
 
-use super::history::{read_generations, Generation};
+use super::history::{
+    compute_pin_freeze_delta, format_pin_freeze_delta, read_generations, Generation,
+};
 use crate::util;
 
 /// Run `cheni rollback [target]`.
@@ -36,6 +39,15 @@ pub fn run(target: Option<u32>, yes: bool) -> Result<()> {
 
     print_summary(current, target_gen);
 
+    // Optional cross-context warning: if the user's pin/freeze policy
+    // has drifted since `target`, the rollback restores binaries that
+    // were built under a different policy than the one currently on
+    // disk. We show the delta so the user can decide whether the
+    // mismatch matters before confirming.
+    if let Some(flake_dir) = policy_drift_dir() {
+        print_policy_drift(target_gen, &flake_dir);
+    }
+
     // `default_yes = false` — rollback is a destructive operation
     // (sudo + switches the running system generation). Safer to make
     // the user explicitly type 'y' than to accept a stray Enter.
@@ -58,6 +70,53 @@ pub fn run(target: Option<u32>, yes: bool) -> Result<()> {
         "cheni history".bold()
     );
     Ok(())
+}
+
+/// Resolve the flake directory for policy-drift annotation, gated on
+/// it being a git work tree. Same shape as the `cheni history` helper
+/// — duplicated rather than shared so each command stays free to
+/// evolve its own gating without coupling.
+fn policy_drift_dir() -> Option<PathBuf> {
+    let dir = crate::nix::config::detect().ok()?.flake_dir;
+    if !crate::nix::git::is_repo(&dir) {
+        return None;
+    }
+    Some(dir)
+}
+
+/// Print the policy-drift block when the pins/freezes state has moved
+/// between `target.mtime` and now.
+///
+/// The wording deliberately spells out the binaries-vs-policy split:
+/// users new to the overlay model often expect rollback to revert the
+/// pin/freeze JSON files too, and the resulting "why is X still pinned
+/// after rollback?" confusion is exactly what this warning prevents.
+fn print_policy_drift(target: &Generation, flake_dir: &Path) {
+    let Some(t_secs) = target.mtime_secs else { return };
+    let target_at = UNIX_EPOCH + Duration::from_secs(t_secs);
+
+    let target_pins = crate::nix::pins::read_at_time(flake_dir, target_at);
+    let target_freezes = crate::nix::freezes::read_at_time(flake_dir, target_at);
+    let cur_pins = crate::nix::pins::read(flake_dir).unwrap_or_default();
+    let cur_freezes = crate::nix::freezes::read(flake_dir).unwrap_or_default();
+
+    let Some(delta) = compute_pin_freeze_delta(
+        &target_pins,
+        &cur_pins,
+        &target_freezes,
+        &cur_freezes,
+    ) else {
+        return;
+    };
+
+    println!("  {}", "Policy drifted since target:".yellow());
+    println!("    {}", format_pin_freeze_delta(&delta).dimmed());
+    println!(
+        "    {}",
+        "Rollback only swaps binaries; current pins/freezes stay in effect on next rebuild."
+            .dimmed()
+    );
+    println!();
 }
 
 /// Format `Duration` as `MmSs` or `Ss`. Matches the helper used in the
