@@ -49,6 +49,133 @@ fn parse_and_sort_results_tie_breaks_alphabetically() {
     assert_eq!(results[1].0, "firefox-esr");
 }
 
+// --- LocalState badges ---
+
+fn local_state(installed: &[&str], pinned: &[&str], frozen: &[(&str, &str)]) -> LocalState {
+    LocalState {
+        installed: installed.iter().map(|s| (*s).to_string()).collect(),
+        pinned: pinned.iter().map(|s| (*s).to_string()).collect(),
+        frozen: frozen
+            .iter()
+            .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
+            .collect(),
+    }
+}
+
+#[test]
+fn local_state_returns_none_when_package_is_unknown() {
+    let s = local_state(&["alacritty"], &["vivaldi"], &[]);
+    assert!(s.badges("firefox").is_none());
+}
+
+#[test]
+fn local_state_pinned_renders_a_simple_marker() {
+    let s = local_state(&[], &["vivaldi"], &[]);
+    assert_eq!(s.badges("vivaldi").as_deref(), Some("pinned"));
+}
+
+#[test]
+fn local_state_frozen_includes_version_when_present() {
+    let s = local_state(&[], &[], &[("firefox", "140.2")]);
+    assert_eq!(s.badges("firefox").as_deref(), Some("frozen@140.2"));
+}
+
+#[test]
+fn local_state_frozen_falls_back_to_bare_marker_when_version_absent() {
+    // Older freezes files have an empty version field — render the
+    // marker without a trailing "@".
+    let s = local_state(&[], &[], &[("firefox", "")]);
+    assert_eq!(s.badges("firefox").as_deref(), Some("frozen"));
+}
+
+#[test]
+fn local_state_combines_markers_in_canonical_order() {
+    // The order is frozen, pinned, installed — mirrors the policy
+    // hierarchy from most-specific (locked rev) to most-general
+    // (declared in modules), so the eye lands on the strongest
+    // commitment first.
+    let s = local_state(&["firefox"], &["firefox"], &[("firefox", "140.2")]);
+    assert_eq!(
+        s.badges("firefox").as_deref(),
+        Some("frozen@140.2 · pinned · installed")
+    );
+}
+
+// --- repology_differs ---
+
+#[test]
+fn repology_differs_swallows_placeholder_versions() {
+    // "?" is the substitute we use when nix search has no version field.
+    // Treating that as a delta would fire for every weird entry.
+    assert!(!repology_differs("?", "1.2.3"));
+    assert!(!repology_differs("1.2.3", "?"));
+    assert!(!repology_differs("", "1.2.3"));
+}
+
+#[test]
+fn repology_differs_treats_missing_trailing_zero_as_equal() {
+    // 1.2 and 1.2.0 must not produce a "→ 1.2.0 upstream" annotation.
+    assert!(!repology_differs("1.2", "1.2.0"));
+    assert!(!repology_differs("1.2.0", "1.2"));
+}
+
+#[test]
+fn repology_differs_flags_real_version_drift() {
+    assert!(repology_differs("1.2.3", "1.2.4"));
+    assert!(repology_differs("1.2.3", "2.0.0"));
+}
+
+#[test]
+fn repology_differs_compares_strings_when_parser_yields_nothing() {
+    // Hash-only "versions" can come out of nixpkgs-unstable for some
+    // git-pinned derivations. Fall back to byte equality so we don't
+    // wrongly flag identical strings as a drift.
+    assert!(!repology_differs("git-abc123", "git-abc123"));
+    assert!(repology_differs("git-abc123", "git-def456"));
+}
+
+// --- build_annotation ---
+
+#[test]
+fn build_annotation_returns_none_for_an_uninteresting_row() {
+    let upstream = std::collections::HashMap::new();
+    let local = LocalState::empty();
+    assert!(build_annotation("firefox", "1.0.0", &upstream, &local).is_none());
+}
+
+#[test]
+fn build_annotation_returns_only_upstream_when_no_local_state() {
+    let mut upstream = std::collections::HashMap::new();
+    upstream.insert("firefox".to_string(), "2.0.0".to_string());
+    let local = LocalState::empty();
+    assert_eq!(
+        build_annotation("firefox", "1.0.0", &upstream, &local).as_deref(),
+        Some("→ 2.0.0 upstream")
+    );
+}
+
+#[test]
+fn build_annotation_returns_only_local_when_repology_matches_nixpkgs() {
+    let mut upstream = std::collections::HashMap::new();
+    upstream.insert("firefox".to_string(), "1.0.0".to_string());
+    let local = local_state(&[], &["firefox"], &[]);
+    assert_eq!(
+        build_annotation("firefox", "1.0.0", &upstream, &local).as_deref(),
+        Some("pinned")
+    );
+}
+
+#[test]
+fn build_annotation_combines_upstream_and_local_with_middle_dot() {
+    let mut upstream = std::collections::HashMap::new();
+    upstream.insert("firefox".to_string(), "2.0.0".to_string());
+    let local = local_state(&[], &[], &[("firefox", "1.0.0")]);
+    assert_eq!(
+        build_annotation("firefox", "1.0.0", &upstream, &local).as_deref(),
+        Some("→ 2.0.0 upstream · frozen@1.0.0")
+    );
+}
+
 #[test]
 fn parse_and_sort_results_handles_missing_fields() {
     // Real-world: some `nix search` entries have no description and/or

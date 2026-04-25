@@ -437,7 +437,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         }
         Commands::Rollback { target, yes } => cmd::rollback::run(target, yes),
         Commands::Diff { from, to } => cmd::diff::run(from, to),
-        Commands::Search { query } => cmd::search::run(&query),
+        Commands::Search { query } => cmd::search::run(&query).await,
         Commands::Why { package } => cmd::why::run(&package),
         Commands::Clean => cmd::clean::run(),
         Commands::Init => cmd::init::run(),

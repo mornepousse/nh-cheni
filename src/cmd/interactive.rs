@@ -221,7 +221,7 @@ async fn dispatch(action: Action) -> Result<()> {
         Action::Prune => super::history::run(default_history_options(true))?,
         Action::Rollback => dispatch_rollback(&theme)?,
         Action::Diff => dispatch_diff(&theme)?,
-        Action::Search => dispatch_search(&theme)?,
+        Action::Search => dispatch_search(&theme).await?,
         Action::Why => dispatch_why(&theme)?,
         Action::Status => super::status::run()?,
         Action::Clean => super::clean::run()?,
@@ -297,11 +297,11 @@ fn dispatch_diff(theme: &ColorfulTheme) -> Result<()> {
     super::diff::run(from, to)
 }
 
-fn dispatch_search(theme: &ColorfulTheme) -> Result<()> {
+async fn dispatch_search(theme: &ColorfulTheme) -> Result<()> {
     let query: String = Input::with_theme(theme)
         .with_prompt("Search query")
         .interact_text()?;
-    super::search::run(&query)
+    super::search::run(&query).await
 }
 
 fn dispatch_why(theme: &ColorfulTheme) -> Result<()> {
