@@ -195,8 +195,12 @@ fn update_flake_inputs(flake_dir: &Path, pins_only: bool) -> Result<UpgradeConte
     })
 }
 
-/// Warn the user when `flake.lock` already has uncommitted changes
-/// before the upgrade begins.
+/// Warn the user when `flake.lock` already has uncommitted changes.
+///
+/// Shared between `cheni upgrade` (where it precedes the rebuild) and
+/// `cheni preview` (where it shapes how to read the report — a dirty
+/// lock means the preview reflects pending bumps from a prior run,
+/// not just the latest fetch).
 ///
 /// Without this surface, a previous `cheni upgrade` cancelled at the
 /// confirmation prompt leaves the lock dirty — and the next rebuild
@@ -208,7 +212,7 @@ fn update_flake_inputs(flake_dir: &Path, pins_only: bool) -> Result<UpgradeConte
 /// The wording is deliberately verbose: this is the kind of subtlety
 /// that bites users only once, and only because nothing told them it
 /// was happening.
-fn warn_if_dirty_lock(flake_dir: &Path) {
+pub(crate) fn warn_if_dirty_lock(flake_dir: &Path) {
     if !is_flake_lock_dirty(flake_dir) {
         return;
     }
@@ -547,32 +551,9 @@ fn preview_and_confirm(
     yes: bool,
     context: &UpgradeContext,
 ) -> Result<Option<UpgradeStats>> {
-    let flake_ref = format!(
-        "{}#nixosConfigurations.{}.config.system.build.toplevel",
-        config_path, hostname
-    );
-    let preview_output = Command::new("nix")
-        .args(["build", &flake_ref, "--dry-run", "--no-link", "--print-build-logs"])
-        .stderr(Stdio::piped())
-        .stdout(Stdio::piped())
-        .output()
-        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
-
-    if !preview_output.status.success() {
-        eprintln!("{}", String::from_utf8_lossy(&preview_output.stderr));
-        anyhow::bail!("Preview evaluation failed. Run 'cheni build' to see details.");
-    }
-
-    // nix --dry-run prints its summary on stderr.
-    let stderr = String::from_utf8_lossy(&preview_output.stderr);
-    let (to_build, to_fetch) = parse_dry_run_summary(&stderr);
-
-    if to_build.is_empty() && to_fetch.is_empty() {
-        println!("  {}", "Nothing to build or download — already up to date.".green());
+    let Some(stats) = print_pending_changes(config_path, hostname)? else {
         return Ok(None);
-    }
-
-    let stats = print_preview_lists(&to_build, &to_fetch);
+    };
 
     // If we already know this rebuild is going to be pure noise, warn
     // BEFORE the confirmation prompt so the user can skip the wait.
@@ -591,6 +572,49 @@ fn preview_and_confirm(
         return Ok(None);
     }
     Ok(Some(stats))
+}
+
+/// Run `nix build --dry-run` against the current flake state, parse
+/// the output, and render the per-bucket breakdown.
+///
+/// Shared between `cheni upgrade` step 2 and the read-only `cheni
+/// preview` command. Returns `Ok(None)` when nothing would change
+/// (callers print their own "up to date" affordance and skip),
+/// `Ok(Some(stats))` with the bucket counts otherwise. Bails on a
+/// failed evaluation — we'd rather surface the error than render
+/// silence.
+pub(crate) fn print_pending_changes(
+    config_path: &str,
+    hostname: &str,
+) -> Result<Option<UpgradeStats>> {
+    let stderr = run_dry_run(config_path, hostname)?;
+    let (to_build, to_fetch) = parse_dry_run_summary(&stderr);
+
+    if to_build.is_empty() && to_fetch.is_empty() {
+        println!("  {}", "Nothing to build or download — already up to date.".green());
+        return Ok(None);
+    }
+    Ok(Some(print_preview_lists(&to_build, &to_fetch)))
+}
+
+/// Run `nix build --dry-run --no-link --print-build-logs` and return
+/// the captured stderr (where nix prints its dry-run summary).
+fn run_dry_run(config_path: &str, hostname: &str) -> Result<String> {
+    let flake_ref = format!(
+        "{}#nixosConfigurations.{}.config.system.build.toplevel",
+        config_path, hostname
+    );
+    let out = Command::new("nix")
+        .args(["build", &flake_ref, "--dry-run", "--no-link", "--print-build-logs"])
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .output()
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
+    if !out.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&out.stderr));
+        anyhow::bail!("Preview evaluation failed. Run 'cheni build' to see details.");
+    }
+    Ok(String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
 fn print_section_from_changes(

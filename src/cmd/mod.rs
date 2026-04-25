@@ -15,6 +15,7 @@ pub mod init;
 pub mod interactive;
 pub mod obsolete;
 pub mod pin;
+pub mod preview;
 pub mod unfreeze;
 pub mod rollback;
 pub mod search;

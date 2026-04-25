@@ -32,6 +32,7 @@ enum Action {
     Upgrade,
     UpgradePinsOnly,
     Build,
+    Preview,
     History,
     Rollback,
     Diff,
@@ -144,6 +145,11 @@ fn build_menu() -> Vec<MenuEntry> {
             action: Action::Build,
         },
         MenuEntry {
+            label: "Preview",
+            hint: "what would change at next rebuild (read-only)",
+            action: Action::Preview,
+        },
+        MenuEntry {
             label: "History",
             hint: "list recent generations with diffs",
             action: Action::History,
@@ -217,6 +223,7 @@ async fn dispatch(action: Action) -> Result<()> {
         Action::PinFlakes => super::pin::pin_flake_inputs().await?,
         Action::Unpin => dispatch_unpin(&theme)?,
         Action::Build => super::build::run()?,
+        Action::Preview => super::preview::run()?,
         Action::History => super::history::run(default_history_options(false))?,
         Action::Prune => super::history::run(default_history_options(true))?,
         Action::Rollback => dispatch_rollback(&theme)?,
