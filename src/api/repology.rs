@@ -196,9 +196,18 @@ fn split_cache_hits(
 
 /// Build the shared reqwest client. Timeout is generous by default
 /// (30s) and overridable via $CHENI_HTTP_TIMEOUT for slow links.
+///
+/// User-Agent carries the live `git describe` so Repology can
+/// distinguish cheni versions in its rate-limit policy. The previous
+/// hardcoded `cheni/0.1` lasted from the prototype phase and got
+/// blanket-blocked by Repology with HTTP 403 once enough installs
+/// hammered them with that stale identifier — every `cheni check`
+/// reported "Up to date: 0 | Unknown: N" silently because parse
+/// errors on the HTML 403 body classified every package as unknown.
+/// Same pattern as `release.rs` and `cmd::search`.
 fn build_http_client() -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent("cheni/0.1")
+        .user_agent(concat!("cheni/", env!("GIT_DESCRIBE")))
         .timeout(crate::http::http_timeout())
         .build()
         .context("Failed to create HTTP client")
@@ -356,6 +365,25 @@ async fn query_one(
     // Handle 404 (package not found)
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         debug!("Package '{}' not found on Repology", name);
+        return Ok(PackageLookup {
+            name: name.to_string(),
+            version: None,
+            description: None,
+        });
+    }
+
+    // Defensive: any other non-2xx (403 from a UA-blocklist, 5xx,
+    // captive-portal redirect, …) returns an HTML body that
+    // `parse_response` would try to deserialise as JSON and fail.
+    // Surface the real status in the debug log and return Unknown
+    // — same outcome as 404, but the log line tells the user (or me
+    // at debug time) what actually happened.
+    if !response.status().is_success() {
+        debug!(
+            "HTTP {} from Repology for '{}' — classifying as Unknown",
+            response.status(),
+            name
+        );
         return Ok(PackageLookup {
             name: name.to_string(),
             version: None,

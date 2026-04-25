@@ -5,6 +5,22 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## Unreleased
+
+### Fixed
+- **Repology lookups returning Unknown for everything**. The
+  Repology client was sending `User-Agent: cheni/0.1` — a hardcoded
+  prototype-era string that lasted in `api/repology.rs` while every
+  other HTTP path (release, search) had moved to
+  `concat!("cheni/", env!("GIT_DESCRIBE"))`. Repology eventually
+  blanket-blocked that User-Agent with HTTP 403, and `cheni check`
+  silently classified every package as "Unknown" because the HTML
+  403 body failed to deserialise as JSON in `parse_response`. Two
+  fixes: User-Agent now carries the live `git describe` like the
+  other clients, and `query_one` short-circuits on any non-2xx
+  status into a clean Unknown classification with the real status
+  in the debug log instead of a misleading parse-error trail.
+
 ## [0.5.4] — 2026-04-25
 
 ### Added
