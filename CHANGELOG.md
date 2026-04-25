@@ -5,7 +5,7 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
-## Unreleased
+## [0.5.1] — 2026-04-25
 
 ### Added
 - **`cheni check --pending`**: appends a closure dry-run section to
@@ -16,6 +16,11 @@ semver.
   intentionally separate — `check` answers "is upstream ahead of
   what nixpkgs ships?", `--pending` answers "what would my next
   rebuild change?" — and combining them costs ~30s of evaluation.
+
+### Documentation
+- CLAUDE.md gains an explicit scope statement (personal tool,
+  no community distribution, no upstream nh contributions).
+- README intro rewritten to clarify what cheni is and is not.
 
 ## [0.5.0] — 2026-04-25
 
