@@ -35,6 +35,12 @@
         nativeBuildInputs = [];
         buildInputs = [];
 
+        # git is invoked by the test fixtures in nix::git (git init/add/commit
+        # + git log/show for time-travel reads). The Nix sandbox has an empty
+        # PATH so git must be listed explicitly here — nativeCheckInputs
+        # injects it only during the check phase, not at build or runtime.
+        nativeCheckInputs = [ pkgs.git ];
+
         meta = with pkgs.lib; {
           description = "Granular package updates for NixOS";
           homepage = "https://gitlab.com/harrael/cheni";
