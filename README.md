@@ -1,6 +1,6 @@
 # cheni
 
-> **Granular package updates for NixOS.**
+> **Granular package updates for NixOS, layered on top of [nh](https://github.com/nix-community/nh).**
 > (_cheni_ — Swiss-French for "mess/clutter". This tool tidies up the clutter of Nix updates.)
 
 <!--
@@ -13,13 +13,50 @@
 > Primary repo: **https://gitlab.com/harrael/cheni**
 > Issues and merge requests are tracked there. The GitHub copy is an automated mirror.
 
-On NixOS, updating one package means updating everything. `cheni` fixes
-this: check, select, and apply updates **per-package** — fully integrated
-with your flake configuration.
+## What cheni is
+
+A personal tool that adds three things on top of `nh`:
+
+1. **Per-package version policy** — `cheni pin <pkg>` routes a
+   single package through `nixpkgs-latest` so it gets a *newer*
+   version than your stable `nixpkgs` provides. `cheni freeze
+   <pkg>` does the inverse: locks a package at its current
+   `nixpkgs` revision while everything else moves on.
+2. **Upstream awareness** — Repology integration tells you when
+   upstream has shipped newer than what your `nixpkgs` ships, even
+   for packages you haven't named in your modules. `cheni check`
+   for the user-named packages, `cheni check --pending` for the
+   closure-level dry-run that surfaces kernel + base updates too.
+3. **Cross-context wrappers** — every flow that already works
+   through `nh` (build, rollback, history, diff, search) gains a
+   small layer that surfaces what `nh` cannot see by construction:
+   active pins/freezes, policy drift between generations,
+   pin-state at the moment a generation was built, etc.
+
+## What cheni is not
+
+- **Not a replacement for `nh`.** cheni shells out to `nh os
+  switch` for every rebuild — the actual NixOS work happens there.
+  cheni adds context, never reimplements it.
+- **Not a community tool.** It's packaged as a flake for
+  reproducibility, not because it's aiming for adoption. No PRs
+  upstream, no roadmap negotiation with the broader ecosystem.
+- **Not a fork of `nh`.** Considered, rejected (2026-04-25): the
+  maintenance burden of tracking upstream `nh` doesn't pay off
+  for a single-user tool, and the integration wins would be
+  marginal compared to what wrapping already achieves.
+- **Not a server / fleet tool.** Built for desktop NixOS where
+  rollback matters, interactivity is fine, and upgrades are
+  manual. Headless / parc / automation isn't a goal.
 
 ---
 
-## What it does
+## Example
+
+On NixOS, `nh os switch` rebuilds everything together — you can't
+move just one package forward without bumping the rest. cheni's
+`pin` + `freeze` machinery gives you that granularity without
+forking nixpkgs:
 
 ```
 $ cheni check

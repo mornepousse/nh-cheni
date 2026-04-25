@@ -3,6 +3,46 @@
 CLI Rust pour la gestion granulaire de paquets NixOS. Distribué via flake
 Nix. Mirror GitHub auto depuis GitLab.
 
+## Scope & non-goals
+
+cheni est un **outil personnel**. Son but : améliorer l'usage de
+NixOS *à mon niveau d'utilisateur*, pas concurrencer ou remplacer les
+projets existants.
+
+**Ce que cheni est** :
+- Une **couche d'augmentation au-dessus de nh** (qui reste l'outil
+  canonique de rebuild). cheni shell-out à `nh os switch` et ajoute
+  les choses que nh ne sait pas voir.
+- Le porteur de **deux états que nh ignore** : pins (per-package
+  routing vers nixpkgs-latest) et freezes (per-package lock à un
+  rev nixpkgs).
+- Un client **Repology** pour répondre à "est-ce que upstream a
+  publié plus neuf que nixpkgs ?".
+- Un **layer cross-context** : history annotation, rollback drift
+  warning, search badges, diff policy header, build pre-flight,
+  check --pending — tous croisent l'état pins/freezes/Repology
+  avec les flows de nh.
+
+**Ce que cheni n'est PAS** (et ne doit pas devenir) :
+- ❌ Pas un **fork de nh**. Discussion explicite session 2026-04-25 :
+  rejeté. Sans contribution upstream possible (workflow IA), le
+  choix réel est entre wrapper (statu quo, fragilité parsing
+  acceptée) et fork-and-freeze (lourd). Wrapper retenu.
+- ❌ Pas de **PRs upstream**. cheni évolue dans son repo, jamais
+  vers nh / nixpkgs / nvd.
+- ❌ Pas un **outil community / standalone**. cheni est packagé
+  comme flake mais pour usage perso, pas pour rayonner.
+- ❌ Pas un **rebuild tool**. Si un changement cheni demande de
+  réimplémenter ce que nh fait déjà, c'est un signal d'arrêt — la
+  bonne réponse est "wrapper plus mince" ou "feature reportée",
+  pas "réécrire la roue".
+- ❌ Pas un **serveur tool**. Cible = desktop NixOS (rollback
+  critique, interactivité tolérée, upgrades réguliers manuels).
+
+**Quand un changement cheni semble pousser dans une de ces
+directions interdites, c'est un signal de remettre en question le
+changement, pas de violer le scope.**
+
 ## Repo
 - **Origin** : https://gitlab.com/harrael/cheni
 - **Mirror** : https://github.com/mornepousse/cheni (push mirror via GitLab UI)
