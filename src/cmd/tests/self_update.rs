@@ -122,3 +122,67 @@ fn format_elapsed_over_a_minute() {
     assert_eq!(format_elapsed(std::time::Duration::from_secs(60)), "1m00s");
     assert_eq!(format_elapsed(std::time::Duration::from_secs(125)), "2m05s");
 }
+
+// --- bump_cheni_pin_in_flake_text ---
+
+#[test]
+fn bump_pin_replaces_simple_version() {
+    let input = r#"{
+  inputs.cheni = {
+    url = "gitlab:harrael/cheni/v0.4.1";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+}
+"#;
+    let (out, changed) = bump_cheni_pin_in_flake_text(input, "v0.5.1");
+    assert!(changed);
+    assert!(out.contains(r#"url = "gitlab:harrael/cheni/v0.5.1";"#));
+    assert!(!out.contains("v0.4.1"));
+}
+
+#[test]
+fn bump_pin_preserves_owner_for_forks() {
+    // A fork at gitlab:somefork/cheni still gets bumped — the regex
+    // captures the owner part rather than hard-coding `harrael`.
+    let input = r#"url = "gitlab:somefork/cheni/v0.4.1";"#;
+    let (out, changed) = bump_cheni_pin_in_flake_text(input, "v0.5.1");
+    assert!(changed);
+    assert_eq!(out, r#"url = "gitlab:somefork/cheni/v0.5.1";"#);
+}
+
+#[test]
+fn bump_pin_handles_pre_release_suffixes() {
+    // `v0.1.0-beta` shape used during the alpha cycle. Both source and
+    // target may carry a suffix; the substitution rewrites the whole
+    // version segment.
+    let input = r#"url = "gitlab:harrael/cheni/v0.1.0-beta";"#;
+    let (out, changed) = bump_cheni_pin_in_flake_text(input, "v0.2.0");
+    assert!(changed);
+    assert_eq!(out, r#"url = "gitlab:harrael/cheni/v0.2.0";"#);
+}
+
+#[test]
+fn bump_pin_returns_unchanged_when_no_match() {
+    // User uses a branch tracking pin (no version segment) — nothing
+    // to substitute, but the call must succeed without modifying.
+    let input = r#"url = "gitlab:harrael/cheni";"#;
+    let (out, changed) = bump_cheni_pin_in_flake_text(input, "v0.5.1");
+    assert!(!changed);
+    assert_eq!(out, input);
+}
+
+#[test]
+fn bump_pin_does_not_touch_unrelated_urls() {
+    // Mid-file mention of another flake input that happens to also
+    // pin a version must be left alone.
+    let input = r#"
+inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+inputs.cheni.url = "gitlab:harrael/cheni/v0.4.1";
+inputs.zen-browser.url = "github:0xc000022070/zen-browser-flake/v1.0.0";
+"#;
+    let (out, changed) = bump_cheni_pin_in_flake_text(input, "v0.5.1");
+    assert!(changed);
+    assert!(out.contains(r#"gitlab:harrael/cheni/v0.5.1"#));
+    assert!(out.contains(r#"github:NixOS/nixpkgs/nixos-unstable"#));
+    assert!(out.contains(r#"github:0xc000022070/zen-browser-flake/v1.0.0"#));
+}

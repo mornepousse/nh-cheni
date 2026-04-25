@@ -201,6 +201,100 @@ async fn fetch_signature_text(client: &reqwest::Client, url: &str) -> Result<Str
     String::from_utf8(bytes).context("signature file is not valid UTF-8")
 }
 
+/// GitLab API endpoint listing the most-recent cheni tags. 20 entries
+/// is well above any realistic gap between the user's pin and the
+/// current latest, while staying small enough to fit in one cheap
+/// request.
+const GITLAB_TAGS_URL: &str =
+    "https://gitlab.com/api/v4/projects/harrael%2Fcheni/repository/tags?per_page=20";
+
+/// Query GitLab for the latest released cheni tag.
+///
+/// Filters the most-recent 20 tags down to release-shaped names
+/// (`vX.Y.Z` or `vX.Y.Z-suffix`) and returns the highest one by
+/// version comparison. `Err` on HTTP failures or an empty release
+/// set — callers fall back to "leave the current pin alone" rather
+/// than blowing up self-update for a transient API hiccup.
+pub async fn latest_release_tag() -> Result<String> {
+    let client = reqwest::Client::builder()
+        .timeout(http::http_timeout())
+        .user_agent(concat!("cheni/", env!("GIT_DESCRIBE")))
+        .build()
+        .context("building HTTP client")?;
+
+    let resp = client
+        .get(GITLAB_TAGS_URL)
+        .send()
+        .await
+        .context("querying GitLab tags API")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("GitLab tags API returned HTTP {}", resp.status());
+    }
+    let body = resp.text().await.context("reading tags response body")?;
+    pick_latest_tag(&body)
+}
+
+/// Pure half of `latest_release_tag` — pick the highest release tag
+/// from a JSON tag-list payload. Extracted so the version-picking
+/// logic is tested with hand-rolled fixtures rather than a live API.
+pub(crate) fn pick_latest_tag(body: &str) -> Result<String> {
+    let tags: serde_json::Value =
+        serde_json::from_str(body).context("parsing GitLab tags response")?;
+    let arr = tags
+        .as_array()
+        .ok_or_else(|| anyhow!("GitLab tags response is not a JSON array"))?;
+
+    let mut candidates: Vec<&str> = arr
+        .iter()
+        .filter_map(|t| t.get("name").and_then(|n| n.as_str()))
+        .filter(|n| is_release_tag(n))
+        .collect();
+    if candidates.is_empty() {
+        anyhow::bail!("no release-shaped tags returned by GitLab");
+    }
+
+    // Highest-version-first ordering, with an explicit tie-break that
+    // prefers stable (no `-suffix`) over pre-release at the same
+    // numeric: if v0.5.0 and v0.5.0-rc1 both ship, self-update should
+    // recommend the GA tag, not the release candidate.
+    candidates.sort_by(|a, b| {
+        let va = crate::version::parse::parse_version(a.strip_prefix('v').unwrap_or(a));
+        let vb = crate::version::parse::parse_version(b.strip_prefix('v').unwrap_or(b));
+        vb.cmp(&va).then_with(|| {
+            match (has_prerelease_suffix(a), has_prerelease_suffix(b)) {
+                (false, true) => std::cmp::Ordering::Less,
+                (true, false) => std::cmp::Ordering::Greater,
+                _ => a.cmp(b),
+            }
+        })
+    });
+    Ok(candidates[0].to_string())
+}
+
+/// True when a release tag carries a pre-release suffix (`-beta`,
+/// `-rc1`, …). Used as the tie-breaker in `pick_latest_tag`.
+fn has_prerelease_suffix(tag: &str) -> bool {
+    tag.strip_prefix('v').unwrap_or(tag).contains('-')
+}
+
+/// True for a tag name shaped like a cheni release.
+///
+/// Accepts `vX.Y.Z` and `vX.Y.Z-<suffix>` (alpha/beta/rc/etc.). Used
+/// to filter the GitLab tag list so non-release tags (preview branches,
+/// debug markers) don't bubble up as the "latest" candidate.
+pub fn is_release_tag(name: &str) -> bool {
+    let s = match name.strip_prefix('v') {
+        Some(s) => s,
+        None => return false,
+    };
+    let main_part = s.split_once('-').map(|(p, _)| p).unwrap_or(s);
+    let parts: Vec<&str> = main_part.split('.').collect();
+    parts.len() == 3
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
 #[cfg(test)]
 #[path = "tests/release.rs"]
 mod tests;

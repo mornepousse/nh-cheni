@@ -18,6 +18,17 @@ semver.
   case fell through to two unrelated false-positive matches
   (`aes_generic`, generic systemd-service-failed) which weren't
   actionable.
+- **`cheni self-update` now bumps tag-pinned cheni inputs**. When
+  the user's `flake.nix` pins cheni at a specific release tag
+  (`gitlab:harrael/cheni/vX.Y.Z`), self-update queries GitLab for
+  the latest release and rewrites the URL to the new tag before
+  running `nix flake update cheni`. Previously, `nix flake update`
+  alone re-resolved the same tag and reported "already up to
+  date", so tag-pinned setups stayed stuck on the original
+  version forever. Branch-tracking pins (`gitlab:harrael/cheni`,
+  `…/main`) are unaffected — they bump on `nix flake update` as
+  before. Anti-downgrade guard: the bump only fires when the
+  reported latest is strictly newer than the current pin.
 
 ## [0.5.1] — 2026-04-25
 

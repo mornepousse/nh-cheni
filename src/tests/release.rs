@@ -104,3 +104,85 @@ fn strip_dev_suffix_handles_unknown_fallback() {
     // try to verify against a tag named "unknown".
     assert_eq!(strip_dev_suffix("unknown"), "unknown");
 }
+
+// --- is_release_tag / pick_latest_tag ---
+
+#[test]
+fn is_release_tag_accepts_bare_semver() {
+    assert!(is_release_tag("v0.5.1"));
+    assert!(is_release_tag("v10.20.30"));
+    assert!(is_release_tag("v0.0.0"));
+}
+
+#[test]
+fn is_release_tag_accepts_pre_release_suffix() {
+    assert!(is_release_tag("v0.1.0-beta"));
+    assert!(is_release_tag("v1.0.0-rc1"));
+    assert!(is_release_tag("v2.0.0-alpha.2"));
+}
+
+#[test]
+fn is_release_tag_rejects_non_release_shapes() {
+    assert!(!is_release_tag("main"));
+    assert!(!is_release_tag("0.5.1"));     // missing leading 'v'
+    assert!(!is_release_tag("v0.5"));      // 2-segment
+    assert!(!is_release_tag("v0.5.1.2"));  // 4-segment
+    assert!(!is_release_tag("vX.Y.Z"));    // non-numeric
+    assert!(!is_release_tag(""));
+}
+
+#[test]
+fn pick_latest_tag_orders_by_version_descending() {
+    // Mixed shipping order — the API may return tags in date order,
+    // but we pick the highest version regardless.
+    let body = serde_json::json!([
+        {"name": "v0.4.0"},
+        {"name": "v0.5.1"},
+        {"name": "v0.5.0"},
+        {"name": "v0.4.1"},
+    ])
+    .to_string();
+    assert_eq!(pick_latest_tag(&body).unwrap(), "v0.5.1");
+}
+
+#[test]
+fn pick_latest_tag_filters_out_non_release_shapes() {
+    // GitLab also lists branch-shaped or feature-marker tags. They
+    // must not bubble up as the "latest".
+    let body = serde_json::json!([
+        {"name": "preview-experimental"},
+        {"name": "v0.5.0"},
+        {"name": "old-snapshot"},
+    ])
+    .to_string();
+    assert_eq!(pick_latest_tag(&body).unwrap(), "v0.5.0");
+}
+
+#[test]
+fn pick_latest_tag_prefers_stable_over_prerelease_at_same_version() {
+    // `v0.5.0` and `v0.5.0-rc1` both parse to `[0, 5, 0]`. The
+    // tie-breaker should put the stable one on top so we don't
+    // recommend a release candidate over its own GA tag.
+    let body = serde_json::json!([
+        {"name": "v0.5.0-rc1"},
+        {"name": "v0.5.0"},
+    ])
+    .to_string();
+    assert_eq!(pick_latest_tag(&body).unwrap(), "v0.5.0");
+}
+
+#[test]
+fn pick_latest_tag_errors_when_no_release_tag_present() {
+    let body = serde_json::json!([
+        {"name": "preview-1"},
+        {"name": "scratch-branch"},
+    ])
+    .to_string();
+    assert!(pick_latest_tag(&body).is_err());
+}
+
+#[test]
+fn pick_latest_tag_errors_on_non_array_payload() {
+    assert!(pick_latest_tag(r#"{"oops": "object instead of array"}"#).is_err());
+    assert!(pick_latest_tag("not even json").is_err());
+}
