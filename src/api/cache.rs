@@ -10,14 +10,24 @@ use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 /// How long cached results stay valid (in seconds).
-const CACHE_TTL_SECS: u64 = 3600; // 1 hour
+// `pub(crate)` so tests in the sibling `tests/cache.rs` can assert on it
+// without hardcoding the magic number, while keeping it unexported to
+// consumers outside this crate.
+pub(crate) const CACHE_TTL_SECS: u64 = 3600; // 1 hour
 
 /// Cached API results on disk.
+///
+/// Both fields carry `#[serde(default)]` so that older or manually-crafted
+/// cache files that omit a field still deserialise successfully instead of
+/// crashing the load path. Missing `timestamp` becomes 0 (immediately
+/// expired), missing `entries` becomes an empty map.
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Cache {
     /// When the cache was last written (unix timestamp).
+    #[serde(default)]
     pub timestamp: u64,
     /// Package name → cached result.
+    #[serde(default)]
     pub entries: HashMap<String, CachedPackage>,
 }
 
@@ -37,7 +47,8 @@ fn cache_path() -> PathBuf {
 }
 
 /// Current unix timestamp in seconds.
-fn now_secs() -> u64 {
+// `pub(crate)` so tests can call it directly without touching the filesystem.
+pub(crate) fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

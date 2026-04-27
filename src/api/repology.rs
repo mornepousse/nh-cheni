@@ -255,7 +255,20 @@ async fn collect_and_merge(
 ) -> (Vec<PackageLookup>, cache::Cache) {
     use std::sync::atomic::Ordering;
     let mut fresh = Vec::new();
-    let mut new_cache = cache::new_with_timestamp();
+    // Preserve the prior timestamp when the cache was valid (non-zero) so that
+    // a partial run — a few misses among many hits — does not silently extend
+    // the TTL for every already-cached entry. Only assign a fresh timestamp
+    // when prior.timestamp is 0, which is what `cache::load` returns for an
+    // empty or expired cache. This prevents a single permanently-Unknown
+    // package from infinitely deferring expiry for the rest of the cache.
+    let mut new_cache = if prior.timestamp == 0 {
+        cache::new_with_timestamp()
+    } else {
+        cache::Cache {
+            timestamp: prior.timestamp,
+            entries: std::collections::HashMap::new(),
+        }
+    };
     for (name, entry) in &prior.entries {
         new_cache.entries.insert(name.clone(), entry.clone());
     }
