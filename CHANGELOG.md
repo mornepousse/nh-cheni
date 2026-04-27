@@ -5,6 +5,26 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## Unreleased
+
+### Added
+- **`cheni doctor` gains three checks** that close gaps surfaced
+  during the v0.5.0–v0.5.6 cycle:
+  - **nixpkgs floor age** — tighter thresholds than the generic
+    "input > 30 days" check (3 days = "due", anything past = warn).
+    Stale nixpkgs invalidates the assumption of every other check
+    that says "you're up to date", so it gets its own line near the
+    top of the report.
+  - **flake.lock dirty** — same trap surfaced by `cheni upgrade`'s
+    preflight, escalated to a doctor-level check so a passive
+    "is my setup healthy?" run catches it before the next rebuild
+    silently applies all the pending bumps.
+  - **cheni release available** — sync read of the cache filled by
+    `cheni check`'s async self-update probe. Closes the loop
+    started in v0.5.3 (check) / v0.5.4 (status): now all three
+    "where am I" surfaces (check, status, doctor) reflect the same
+    answer with no extra network calls.
+
 ## [0.5.6] — 2026-04-27
 
 ### Added

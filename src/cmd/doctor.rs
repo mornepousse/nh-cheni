@@ -57,9 +57,12 @@ fn print_doctor_header(nix_config: &config::NixConfig) {
 /// a couple (`check_pins_valid`, `check_flake_input_freshness`) fan out
 /// to multiple results and use `extend` instead of `push`.
 fn run_all_checks(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
-    let mut checks = Vec::new();
-    checks.push(check_nixpkgs_latest_input(flake_dir));
-    checks.push(check_pins_file_exists(flake_dir));
+    let mut checks = vec![
+        check_nixpkgs_latest_input(flake_dir),
+        check_nixpkgs_floor_age(flake_dir),
+        check_dirty_lock(flake_dir),
+        check_pins_file_exists(flake_dir),
+    ];
     checks.extend(check_pins_valid(flake_dir)?);
     checks.extend(check_freezes_valid(flake_dir)?);
     checks.extend(check_flake_input_freshness(flake_dir));
@@ -68,6 +71,7 @@ fn run_all_checks(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
     checks.push(check_generations());
     checks.push(check_nh_installed());
     checks.push(check_cache());
+    checks.push(check_self_update_available(flake_dir));
     checks.push(check_overlay_resilience(flake_dir));
     Ok(checks)
 }
@@ -382,6 +386,150 @@ fn check_obsolete_pins(flake_dir: &std::path::Path) -> CheckResult {
             message: format!("{} pin(s) obsolete — nixpkgs caught up", obsolete),
             hint: Some("Run 'cheni clean' to remove them.".to_string()),
         }
+    }
+}
+
+/// Surface the age of the `nixpkgs` flake input — the foundation
+/// for everything else that gets checked.
+///
+/// Tighter thresholds than the generic `check_flake_input_freshness`
+/// (which uses 30 days for any input). nixpkgs-unstable typically
+/// bumps daily, so 3+ days is "due", 7+ is "overdue" — and a stale
+/// nixpkgs invalidates the assumption of every other check that says
+/// "you're up to date".
+fn check_nixpkgs_floor_age(flake_dir: &std::path::Path) -> CheckResult {
+    let Some(input) = flake::read_input_by_name(flake_dir, "nixpkgs") else {
+        return CheckResult {
+            severity: Severity::Warning,
+            name: "nixpkgs floor".to_string(),
+            message: "not found in flake.lock".to_string(),
+            hint: Some(
+                "Make sure flake.nix declares an `inputs.nixpkgs.url = ...` entry."
+                    .to_string(),
+            ),
+        };
+    };
+    let days = input.days_old;
+    let label = match days {
+        0 => "today".to_string(),
+        1 => "1 day ago".to_string(),
+        n => format!("{} days ago", n),
+    };
+    if days < 3 {
+        CheckResult {
+            severity: Severity::Ok,
+            name: "nixpkgs floor".to_string(),
+            message: format!("fresh ({})", label),
+            hint: None,
+        }
+    } else {
+        CheckResult {
+            severity: Severity::Warning,
+            name: "nixpkgs floor".to_string(),
+            message: format!("{} — comparison floor is drifting from upstream", label),
+            hint: Some("Run 'cheni upgrade' to advance the floor.".to_string()),
+        }
+    }
+}
+
+/// Detect uncommitted changes in `flake.lock` — same trap surfaced
+/// by `cheni upgrade`'s preflight, escalated to a doctor-level check
+/// so a passive "is my setup healthy?" run catches it before the
+/// next rebuild silently applies all the pending bumps.
+///
+/// Skipped silently when the flake dir isn't inside a git work tree
+/// — manual flake setups without git aren't broken, just outside
+/// the warning's purview.
+fn check_dirty_lock(flake_dir: &std::path::Path) -> CheckResult {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--name-only", "flake.lock"])
+        .current_dir(flake_dir)
+        .output();
+    match output {
+        Ok(o) if o.status.success() && o.stdout.is_empty() => CheckResult {
+            severity: Severity::Ok,
+            name: "flake.lock".to_string(),
+            message: "clean (no uncommitted changes)".to_string(),
+            hint: None,
+        },
+        Ok(o) if o.status.success() => CheckResult {
+            severity: Severity::Warning,
+            name: "flake.lock".to_string(),
+            message: "uncommitted input changes — next rebuild will apply them".to_string(),
+            hint: Some(
+                "`git diff flake.lock` to inspect, `git checkout flake.lock` to discard."
+                    .to_string(),
+            ),
+        },
+        _ => CheckResult {
+            severity: Severity::Ok,
+            name: "flake.lock".to_string(),
+            message: "not a git repo (skipped)".to_string(),
+            hint: None,
+        },
+    }
+}
+
+/// Compare the user's current cheni pin against the latest release
+/// reported by the on-disk cache (filled by `cheni check`'s
+/// async path). Sync read — doctor doesn't hit the network on its
+/// own, so the answer is only as fresh as the most recent
+/// `cheni check`. Skipped silently when the user pins a branch
+/// rather than a tag.
+fn check_self_update_available(flake_dir: &std::path::Path) -> CheckResult {
+    let current_tag = match super::self_update::read_cheni_tag(flake_dir) {
+        Ok(t) => t,
+        Err(_) => {
+            return CheckResult {
+                severity: Severity::Ok,
+                name: "cheni release".to_string(),
+                message: "could not determine current pin (skipped)".to_string(),
+                hint: None,
+            };
+        }
+    };
+    if !crate::release::is_release_tag(&current_tag) {
+        return CheckResult {
+            severity: Severity::Ok,
+            name: "cheni release".to_string(),
+            message: format!("tracking '{}' (not a tag — skipped)", current_tag),
+            hint: None,
+        };
+    }
+    let Some(latest) = crate::release::cached_latest_release_tag() else {
+        return CheckResult {
+            severity: Severity::Ok,
+            name: "cheni release".to_string(),
+            message: format!("on {} (cache empty — run 'cheni check' to refresh)", current_tag),
+            hint: None,
+        };
+    };
+    if latest == current_tag {
+        return CheckResult {
+            severity: Severity::Ok,
+            name: "cheni release".to_string(),
+            message: format!("on {} (latest)", current_tag),
+            hint: None,
+        };
+    }
+    let cur_v = crate::version::parse::parse_version(
+        current_tag.strip_prefix('v').unwrap_or(&current_tag),
+    );
+    let lat_v =
+        crate::version::parse::parse_version(latest.strip_prefix('v').unwrap_or(&latest));
+    if lat_v <= cur_v {
+        return CheckResult {
+            severity: Severity::Ok,
+            name: "cheni release".to_string(),
+            message: format!("on {} (ahead of cached latest {})", current_tag, latest),
+            hint: None,
+        };
+    }
+    CheckResult {
+        severity: Severity::Warning,
+        name: "cheni release".to_string(),
+        message: format!("{} available (you're on {})", latest, current_tag),
+        hint: Some("Run 'cheni self-update'.".to_string()),
     }
 }
 
