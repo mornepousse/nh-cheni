@@ -240,3 +240,15 @@ fn nix_search_args_flag_like_query_stays_after_separator() {
     let query_pos = args.iter().position(|&a| a == "--expr").expect("query must be present");
     assert!(dd_pos < query_pos, "-- must come before the flag-like query");
 }
+
+#[test]
+fn nix_search_args_keeps_json_flag_before_separator() {
+    // Regression: `--json` must stay BEFORE the `--` separator, otherwise
+    // nix treats it as a positional regex pattern, the search returns
+    // empty, and the parent command bails with exit 1. See commit history
+    // for the v0.5.7 incident where `cheni search` was silently broken.
+    let args = nix_search_args("firefox");
+    let dd_pos = args.iter().position(|&a| a == "--").expect("-- must be present");
+    let json_pos = args.iter().position(|&a| a == "--json").expect("--json must be present");
+    assert!(json_pos < dd_pos, "--json must come before -- so nix treats it as a flag");
+}

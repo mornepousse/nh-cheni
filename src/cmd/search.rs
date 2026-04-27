@@ -238,11 +238,12 @@ fn repology_differs(version: &str, upstream: &str) -> bool {
     crate::version::compare::compare_versions(&v, &u) != crate::version::compare::VersionDiff::Equal
 }
 
-/// Build the argument list for `nix search`. The `--` separator ensures
-/// that a query starting with `--` (e.g. `--expr`) is always treated as
-/// a positional argument by nix, never as a flag.
+/// Build the argument list for `nix search`. All real flags (`--json`)
+/// stay BEFORE the `--` separator; everything after `--` is positional.
+/// This way a query starting with `--` (e.g. `--expr`) lands as the
+/// search regex, never as a flag — without poisoning our own `--json`.
 fn nix_search_args(query: &str) -> Vec<&str> {
-    vec!["search", "nixpkgs", "--", query, "--json"]
+    vec!["search", "nixpkgs", "--json", "--", query]
 }
 
 /// Shell out to `nix search nixpkgs <query> --json` and parse the
