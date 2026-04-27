@@ -5,7 +5,7 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
-## Unreleased
+## [0.5.7] — 2026-04-27
 
 ### Added
 - **Dynamic shell completion (zsh)**. `cheni completion zsh`
