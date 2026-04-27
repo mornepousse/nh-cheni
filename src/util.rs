@@ -118,6 +118,20 @@ pub fn format_ymd_hm(secs: u64) -> String {
     format!("{:04}-{:02}-{:02} {:02}:{:02}", y, m, d, hours, minutes)
 }
 
+/// Format a `Duration` as `MmSs` or `Ss`. Single source of truth
+/// for the elapsed-time tail every long-running command prints
+/// (`cheni build`, `cheni upgrade`, `cheni rollback`, `cheni self-update`).
+/// Identical implementations had drifted into four cmd files; centralising
+/// keeps the format from drifting again.
+pub fn format_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 /// Format a number of days as a compact "ago" label.
 ///
 /// Single source of truth across the cheni surface (`status`,

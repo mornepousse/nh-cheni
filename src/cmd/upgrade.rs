@@ -1146,15 +1146,9 @@ impl UpgradeContext {
     }
 }
 
-/// Format `Duration` as `MmSs` or `Ss` — just the live-log feel, not
-/// sub-second precision.
+/// Local alias to the shared `crate::util::format_elapsed`.
 fn format_elapsed(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs >= 60 {
-        format!("{}m{:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{}s", secs)
-    }
+    crate::util::format_elapsed(d)
 }
 
 /// Match each dry-run entry against the currently-installed set,

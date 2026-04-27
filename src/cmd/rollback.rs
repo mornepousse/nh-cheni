@@ -119,15 +119,9 @@ fn print_policy_drift(target: &Generation, flake_dir: &Path) {
     println!();
 }
 
-/// Format `Duration` as `MmSs` or `Ss`. Matches the helper used in the
-/// other long-running commands.
+/// Local alias to the shared `crate::util::format_elapsed`.
 fn format_elapsed(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs >= 60 {
-        format!("{}m{:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{}s", secs)
-    }
+    crate::util::format_elapsed(d)
 }
 
 /// Pick the target generation from the listing.

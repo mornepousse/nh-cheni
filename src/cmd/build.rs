@@ -144,15 +144,10 @@ fn cap_names(items: &[String], cap: usize) -> String {
     format!("{} (+{} more)", head.join(", "), items.len() - cap)
 }
 
-/// Format `Duration` as `MmSs` or `Ss`. Matches the helper used by
-/// `cheni upgrade` / `update` / `self-update`.
+/// Local alias to the shared `crate::util::format_elapsed` so the
+/// call sites in this module keep their narrow naming.
 fn format_elapsed(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs >= 60 {
-        format!("{}m{:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{}s", secs)
-    }
+    crate::util::format_elapsed(d)
 }
 
 /// Spawn `nh os switch <flake>`, stream stderr to the user line-by-line

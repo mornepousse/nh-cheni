@@ -85,15 +85,9 @@ fn print_separator() {
     println!("{}", "───────────────────────────────────────────".dimmed());
 }
 
-/// Format `Duration` as `MmSs` or `Ss`. Matches the helper in `upgrade`
-/// / `update` — kept local so each command stays self-contained.
+/// Local alias to the shared `crate::util::format_elapsed`.
 fn format_elapsed(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs >= 60 {
-        format!("{}m{:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{}s", secs)
-    }
+    crate::util::format_elapsed(d)
 }
 
 /// Read `cheni`'s `lastModified` timestamp from flake.lock. Returns 0

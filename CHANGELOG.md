@@ -8,6 +8,21 @@ semver.
 ## Unreleased
 
 ### Changed
+- **`format_elapsed` consolidated** in `crate::util` — four
+  identical copies in `cmd/build.rs`, `cmd/upgrade.rs`,
+  `cmd/rollback.rs`, `cmd/self_update.rs` collapsed to thin
+  aliases over the shared helper. Same `Ss` / `MmSs` output, same
+  semantics, single source of truth.
+
+### Added
+- **`cheni history` cross-reference tip** — the footer now ends
+  with `Tip: rollback with \`cheni rollback <N>\` or compare two
+  with \`cheni diff <from> <to>\`.` so the natural follow-up
+  actions are one line away from the gen list, mirroring the
+  search/why discovery-action pattern from earlier in this
+  Unreleased batch.
+
+### Changed
 - **Marker glyphs unified** across the cheni surface. The bare `!`
   marker drifted into seven call sites where it was used
   inconsistently for both warnings (yellow) and errors (red),

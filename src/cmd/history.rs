@@ -409,6 +409,11 @@ fn print_history_footer(total: usize, shown: usize, full: bool) {
                 .dimmed()
         );
     }
+    println!(
+        "{}",
+        "Tip: rollback with `cheni rollback <N>` or compare two with `cheni diff <from> <to>`."
+            .dimmed()
+    );
 }
 
 /// Truncate `s` so that, prefixed by `indent` spaces, it fits the terminal
