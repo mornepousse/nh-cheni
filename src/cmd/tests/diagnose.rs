@@ -13,8 +13,9 @@ fn unrelated_log_yields_no_findings() {
 
 #[test]
 fn detects_aes_generic_kernel_issue() {
-    let log = "root module: aes_generic\n\
-               modprobe: FATAL: Module aes_generic not found in directory /nix/store/.../7.0.0\n\
+    // The real kernel-module-missing signal — modprobe writes exactly this phrase.
+    let log = "modprobe: FATAL: module 'aes_generic' not found in directory \
+               /nix/store/.../7.0.0\n\
                error: Failed to build linux-7.0-modules-shrunk.drv";
     let hits = find_issues(log);
     assert_eq!(hits.len(), 1);
@@ -76,7 +77,9 @@ fn match_is_case_insensitive() {
 fn duplicate_pattern_in_log_reports_once() {
     // A pattern can appear many times in a long log (e.g. retries).
     // We only care that at least one occurrence is surfaced.
-    let log = "aes_generic not found\naes_generic not found\naes_generic not found";
+    let log = "module 'aes_generic' not found\n\
+               module 'aes_generic' not found\n\
+               module 'aes_generic' not found";
     let hits = find_issues(log);
     assert_eq!(hits.len(), 1);
 }
@@ -372,4 +375,326 @@ fn detects_fd_exhaustion() {
     let hits = find_issues(log);
     assert_eq!(hits.len(), 1);
     assert!(hits[0].title.contains("file-descriptor"));
+}
+
+// ── aes_generic resserrement (Gap 1) ────────────────────────────────────────
+
+#[test]
+fn aes_generic_does_not_fire_on_pure_test_failure_log() {
+    // A log that only mentions a Rust test failure — the word "aes_generic"
+    // appears nowhere, so the resserred matcher must stay silent.
+    let log = "test result: FAILED. 7 passed; 4 failed; 0 ignored; 0 measured; \
+               0 filtered out; finished in 0.01s\n\
+               error: test failed, to rerun pass `--test smoke`\n\
+               error: Cannot build 'cheni-0.5.8.drv'.\n\
+               Reason: builder failed with exit code 101.";
+    let hits = find_issues(log);
+    // Only the test-panic finding should fire, not aes_generic.
+    assert!(
+        hits.iter().all(|f| !f.title.contains("aes_generic")),
+        "aes_generic finding fired on a pure test-failure log"
+    );
+}
+
+#[test]
+fn aes_generic_does_not_fire_on_bare_word_mention() {
+    // Logs that mention the string "aes_generic" but not in a
+    // module-not-found context (e.g. a comment in an NixOS config
+    // appearing in a build log trace) must not trigger the finding.
+    let log = "trace: evaluating 'boot.initrd.availableKernelModules' \
+               value contains \"aes_generic\"";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("aes_generic")),
+        "aes_generic finding fired on a bare-word mention with no not-found signal"
+    );
+}
+
+// ── Rust checkPhase test panic (Gap 2) ──────────────────────────────────────
+
+#[test]
+fn detects_rust_test_panic_in_checkphase() {
+    // Realistic snippet from the v0.5.8 build failure.
+    let log = "running 11 tests\n\
+               test smoke::version_flag ... ok\n\
+               test smoke::help_flag ... ok\n\
+               test smoke::hostname_lookup ... FAILED\n\
+               \n\
+               failures:\n\
+               \n\
+               ---- smoke::hostname_lookup stdout ----\n\
+               thread 'smoke::hostname_lookup' panicked at 'hostname binary not found', \
+               tests/smoke.rs:42\n\
+               \n\
+               test result: FAILED. 7 passed; 4 failed; 0 ignored; 0 measured; \
+               0 filtered out; finished in 0.01s\n\
+               error: test failed, to rerun pass `--test smoke`\n\
+               error: Cannot build 'cheni-0.5.8.drv'.\n\
+               Reason: builder failed with exit code 101.";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().any(|f| f.title.contains("Rust test panicked")),
+        "test-panic finding did not fire on a realistic checkPhase failure log"
+    );
+}
+
+// ── Phase-aware refactor: scoped fixtures ───────────────────────────────────
+
+/// The v0.5.8 failure that motivated the refactor: cheni's own
+/// checkPhase panicked on `tests/smoke.rs`, the build aborted, and
+/// the rendering of the log triggered a spurious `aes_generic` hint
+/// in production.
+const LOG_V058_FAILURE: &str = "\
+cheni> running 11 tests
+cheni> test history_list_exits_zero_and_shows_header ... FAILED
+cheni> test doctor_on_minimal_flake_exits_zero ... FAILED
+cheni>
+cheni> test result: FAILED. 7 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+cheni>
+cheni> error: test failed, to rerun pass `--test smoke`
+error: Cannot build 'cheni-v0.5.8.drv'.
+       Reason: builder failed with exit code 101.
+       Output paths:
+         cheni-v0.5.8
+";
+
+#[test]
+fn v058_log_fires_only_test_panic_not_aes_generic() {
+    // The real reproduction: even if the word `aes_generic` had
+    // appeared somewhere in this log (e.g. an unrelated trace), the
+    // Build-scoped finding must not fire — the failing derivation's
+    // panic is in checkPhase, not buildPhase.
+    let log_with_red_herring = format!(
+        "{}\n\
+         trace: noting that boot.initrd.availableKernelModules contains aes_generic\n",
+        LOG_V058_FAILURE
+    );
+    let hits = find_issues(&log_with_red_herring);
+    let titles: Vec<&str> = hits.iter().map(|f| f.title).collect();
+    assert!(
+        titles.iter().any(|t| t.contains("Rust test panicked")),
+        "expected the Rust-test-panic finding, got {:?}",
+        titles
+    );
+    assert!(
+        titles.iter().all(|t| !t.contains("aes_generic")),
+        "aes_generic finding must NOT fire on a log whose failure is a test panic; got {:?}",
+        titles
+    );
+}
+
+/// A real kernel-modules-shrunk failure: the literal modprobe error
+/// lands inside the failing derivation's buildPhase.
+const LOG_AES_GENERIC_REAL: &str = "\
+nixos-system> @nix { \"action\": \"setPhase\", \"phase\": \"buildPhase\" }
+nixos-system> buildPhase
+nixos-system> modprobe: FATAL: module 'aes_generic' not found in directory /nix/store/abc-linux-7.0.0
+nixos-system> error: Failed to build linux-7.0-modules-shrunk.drv
+error: builder for '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-nixos-system.drv' failed with exit code 1
+";
+
+#[test]
+fn aes_generic_fires_on_real_kernel_module_log() {
+    let hits = find_issues(LOG_AES_GENERIC_REAL);
+    assert!(
+        hits.iter().any(|f| f.title.contains("aes_generic")),
+        "aes_generic finding did not fire on a real modules-shrunk failure"
+    );
+}
+
+/// A log where the literal string `aes_generic` appears only in an
+/// eval-time trace (debug listing of kernel modules), with no
+/// modprobe / build-phase context. The Build-scoped finding must
+/// stay silent.
+const LOG_AES_GENERIC_IN_EVAL_TRACE: &str = "\
+evaluating flake outputs...
+trace: kernel modules considered: [\"aes\" \"aes_generic\" \"crypto_blkcipher\"]
+warning: Git tree '/home/mae/nixos-config' is dirty
+";
+
+#[test]
+fn aes_generic_silent_in_pure_eval_trace() {
+    let hits = find_issues(LOG_AES_GENERIC_IN_EVAL_TRACE);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("aes_generic")),
+        "aes_generic finding fired on an eval-only trace mentioning the word"
+    );
+}
+
+/// Pre-switch check kicked in during activation. This is the
+/// activation-scope canonical case.
+const LOG_PRE_SWITCH_REFUSED: &str = "\
+building Nix...
+building the system configuration...
+activating the configuration...
+Pre-switch check: refusing to switch the running system because dbus is moving to dbus-broker.
+Switching into this system is not recommended; please reboot.
+";
+
+#[test]
+fn pre_switch_refused_log_fires_activation_findings() {
+    let hits = find_issues(LOG_PRE_SWITCH_REFUSED);
+    assert!(
+        hits.iter().any(|f| f.title.contains("live switch refused")),
+        "Pre-switch refused finding did not fire on its canonical log"
+    );
+}
+
+#[test]
+fn failing_derivation_phase_strict_when_anchor_missing() {
+    // Architecture test from the spec: with `derivation_a>` carrying
+    // the test failure, an `error: Cannot build 'derivation_a.drv'`
+    // anchor SHOULD allow the FailingDerivationPhase finding to
+    // fire. Without that anchor, it must NOT fire — even though the
+    // panic phrase is right there.
+    let log_with_anchor = "\
+derivation_a> @nix { \"action\": \"setPhase\", \"phase\": \"checkPhase\" }
+derivation_a> running 3 tests
+derivation_a> test result: FAILED. 0 passed; 3 failed
+derivation_b> all good
+error: Cannot build '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-derivation_a.drv'.
+";
+    let hits_with = find_issues(log_with_anchor);
+    assert!(
+        hits_with.iter().any(|f| f.title.contains("Rust test panicked")),
+        "test-panic finding must fire when failing-derivation anchor + checkPhase + nh prefix all line up"
+    );
+
+    let log_without_anchor = "\
+derivation_a> @nix { \"action\": \"setPhase\", \"phase\": \"checkPhase\" }
+derivation_a> running 3 tests
+derivation_a> test result: FAILED. 0 passed; 3 failed
+derivation_b> all good
+";
+    let hits_without = find_issues(log_without_anchor);
+    assert!(
+        hits_without
+            .iter()
+            .all(|f| !f.title.contains("Rust test panicked")),
+        "test-panic finding must NOT fire without an `error: Cannot build` anchor"
+    );
+}
+
+// ── Helper-level unit tests ─────────────────────────────────────────────────
+
+#[test]
+fn split_derivation_prefix_extracts_name_and_rest() {
+    let (name, rest) = super::split_derivation_prefix("cheni> running tests").unwrap();
+    assert_eq!(name, "cheni");
+    assert_eq!(rest, "running tests");
+}
+
+#[test]
+fn split_derivation_prefix_accepts_dotted_and_dashed_names() {
+    let (name, _) = super::split_derivation_prefix("linux-7.0-modules-shrunk> oops").unwrap();
+    assert_eq!(name, "linux-7.0-modules-shrunk");
+    let (name2, _) = super::split_derivation_prefix("foo.bar_baz+1> body").unwrap();
+    assert_eq!(name2, "foo.bar_baz+1");
+}
+
+#[test]
+fn split_derivation_prefix_rejects_non_prefix_lines() {
+    assert!(super::split_derivation_prefix("error: -> something").is_none());
+    assert!(super::split_derivation_prefix("plain text without a marker").is_none());
+    // A pure-numeric "prefix" (line numbers, pids) must be rejected.
+    assert!(super::split_derivation_prefix("12345> not a derivation").is_none());
+}
+
+#[test]
+fn extract_phase_recognises_each_phase_marker() {
+    use super::Phase;
+    assert_eq!(super::extract_phase("buildPhase"), Some(Phase::Build));
+    assert_eq!(super::extract_phase("checkPhase"), Some(Phase::Check));
+    assert_eq!(super::extract_phase("installPhase"), Some(Phase::Install));
+    assert_eq!(
+        super::extract_phase("activating the configuration..."),
+        Some(Phase::Activate)
+    );
+    assert_eq!(
+        super::extract_phase("Pre-switch check: refusing to switch"),
+        Some(Phase::Activate)
+    );
+    assert_eq!(
+        super::extract_phase("Updating flake inputs..."),
+        Some(Phase::Eval)
+    );
+    assert_eq!(
+        super::extract_phase("trying https://example.com/foo.tar.gz"),
+        Some(Phase::Fetch)
+    );
+    assert_eq!(super::extract_phase("ordinary chatter"), None);
+}
+
+#[test]
+fn find_failing_derivation_handles_cannot_build_anchor() {
+    let log = "lots of noise\n\
+               error: Cannot build '/nix/store/aaaabbbbccccddddeeeeffffgggghhhh-cheni-0.5.8.drv'.\n";
+    assert_eq!(super::find_failing_derivation(log), Some("cheni-0.5.8"));
+}
+
+#[test]
+fn find_failing_derivation_handles_builder_for_anchor() {
+    let log = "error: builder for '/nix/store/aaaabbbbccccddddeeeeffffgggghhhh-foo.drv' failed";
+    assert_eq!(super::find_failing_derivation(log), Some("foo"));
+}
+
+#[test]
+fn find_failing_derivation_returns_none_on_success_log() {
+    assert_eq!(
+        super::find_failing_derivation("everything is fine"),
+        None
+    );
+}
+
+#[test]
+fn parse_log_context_makes_phase_sticky_per_derivation() {
+    let log = "\
+foo> @nix { \"phase\": \"checkPhase\" }
+foo> checkPhase
+foo> running 3 tests
+foo> test result: FAILED.
+bar> hi from a different derivation
+foo> still in foo's checkphase
+";
+    let ctx = super::parse_log_context(log);
+    let foo_lines: Vec<_> = ctx
+        .lines
+        .iter()
+        .filter(|l| l.derivation == Some("foo"))
+        .collect();
+    assert!(
+        foo_lines
+            .iter()
+            .all(|l| l.phase == Some(super::Phase::Check)),
+        "every foo> line should inherit checkPhase: {:?}",
+        foo_lines.iter().map(|l| l.phase).collect::<Vec<_>>()
+    );
+    let bar_phase = ctx
+        .lines
+        .iter()
+        .find(|l| l.derivation == Some("bar"))
+        .and_then(|l| l.phase);
+    assert_eq!(
+        bar_phase, None,
+        "bar's stream had no phase marker yet; phase must not leak across derivations"
+    );
+}
+
+#[test]
+fn test_panic_finding_does_not_fire_on_clean_build() {
+    let log = "building '/nix/store/abc-cheni-0.5.8.drv'...\n\
+               running 11 tests\n\
+               test result: ok. 11 passed; 0 failed; 0 ignored\n\
+               all tests passed\n\
+               /nix/store/xyz-cheni-0.5.8 done.";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("Rust test panicked")),
+        "test-panic finding fired on a clean build log"
+    );
+    // aes_generic must also stay silent on a clean log.
+    assert!(
+        hits.iter().all(|f| !f.title.contains("aes_generic")),
+        "aes_generic finding fired on a clean build log"
+    );
 }

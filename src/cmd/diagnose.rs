@@ -1,10 +1,28 @@
 //! `cheni diagnose` command.
 //!
 //! Scans a build log (from a file or stdin) for known-failure patterns
-//! and prints an actionable hint for each one it recognises. This is
-//! a readability layer, not a diagnostic engine — we match simple
-//! substrings against a curated list, so the cost of adding or
-//! removing a pattern is one entry.
+//! and prints an actionable hint for each one it recognises.
+//!
+//! The matcher is **phase-aware and derivation-scoped**. Rather than
+//! flatten the whole log to one big haystack and substring-grep, we
+//! parse it line-by-line into a [`LogContext`]:
+//!
+//! - each line carries the **derivation** that emitted it (extracted
+//!   from `nh`'s `name>` prefix when present);
+//! - each line carries a **phase** (eval / fetch / build / check /
+//!   install / activate) when we can guess one — phase markers are
+//!   sticky per derivation until the next marker in that derivation;
+//! - the log as a whole carries an optional `failing_derivation`,
+//!   pulled from the trailing `error: Cannot build '...drv'` /
+//!   `error: builder for '...' failed` anchors.
+//!
+//! Each [`Finding`] then declares a [`Scope`] that says where it can
+//! legitimately fire (anywhere, only in a given phase, only inside the
+//! failing derivation, etc.). Findings only consider lines that match
+//! their scope. This eliminates a real-world class of false positives
+//! we hit in v0.5.8 — a `module 'aes_generic' not found` matcher
+//! firing on a log whose actual failure was a Rust test panic in some
+//! other derivation's `checkPhase`.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -26,12 +44,95 @@ pub fn run(opts: DiagnoseOptions) -> Result<()> {
     Ok(())
 }
 
-/// A single known-failure pattern, with human-readable context.
+// ── Phase / Scope model ─────────────────────────────────────────────────────
+
+/// A coarse classification of what a Nix build is doing on a given
+/// line. We only track the phases that have meaningfully different
+/// failure surfaces — the goal is to scope findings, not to mirror
+/// the full nixpkgs phase taxonomy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Phase {
+    /// Nix expression evaluation — `nix eval`, attribute lookup,
+    /// type checks, infinite recursion, undefined variables, etc.
+    Eval,
+    /// A fixed-output derivation pulling source bytes (`fetchurl`,
+    /// `fetchFromGitHub`, …). Where hash-mismatch lives.
+    Fetch,
+    /// `buildPhase` — the actual compile / link of the package.
+    Build,
+    /// `checkPhase` — running the package's own test suite inside
+    /// the sandbox. This is where "Rust test panicked" lives.
+    Check,
+    /// `installPhase` — copying outputs into `$out`.
+    Install,
+    /// nixos-rebuild's activation / switch step. Bootloader install,
+    /// systemd unit reload, `Pre-switch check`.
+    Activate,
+}
+
+/// Where in a parsed [`LogContext`] a [`Finding`] is allowed to fire.
 ///
-/// Lean on purpose: adding a pattern means appending one entry to
-/// `KNOWN_FINDINGS`. No regex, no URL lookups, no priority ordering.
+/// All variants are part of the API surface even when no current
+/// [`Finding`] uses one — adding a new pattern is supposed to be a
+/// one-line edit, and we want every legitimate scope already
+/// reachable.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub(crate) enum Scope {
+    /// Any line, anywhere. Legacy behaviour (and the safe default
+    /// when phase attribution is unreliable, e.g. disk-full).
+    Global,
+    /// Only lines emitted by the derivation that ultimately failed.
+    /// If the log has no failing-derivation anchor, the finding does
+    /// not fire.
+    FailingDerivation,
+    /// Only lines we attributed to a specific phase, regardless of
+    /// which derivation emitted them.
+    Phase(Phase),
+    /// Intersection: only lines in `phase` AND emitted by the
+    /// failing derivation. The strictest, lowest-false-positive
+    /// scope. If there's no failing-derivation anchor, the finding
+    /// does not fire.
+    FailingDerivationPhase(Phase),
+}
+
+/// A single line of the build log, with the context we managed to
+/// attribute to it.
+#[derive(Debug, Clone)]
+pub(crate) struct LogLine<'a> {
+    /// Name of the derivation that emitted the line, extracted from
+    /// the `name>` prefix that `nh` injects in front of every build
+    /// stream. `None` for global lines (Nix's own `error:` anchors,
+    /// dependency-graph chatter, the `Updating flake inputs` banner).
+    pub(crate) derivation: Option<&'a str>,
+    /// Phase guessed for this line — propagated from the most recent
+    /// phase marker we saw inside the same derivation. `None` until
+    /// we have any signal at all (and stays `None` for global lines
+    /// that weren't preceded by a phase marker).
+    pub(crate) phase: Option<Phase>,
+    /// The textual content of the line, with the `derivation>` prefix
+    /// stripped if there was one.
+    pub(crate) text: &'a str,
+}
+
+/// The whole log, parsed into context-bearing lines plus the global
+/// "who failed" datum.
+pub(crate) struct LogContext<'a> {
+    pub(crate) lines: Vec<LogLine<'a>>,
+    /// Name of the derivation that ultimately failed, extracted from
+    /// the trailing `error: Cannot build '/nix/store/HASH-NAME.drv'`
+    /// or `error: builder for '/nix/store/HASH-NAME.drv' failed`
+    /// anchor. Stored without the `.drv` suffix and without the
+    /// store-hash prefix (so `cheni-0.5.8`, not the full path).
+    pub(crate) failing_derivation: Option<&'a str>,
+}
+
+// ── Finding catalogue ───────────────────────────────────────────────────────
+
+/// A single known-failure pattern, with human-readable context and
+/// the scope where it is allowed to match.
 pub(crate) struct Finding {
-    /// Case-insensitive substring we look for in the log.
+    /// Case-insensitive substring we look for in scoped log text.
     pub(crate) matcher: &'static str,
     /// Short headline for the issue.
     pub(crate) title: &'static str,
@@ -39,10 +140,13 @@ pub(crate) struct Finding {
     pub(crate) explanation: &'static str,
     /// What the user should do about it.
     pub(crate) action: &'static str,
+    /// Where in the log this pattern can legitimately fire.
+    pub(crate) scope: Scope,
 }
 
-/// Curated list of known patterns. Order doesn't matter — we print
-/// every match found, in the order they appear here.
+/// Curated list of known patterns. Order is the print order. Scope
+/// choice per entry is documented in the inline comments — when in
+/// doubt we pick `Global` to preserve legacy behaviour.
 pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
     Finding {
         matcher: "Pre-switch check",
@@ -59,6 +163,8 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  The previous generation stays bootable as a rollback target. \
                  Setting NIXOS_NO_CHECK=1 forces the switch but is strongly \
                  discouraged for these specific changes.",
+        // Pre-switch is an activation concern.
+        scope: Scope::Phase(Phase::Activate),
     },
     Finding {
         matcher: "Switching into this system is not recommended",
@@ -70,15 +176,34 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         action: "Run `sudo nh os boot ~/nixos-config` then `sudo reboot` to \
                  pick up the new generation through a clean boot rather than \
                  a runtime swap.",
+        scope: Scope::Phase(Phase::Activate),
     },
     Finding {
-        matcher: "aes_generic",
+        matcher: "module 'aes_generic' not found",
         title: "kernel module `aes_generic` not found",
         explanation: "Linux 7.0 folded `aes_generic` into the main `aes` module. \
                       Configs that still list it in `boot.initrd.availableKernelModules` \
                       fail at the modules-shrunk build step.",
         action: "Remove `aes_generic` from `boot.initrd.availableKernelModules` in your \
                  NixOS config (check `hardware-configuration.nix` as well).",
+        // Only meaningful inside a buildPhase — eliminates the v0.5.8
+        // false positive where the literal string appeared in an
+        // unrelated test/eval context.
+        scope: Scope::Phase(Phase::Build),
+    },
+    Finding {
+        matcher: "test result: FAILED.",
+        title: "Rust test panicked during Nix sandbox build",
+        explanation: "A test in the package's `checkPhase` failed inside the Nix sandbox. \
+                      The sandbox has a restricted environment (no `hostname` binary by \
+                      default, no `/nix/var/nix/profiles`, no network, no `$HOSTNAME`) \
+                      so tests that work locally can panic here.",
+        action: "Inspect the failing test names above. If they're cheni's own tests, \
+                 the package needs a fix. Run `nix build .#cheni` locally to reproduce \
+                 — `cargo test` alone won't catch sandbox-specific failures.",
+        // Strictest scope: only fire if we can prove this came from
+        // the failing derivation's checkPhase.
+        scope: Scope::FailingDerivationPhase(Phase::Check),
     },
     Finding {
         matcher: "hash mismatch in fixed-output derivation",
@@ -89,6 +214,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         action: "If you own the derivation, update the hash with the value reported \
                  in the error. For nixpkgs, refresh the channel (`nix flake update`) — \
                  upstream typically gets a fix within hours.",
+        scope: Scope::Phase(Phase::Fetch),
     },
     Finding {
         matcher: "No space left on device",
@@ -99,6 +225,10 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         action: "Free space with `cheni history --gc` (trims old generations and \
                  runs `nix-collect-garbage`). If /tmp is the culprit, \
                  `TMPDIR=/var/tmp sudo nixos-rebuild switch`.",
+        // Disk-full can hit during eval (write cache), fetch (NAR
+        // unpack), build (object files), install (copy out). Keeping
+        // it Global is the right call.
+        scope: Scope::Global,
     },
     Finding {
         matcher: "does not provide attribute",
@@ -109,6 +239,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                       (e.g. `aarch64-linux` on an `x86_64-linux` host).",
         action: "List what the flake actually provides with \
                  `nix flake show <flake-url>` and adjust the reference.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "infinite recursion encountered",
@@ -118,6 +249,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                       overridden set. Nix can't evaluate it.",
         action: "Bisect the change: comment out recent `override`/`overrideAttrs` \
                  calls until evaluation succeeds, then reintroduce one at a time.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "has an unfree license",
@@ -129,6 +261,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  For a one-shot on the CLI, `NIXPKGS_ALLOW_UNFREE=1` plus `--impure` \
                  on `nix build`/`nix shell` lets a single invocation through without \
                  touching the config.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "is marked as broken",
@@ -141,6 +274,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  force-build (often fails), or `override { meta.broken = false; }` \
                  opts out at the overlay level. Check the nixpkgs issue tracker for \
                  the WHY — fixes tend to land fast on popular packages.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "is marked as insecure",
@@ -155,6 +289,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  in your config, using the exact name from the error. The pin is \
                  version-specific so a later nixpkgs bump won't auto-allow a future \
                  vulnerable release.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "collision between",
@@ -165,6 +300,10 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         action: "Pick one. If you need both, set a priority: \
                  `(lib.hiPrio pkgs.X)` in the preferred entry, or `(lib.lowPrio pkgs.Y)` \
                  on the other. Runs cleanly once one path is unambiguously winning.",
+        // Profile build-time conflict, surfaced during system-toplevel
+        // assembly. Keep Global: the message can land before activation
+        // markers are visible.
+        scope: Scope::Global,
     },
     Finding {
         matcher: "is forbidden in pure eval mode",
@@ -177,6 +316,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  file as a proper flake input. For a deliberate one-shot, re-run \
                  the command with `--impure` — but avoid making that the default, \
                  you lose reproducibility guarantees.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "does not exist in the flake",
@@ -188,6 +328,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         action: "`git add <file>` (you can `git commit` later — staging is enough for \
                  the flake to see it). A trailing `warning: Git tree '...' is dirty` \
                  in the same output is the usual smoking gun.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "cached failure of attribute",
@@ -200,6 +341,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  force a fresh evaluation. Once the real error surfaces, fix that; \
                  the cache will update on the next successful eval. See \
                  https://github.com/NixOS/nix/issues/3872 for the root cause.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "SSL peer certificate",
@@ -213,6 +355,10 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `/etc/ssl/certs/ca-bundle.crt`. If behind a corporate proxy, add \
                  the proxy's CA cert to the bundle (or `--option ssl-cert-file <path>`). \
                  `curl -v https://cache.nixos.org/` reproduces without nix in the loop.",
+        // TLS errors land during fetch (substituter download) but
+        // can also surface during eval (flake metadata fetch). Keep
+        // Global to avoid silencing the eval-time variant.
+        scope: Scope::Global,
     },
     Finding {
         matcher: "undefined variable",
@@ -226,6 +372,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  undefined name sits. Check for typos, a missing `import`, or a \
                  missing `inputs.<foo>.follows = \"nixpkgs\";` wiring for a flake \
                  input that injects packages.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "cannot coerce",
@@ -239,6 +386,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  function, you probably forgot to call it (`f arg` instead of `f`). \
                  If it's an attribute set, you likely want a specific field \
                  (`pkg.out`, `\"${pkg}\"`, `pkg.meta.mainProgram`).",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "experimental Nix feature",
@@ -256,6 +404,8 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `~/.config/nix/nix.conf` (or `/etc/nix/nix.conf`). \
                  One-shot: prefix any command with \
                  `--extra-experimental-features 'nix-command flakes'`.",
+        // This always trips before any phase signal lands.
+        scope: Scope::Global,
     },
     Finding {
         matcher: "is in the way of",
@@ -270,6 +420,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `home-manager.backupFileExtension = \"backup\";` in your \
                  NixOS-level home-manager block. The second option stays \
                  idempotent across rebuilds.",
+        scope: Scope::Phase(Phase::Activate),
     },
     Finding {
         matcher: "API rate limit exceeded",
@@ -285,6 +436,8 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  Alternatively, switch specific flakes from `github:` to \
                  `git+https://github.com/.../repo.git?ref=main` — bypasses \
                  api.github.com entirely.",
+        // Lands at flake metadata resolution — pre-build, eval-ish.
+        scope: Scope::Global,
     },
     Finding {
         matcher: "exit code 137",
@@ -299,6 +452,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  On a VM, bump `memorySize`. If you're on a laptop and can't \
                  add RAM, pinning the package to a pre-built binary cache \
                  version via `cheni pin` sidesteps the local build entirely.",
+        scope: Scope::Phase(Phase::Build),
     },
     Finding {
         matcher: "Temporary failure in name resolution",
@@ -315,6 +469,9 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  package bug — file an issue. For flake updates failing: \
                  same check, then verify `nix.settings.substituters` aren't \
                  pointing at an unreachable host.",
+        // DNS can fail in fetch (substituter), build (network-allowed
+        // fixed-output), or eval (flake metadata). Stay Global.
+        scope: Scope::Global,
     },
     Finding {
         matcher: "syntax error, unexpected",
@@ -331,6 +488,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  without eval. An editor with Nix syntax support (VS Code \
                  + Nix plugin, Emacs nix-mode, etc.) catches most of these \
                  live.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "is not of type",
@@ -348,6 +506,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  not `\"0.8\"`). Type changes after a nixpkgs bump are a \
                  common trigger — check the release notes for renamed/retyped \
                  options.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "Failed to start",
@@ -365,6 +524,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  = false;`), `systemd.update-utmp.service` on btrfs (known \
                  upstream issue), ad-hoc service definitions with a bad \
                  `ExecStart` path.",
+        scope: Scope::Phase(Phase::Activate),
     },
     Finding {
         matcher: "cannot parse flake reference",
@@ -381,6 +541,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `git+https://gitlab.com/owner/repo.git?ref=main`, \
                  `path:./subflake`. Drop trailing slashes and quote the ref \
                  if it contains special characters.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "Authentication failed for",
@@ -396,6 +557,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  key is added (`ssh-add ~/.ssh/id_ed25519`); `ssh -T \
                  git@github.com` should say \"Hi <user>!\" before nix \
                  will have any luck.",
+        scope: Scope::Phase(Phase::Fetch),
     },
     Finding {
         matcher: "failed to install the bootloader",
@@ -414,6 +576,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `boot.loader.systemd-boot.enable` in your config or \
                  remount `/boot` writable. `cheni rollback` is always \
                  available as an escape hatch.",
+        scope: Scope::Phase(Phase::Activate),
     },
     Finding {
         matcher: "cannot allocate memory",
@@ -430,6 +593,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  /nix/store/<drv>` after building remotely. Longer-term: \
                  look for large `attrNames` iterations or transitive \
                  `rec` webs in your config.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "untrusted substituter",
@@ -446,6 +610,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  For well-known caches like cachix, their installation \
                  docs publish both the URL and the key. Without trust \
                  configured, Nix falls back to building locally.",
+        scope: Scope::Global,
     },
     Finding {
         matcher: "refusing to overwrite",
@@ -461,6 +626,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  hand-managed, reconsider whether the module should own \
                  it — either remove the module declaration or mark the \
                  option with `lib.mkForce` to override the default.",
+        scope: Scope::Phase(Phase::Activate),
     },
     Finding {
         matcher: "is used but not defined",
@@ -479,6 +645,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `imports = [ ... ];`. `nixos-option <attribute-path>` \
                  (or the generic `nix eval .#nixosConfigurations.<host>.options.<path>`) \
                  is the fast way to check whether the option exists at all.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "NAR hash mismatch",
@@ -497,6 +664,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  input, pin Nix to a version before the hash-mode change \
                  (last-ditch). For submodule inputs, `flake = false;` on \
                  the input sidesteps the recursive-hash recomputation.",
+        scope: Scope::Phase(Phase::Eval),
     },
     Finding {
         matcher: "dependencies couldn't be built",
@@ -514,6 +682,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  derivation. For a rebuilder loop, pass \
                  `--keep-going` so every failure surfaces in one pass \
                  instead of stopping at the first.",
+        scope: Scope::Global,
     },
     Finding {
         matcher: "access to network is forbidden",
@@ -532,6 +701,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  else's package and hit this, file an issue — don't \
                  reach for `--option sandbox false`, that's a global \
                  security knob and should stay on.",
+        scope: Scope::Phase(Phase::Build),
     },
     Finding {
         matcher: "Too many open files",
@@ -548,16 +718,22 @@ LimitNOFILE = 1048576;` in your config (then `systemctl daemon-reload \
 && systemctl restart nix-daemon`). `/etc/security/limits.conf` and \
                  `ulimit -n` don't help for systemd services — they \
                  need the `LimitNOFILE=` directive.",
+        scope: Scope::Global,
     },
 ];
 
+// ── Public API ──────────────────────────────────────────────────────────────
+
 /// Pure core: scan `log` for every pattern and return the ones that
 /// matched, in `KNOWN_FINDINGS` order, deduplicated.
+///
+/// Public signature is unchanged from the pre-refactor version — this
+/// is what `cmd::self_update` and friends consume.
 pub(crate) fn find_issues(log: &str) -> Vec<&'static Finding> {
-    let haystack = log.to_lowercase();
+    let ctx = parse_log_context(log);
     KNOWN_FINDINGS
         .iter()
-        .filter(|f| haystack.contains(&f.matcher.to_lowercase()))
+        .filter(|f| finding_matches(f, &ctx))
         .collect()
 }
 
@@ -586,6 +762,284 @@ pub(crate) fn print_hints_for(raw_output: &str) {
     }
     println!();
 }
+
+// ── Log parsing ─────────────────────────────────────────────────────────────
+
+/// Strip the `derivation>` prefix `nh` puts in front of every line of
+/// a build's stdout/stderr stream, returning `(derivation, rest)`.
+///
+/// Returns `None` when the line has no recognisable `name>` prefix.
+/// Keeps the rule conservative: the prefix is `[A-Za-z0-9._+-]+` then
+/// a literal `> ` (with optional space). This avoids matching lines
+/// that just contain a `>` for some other reason (`error: ... -> ...`).
+fn split_derivation_prefix(line: &str) -> Option<(&str, &str)> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        let ok = b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'+' || b == b'-';
+        if !ok {
+            break;
+        }
+        i += 1;
+    }
+    if i == 0 || i >= bytes.len() || bytes[i] != b'>' {
+        return None;
+    }
+    // Reject pure-numeric prefixes (line numbers, pids) that would
+    // otherwise satisfy the alnum rule. A real derivation name has at
+    // least one non-digit.
+    let name = &line[..i];
+    if name.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut rest_start = i + 1;
+    if rest_start < bytes.len() && bytes[rest_start] == b' ' {
+        rest_start += 1;
+    }
+    Some((name, &line[rest_start..]))
+}
+
+/// Inspect `text` (a single log line, possibly already de-prefixed)
+/// and return the [`Phase`] it announces, if any.
+///
+/// Markers are intentionally narrow — we only honour the strings that
+/// nixpkgs / nh actually emit, not anything that *contains* the word.
+fn extract_phase(text: &str) -> Option<Phase> {
+    let lower = text.to_ascii_lowercase();
+    // Activation markers — nixos-rebuild / nh activate output.
+    if lower.contains("activating the configuration")
+        || lower.contains("setting up /etc")
+        || lower.contains("reloading user units")
+        || lower.contains("installing the boot loader")
+        || lower.contains("pre-switch check")
+        || lower.contains("switching into this system")
+    {
+        return Some(Phase::Activate);
+    }
+    // Phase banners that nixpkgs' generic builder prints.
+    if lower.contains("checkphase") || lower.contains("running tests") {
+        return Some(Phase::Check);
+    }
+    if lower.contains("installphase") {
+        return Some(Phase::Install);
+    }
+    if lower.contains("buildphase") {
+        return Some(Phase::Build);
+    }
+    if lower.contains("unpackphase") || lower.contains("patchphase") || lower.contains("configurephase") {
+        // Pre-build setup steps still belong to Build for our purposes.
+        return Some(Phase::Build);
+    }
+    // Eval-stage banners.
+    if lower.starts_with("evaluating")
+        || lower.contains("updating flake inputs")
+        || lower.contains("warning: git tree")
+    {
+        return Some(Phase::Eval);
+    }
+    // Fetch-stage banners — fixed-output derivations and substituter
+    // downloads.
+    if lower.starts_with("trying https://")
+        || lower.starts_with("downloading")
+        || lower.contains("copying path") && lower.contains("from")
+    {
+        return Some(Phase::Fetch);
+    }
+    // `building '/nix/store/...drv'...` — a derivation entered build.
+    if lower.starts_with("building '") || lower.contains(" building '") {
+        return Some(Phase::Build);
+    }
+    None
+}
+
+/// Find the failing-derivation anchor in `log`. Returns the bare name
+/// (no store-hash prefix, no `.drv` extension) of the derivation that
+/// `error: Cannot build '...'` or `error: builder for '...' failed`
+/// reports. `None` if neither anchor is present.
+pub(crate) fn find_failing_derivation(log: &str) -> Option<&str> {
+    // Anchors we look for, in order of specificity.
+    const ANCHORS: &[&str] = &[
+        "error: Cannot build '",
+        "error: builder for '",
+        "error: build of '",
+    ];
+    for anchor in ANCHORS {
+        if let Some(start) = log.find(anchor) {
+            let rest = &log[start + anchor.len()..];
+            if let Some(end) = rest.find('\'') {
+                let path = &rest[..end];
+                if let Some(name) = derivation_name_from_path(path) {
+                    return Some(name);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract the bare derivation name from a `/nix/store/HASH-NAME.drv`
+/// or plain `NAME.drv` / `NAME` string.
+fn derivation_name_from_path(path: &str) -> Option<&str> {
+    // Last path component.
+    let basename = path.rsplit('/').next().unwrap_or(path);
+    // Strip `.drv`.
+    let no_drv = basename.strip_suffix(".drv").unwrap_or(basename);
+    // Strip the store-hash prefix `HHHH...HHHH-` if present (32 chars
+    // base32 then a dash).
+    let stripped = if let Some(idx) = no_drv.find('-') {
+        let (head, tail) = no_drv.split_at(idx);
+        // Heuristic: the hash is exactly 32 chars and base32 (lower
+        // alnum). If that doesn't match, keep the whole basename.
+        if head.len() == 32 && head.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()) {
+            &tail[1..]
+        } else {
+            no_drv
+        }
+    } else {
+        no_drv
+    };
+    if stripped.is_empty() { None } else { Some(stripped) }
+}
+
+/// Parse `log` into a [`LogContext`] — split into lines, attribute
+/// each line to a derivation (when prefixed) and a phase (sticky from
+/// the most recent marker in the same derivation, or globally for
+/// non-prefixed lines).
+pub(crate) fn parse_log_context(log: &str) -> LogContext<'_> {
+    use std::collections::HashMap;
+
+    // Sticky phase, per derivation. The `None` key represents the
+    // "global" stream (lines without a `name>` prefix).
+    let mut sticky: HashMap<Option<&str>, Phase> = HashMap::new();
+    let mut lines: Vec<LogLine<'_>> = Vec::new();
+
+    for raw in log.lines() {
+        let (deriv, text) = match split_derivation_prefix(raw) {
+            Some((n, t)) => (Some(n), t),
+            None => (None, raw),
+        };
+        // If this line announces a phase, update the sticky map for
+        // its derivation BEFORE attribution — the announcing line
+        // itself belongs to the new phase.
+        if let Some(p) = extract_phase(text) {
+            sticky.insert(deriv, p);
+        }
+        let phase = sticky.get(&deriv).copied();
+        lines.push(LogLine {
+            derivation: deriv,
+            phase,
+            text,
+        });
+    }
+    let failing_derivation = find_failing_derivation(log);
+    LogContext {
+        lines,
+        failing_derivation,
+    }
+}
+
+// ── Scoped matching ─────────────────────────────────────────────────────────
+
+/// Does `finding` match anywhere in `ctx`, given its scope?
+///
+/// Scope handling has two pragmatic fallbacks, layered on the strict
+/// rules:
+///
+/// 1. If the entire log is "phase-less" (no line ever carried phase
+///    attribution), a [`Scope::Phase`] finding degrades to
+///    [`Scope::Global`] for that log. This keeps short error
+///    fragments like `error: undefined variable 'pkgs'` matchable
+///    when the user pipes a one-liner to `cheni diagnose`.
+/// 2. If no line carries a `derivation>` prefix at all (i.e. the log
+///    isn't an `nh` stream — typical of `nix build` raw output), the
+///    derivation half of [`Scope::FailingDerivation`] /
+///    [`Scope::FailingDerivationPhase`] degrades — we still require
+///    a non-`None` `failing_derivation` anchor (the strict
+///    "no anchor ⇒ no fire" guarantee), but per-line derivation
+///    attribution is no longer required to match.
+fn finding_matches(finding: &Finding, ctx: &LogContext<'_>) -> bool {
+    let needle = finding.matcher.to_ascii_lowercase();
+    let any_phase_seen = ctx.lines.iter().any(|l| l.phase.is_some());
+    let any_deriv_prefix = ctx.lines.iter().any(|l| l.derivation.is_some());
+    ctx.lines.iter().any(|l| {
+        line_in_scope(
+            l,
+            &finding.scope,
+            ctx.failing_derivation,
+            any_phase_seen,
+            any_deriv_prefix,
+        ) && line_contains_ci(l.text, &needle)
+    })
+}
+
+/// Case-insensitive contains. We pre-lowered `needle`; do the same
+/// for the haystack on the hot path.
+fn line_contains_ci(haystack: &str, lower_needle: &str) -> bool {
+    haystack.to_ascii_lowercase().contains(lower_needle)
+}
+
+/// Is `line` eligible under `scope`?
+///
+/// `failing` carries the parsed `error: Cannot build '...'` anchor
+/// (if any). `any_phase_seen` and `any_deriv_prefix` are global
+/// properties of the whole log used to drive the fallback policy
+/// documented on [`finding_matches`].
+fn line_in_scope(
+    line: &LogLine<'_>,
+    scope: &Scope,
+    failing: Option<&str>,
+    any_phase_seen: bool,
+    any_deriv_prefix: bool,
+) -> bool {
+    // Helper: is this line "from the failing derivation"?
+    // Strict mode (the log has `nh` prefixes): the line's derivation
+    // name must align with the anchor's name. We accept either an
+    // exact match OR a `pname`-style prefix match — `nh` truncates
+    // the per-line label to the package's pname (`cheni`) while the
+    // `.drv` anchor carries the full `pname-version`
+    // (`cheni-v0.5.8`). Either side being a `<other>-...` extension
+    // of the other is good enough.
+    // Degraded mode (no prefixes anywhere in the log): accept any
+    // line as long as a failing-derivation anchor exists at all.
+    let from_failing = |fail: &str| -> bool {
+        if !any_deriv_prefix {
+            return true;
+        }
+        match line.derivation {
+            None => false,
+            Some(d) if d == fail => true,
+            Some(d) => {
+                // pname-prefix relation: one is the other followed
+                // by `-version`. Stay strict on the `-` boundary so
+                // that `cheni-v0.5.8` still matches `cheni`, but
+                // `chenix` does NOT match `cheni`.
+                fail.strip_prefix(d).is_some_and(|rest| rest.starts_with('-'))
+                    || d.strip_prefix(fail).is_some_and(|rest| rest.starts_with('-'))
+            }
+        }
+    };
+    let phase_ok = |p: Phase| -> bool {
+        if !any_phase_seen {
+            return true;
+        }
+        line.phase == Some(p)
+    };
+    match scope {
+        Scope::Global => true,
+        Scope::Phase(p) => phase_ok(*p),
+        Scope::FailingDerivation => match failing {
+            Some(name) => from_failing(name),
+            None => false,
+        },
+        Scope::FailingDerivationPhase(p) => match failing {
+            Some(name) => from_failing(name) && phase_ok(*p),
+            None => false,
+        },
+    }
+}
+
+// ── I/O & rendering ─────────────────────────────────────────────────────────
 
 /// Read the log text — either from a user-supplied path or stdin.
 fn load_input(path: Option<&Path>) -> Result<String> {
