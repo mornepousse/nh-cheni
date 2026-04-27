@@ -484,7 +484,7 @@ pub fn print_refresh_summary(outcomes: &[(String, RefreshOutcome)]) {
             RefreshOutcome::Held { frozen_version, upstream_version, tracked_major } => {
                 println!(
                     "    {} {:<28} held at {} — upstream now {} (> major {})",
-                    "!".yellow().bold(),
+                    "⚠".yellow().bold(),
                     name.bold(),
                     frozen_version.dimmed(),
                     upstream_version.yellow(),

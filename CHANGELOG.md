@@ -7,6 +7,20 @@ semver.
 
 ## Unreleased
 
+### Changed
+- **Marker glyphs unified** across the cheni surface. The bare `!`
+  marker drifted into seven call sites where it was used
+  inconsistently for both warnings (yellow) and errors (red),
+  overlapping with the `⚠` (yellow) and `✗` (red) markers used
+  elsewhere. Convention now: `⚠` for warnings, `✗` for errors,
+  `→` for actionable hints, `·` for neutral bullets — no more `!`.
+- **`cheni init` collapses to one line on a re-run.** When every
+  artefact init would create is already in place (pins file,
+  freezes file, nixpkgs-latest input, both overlays), it prints
+  a single `✓ Already initialised` banner instead of three
+  `[N/3] already configured` lines, then jumps straight to the
+  next-steps block.
+
 ### Added
 - **`cheni status` gains the freshness signals** previously only
   visible in `cheni check` and the interactive banner: the

@@ -20,6 +20,21 @@ pub fn run() -> Result<()> {
     let flake_dir = &nix_config.flake_dir;
 
     print_init_header(flake_dir, &nix_config.hostname);
+
+    // Idempotent fast-path: when every change init would have made
+    // is already in place, collapse the three "[N/3] already
+    // configured" lines into a single "everything's already there"
+    // banner. Same as `cheni upgrade` showing "Everything already
+    // up to date" when there's nothing to do.
+    if is_already_initialised(flake_dir) {
+        println!(
+            "{} Already initialised — pins file, freezes file, nixpkgs-latest input, and both overlays are in place.",
+            "✓".green()
+        );
+        print_init_next_steps();
+        return Ok(());
+    }
+
     print_init_preview(flake_dir);
     let _ = create_pins_file(flake_dir)?;
     let _ = create_freezes_file(flake_dir)?;
@@ -40,6 +55,28 @@ pub fn run() -> Result<()> {
 
     print_init_next_steps();
     Ok(())
+}
+
+/// Pure check: does the flake already carry every cheni init
+/// artefact? Used to skip the per-step `[N/3] already configured`
+/// noise on subsequent `cheni init` invocations.
+///
+/// Reads only the file system + the flake.nix text — same markers
+/// the per-step `ensure_*` functions check, so the pre-check stays
+/// in lockstep with the actual modification logic.
+fn is_already_initialised(flake_dir: &Path) -> bool {
+    if !flake_dir.join("package-pins.json").exists() {
+        return false;
+    }
+    if !flake_dir.join("package-freezes.json").exists() {
+        return false;
+    }
+    let Ok(flake) = std::fs::read_to_string(flake_dir.join("flake.nix")) else {
+        return false;
+    };
+    flake.contains("nixpkgs-latest")
+        && flake.contains("package-pins.json")
+        && flake.contains("package-freezes.json")
 }
 
 /// Print a short upfront summary of what `cheni init` is about to do

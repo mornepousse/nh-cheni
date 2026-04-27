@@ -642,7 +642,7 @@ fn apply_flake_updates(flake_dir: &std::path::Path, inputs: &[&flake::FlakeInput
         match pin_flake_input(flake_dir, &input.name) {
             Ok(()) => updated += 1,
             Err(e) => {
-                println!("{} Failed to update {}: {}", "!".red(), input.name, e);
+                println!("{} Failed to update {}: {}", "✗".red(), input.name, e);
             }
         }
     }

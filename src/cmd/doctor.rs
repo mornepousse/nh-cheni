@@ -142,7 +142,7 @@ fn tally_severities(checks: &[CheckResult]) -> (usize, usize, usize) {
 fn print_check(check: &CheckResult) {
     let symbol = match check.severity {
         Severity::Ok => "✓".green(),
-        Severity::Warning => "!".yellow(),
+        Severity::Warning => "⚠".yellow(),
         Severity::Error => "✗".red(),
     };
     println!("  {}  {} — {}", symbol, check.name.bold(), check.message);

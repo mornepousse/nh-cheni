@@ -285,7 +285,7 @@ fn verify_nixpkgs_order(flake_dir: &Path) -> bool {
         InputOrder::Same => {
             println!(
                 "  {} nixpkgs and nixpkgs-latest are at the same commit.",
-                "!".yellow()
+                "⚠".yellow()
             );
             println!(
                 "  Pins won't have any effect. Run '{}' for a full upgrade or '{}' to drop pins.",
@@ -297,7 +297,7 @@ fn verify_nixpkgs_order(flake_dir: &Path) -> bool {
         InputOrder::LatestIsOlder => {
             println!(
                 "  {} nixpkgs-latest is BEHIND nixpkgs — skipping to prevent downgrades.",
-                "!".red()
+                "✗".red()
             );
             println!(
                 "  This can happen after a full '{}'. Pins are no longer needed — '{}'.",
@@ -1262,7 +1262,7 @@ fn run_pin_cleanup_step(flake_dir: &Path, no_clean: bool) -> Result<()> {
 fn run_gc_step(yes: bool) -> Result<()> {
     println!(
         "  {} This will delete old generations — rollback won't work past this point!",
-        "!".yellow()
+        "⚠".yellow()
     );
 
     let preview = crate::nix::gc::preview(&["--delete-older-than", "30d"])?;

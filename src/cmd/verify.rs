@@ -107,7 +107,7 @@ fn print_failure(tag: &str, err: &anyhow::Error) {
     println!();
     println!(
         "{} Do not trust this release without a manual cross-check. Possible causes:",
-        "!".red().bold()
+        "✗".red().bold()
     );
     println!("  - No signed release exists yet for {} (404 on the .minisig asset)", tag);
     println!("  - The tarball was fetched from somewhere other than gitlab.com/harrael/cheni");
