@@ -1,6 +1,82 @@
 use super::*;
 use crate::nix::freezes::{FreezeEntry, Freezes};
 
+// ─── strip_inputs_block ───────────────────────────────────────────────────────
+
+#[test]
+fn strip_inputs_block_no_inputs_key_returns_original() {
+    // Flake nix sans bloc inputs= du tout → le texte est retourné intact.
+    let text = "{ outputs = { nixpkgs, ... }: { }; }";
+    assert_eq!(strip_inputs_block(text), text);
+}
+
+#[test]
+fn strip_inputs_block_removes_single_flat_inputs_block() {
+    // Un bloc inputs = { nixpkgs.url = "…"; }; — le contenu doit
+    // disparaître et la mention `inputs.nixpkgs` dans outputs doit
+    // subsister pour que grep puisse la détecter.
+    let text = r#"{
+  inputs = { nixpkgs.url = "github:NixOS/nixpkgs"; };
+  outputs = { inputs, nixpkgs, ... }: inputs.nixpkgs.lib.nixosSystem {};
+}"#;
+    let stripped = strip_inputs_block(text);
+    // Le bloc d'inputs est retiré…
+    assert!(!stripped.contains("nixpkgs.url"), "url declaration should be stripped");
+    // …mais la référence en outputs reste intacte.
+    assert!(stripped.contains("inputs.nixpkgs.lib"), "real usage must survive");
+}
+
+#[test]
+fn strip_inputs_block_handles_nested_attrsets_inside_inputs() {
+    // inputs contient lui-même des accolades imbriquées (e.g. pour
+    // `follows`). Le compteur de profondeur doit matcher la bonne
+    // accolade fermante.
+    let text = r#"{
+  inputs = {
+    nixpkgs = { url = "github:NixOS/nixpkgs"; };
+    home-manager = {
+      url = "github:nix-community/home-manager";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+  };
+  outputs = { inputs, ... }: inputs.home-manager.homeManagerModules.default;
+}"#;
+    let stripped = strip_inputs_block(text);
+    assert!(!stripped.contains("url ="), "url declarations should be stripped");
+    assert!(!stripped.contains("follows"), "follows should be stripped");
+    assert!(stripped.contains("inputs.home-manager.homeManagerModules"), "real usage must survive");
+}
+
+#[test]
+fn strip_inputs_block_handles_multiline_with_comments() {
+    // Commentaires à l'intérieur du bloc inputs= — ne doivent pas
+    // perturber le comptage des accolades.
+    let text = r#"{
+  inputs = {
+    # Primary nixpkgs channel
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # Latest unstable for pinned packages
+    nixpkgs-latest.url = "github:NixOS/nixpkgs";
+  };
+  outputs = { inputs, ... }: inputs.nixpkgs-latest.legacyPackages;
+}"#;
+    let stripped = strip_inputs_block(text);
+    assert!(!stripped.contains("Primary nixpkgs channel"), "comment inside inputs should be stripped");
+    assert!(!stripped.contains("nixpkgs.url"), "url inside inputs should be stripped");
+    assert!(stripped.contains("inputs.nixpkgs-latest.legacyPackages"), "outputs reference must survive");
+}
+
+#[test]
+fn strip_inputs_block_matching_braces_leaves_rest_intact() {
+    // Le texte après le bloc inputs= ne doit pas être tronqué.
+    // Vérifie que la concaténation [avant] + [après] est correcte.
+    let text = "{ inputs = { a = 1; }; outputs = { x = 42; }; }";
+    let stripped = strip_inputs_block(text);
+    assert!(stripped.contains("outputs"), "outputs block must remain");
+    assert!(stripped.contains("x = 42"), "outputs content must remain");
+    assert!(!stripped.contains("a = 1"), "inputs content must be stripped");
+}
+
 fn sample_entry(version: &str, date: &str) -> FreezeEntry {
     FreezeEntry {
         rev: "abcdef0123456789abcdef0123456789abcdef01".to_string(),
