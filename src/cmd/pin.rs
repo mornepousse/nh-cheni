@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use colored::Colorize;
 use crate::api::repology;
-use crate::nix::{config, flake, pins, store};
+use crate::nix::{config, flake, freezes, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::parse_version;
 
@@ -98,6 +98,17 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
     // nixpkgs-latest overlay — `nix flake update <name>` is the path.
     if flake::is_flake_input(&nix_config.flake_dir, name) {
         return pin_flake_input(&nix_config.flake_dir, name);
+    }
+
+    // Symmetric to `freeze_one`'s `reject_if_pinned` guard — a package
+    // can't be pinned and frozen at once (the two overlays would race
+    // on the same attr). Bail before touching anything.
+    if freezes::read(&nix_config.flake_dir)?.contains_key(name) {
+        anyhow::bail!(
+            "{} is currently frozen — run `cheni unfreeze {}` first if you want to pin it instead.",
+            name,
+            name
+        );
     }
 
     let store_pkg = store::find_by_name(name)?;
@@ -329,8 +340,14 @@ fn installed_packages_in_category(
         .map(|p| (p.name.to_lowercase(), p.version.clone()))
         .collect();
 
+    // Frozen packages must not become candidates for `cheni pin --<cat>`
+    // — pin and freeze are mutually exclusive on a given attr (they
+    // are two overlays writing the same name).
+    let frozen = freezes::read(flake_dir)?;
+
     Ok(config_names
         .into_iter()
+        .filter(|name| !frozen.contains_key(name))
         .filter_map(|name| {
             store_map
                 .get(&name.to_lowercase())
