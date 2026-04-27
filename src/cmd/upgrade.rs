@@ -260,18 +260,10 @@ pub(crate) fn warn_if_dirty_lock(flake_dir: &Path) {
     println!();
 }
 
-/// True when `git diff --name-only flake.lock` reports any change.
-/// Returns `false` for non-git flakes / git-not-installed — we'd
-/// rather miss the warning on exotic setups than block the upgrade.
+/// Local alias to the shared `nix::git::is_flake_lock_dirty` so the
+/// call sites in this module keep their narrow names.
 fn is_flake_lock_dirty(flake_dir: &Path) -> bool {
-    let output = Command::new("git")
-        .args(["diff", "--name-only", "flake.lock"])
-        .current_dir(flake_dir)
-        .output();
-    match output {
-        Ok(o) if o.status.success() => !o.stdout.is_empty(),
-        _ => false,
-    }
+    crate::nix::git::is_flake_lock_dirty(flake_dir)
 }
 
 /// Verify that `nixpkgs-latest` is strictly newer than `nixpkgs` at

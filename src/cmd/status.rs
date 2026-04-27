@@ -85,9 +85,16 @@ fn print_config_section(nix_config: &config::NixConfig, active: &Option<(u32, St
 fn print_flake_inputs_section(lock_path: &Path) {
     println!();
     println!("  {}", "Flake inputs:".bold());
-    for (name, age, rev) in read_all_root_inputs(lock_path) {
+    for (name, age, days, rev) in read_all_root_inputs(lock_path) {
         let rev_str = if rev.is_empty() { String::new() } else { format!(" ({})", rev) };
-        println!("    {:<22} {}{}", name, age.dimmed(), rev_str.dimmed());
+        // nixpkgs is the foundation everything else is compared
+        // against — call it out in yellow once it crosses the
+        // 3-day "drifting" threshold so it doesn't blend into the
+        // dimmed list. Other inputs stay dimmed because their age
+        // matters less for daily flow.
+        let highlight = (name == "nixpkgs" || name == "nixpkgs-latest") && days >= 3;
+        let age_styled = if highlight { age.yellow() } else { age.dimmed() };
+        println!("    {:<22} {}{}", name, age_styled, rev_str.dimmed());
     }
 }
 
@@ -177,6 +184,37 @@ fn print_suggestions(
         );
         any = true;
     }
+    // Stale nixpkgs hint — same threshold as `cheni check` and
+    // `cheni doctor`, kept in sync via `crate::util::format_days_ago`.
+    // Read straight from the lock so the suggestion still fires when
+    // nixpkgs is not in the in-report inputs section (filtered out
+    // upstream as INFRASTRUCTURE).
+    if let Some(input) = crate::nix::flake::read_input_by_name(
+        &nix_config.flake_dir,
+        "nixpkgs",
+    ) {
+        if input.days_old >= 3 {
+            println!(
+                "    {} nixpkgs floor is {} — run '{}' to advance",
+                "→".cyan(),
+                crate::util::format_days_ago(input.days_old).bold(),
+                "cheni upgrade".bold()
+            );
+            any = true;
+        }
+    }
+    // Dirty flake.lock — escalate to a Suggestion line when present
+    // so a passive `cheni status` still surfaces the trap. Same
+    // wording as the upgrade preflight + doctor check.
+    if crate::nix::git::is_flake_lock_dirty(&nix_config.flake_dir) {
+        println!(
+            "    {} flake.lock has uncommitted bumps — `{}` to inspect, `{}` to discard",
+            "⚠".yellow(),
+            "git diff flake.lock".bold(),
+            "git checkout flake.lock".bold()
+        );
+        any = true;
+    }
     // Self-update hint, pulled from the cache that `cheni check`
     // refreshes asynchronously. Sync read — status never hits the
     // network on its own, so the suggestion only surfaces after a
@@ -257,8 +295,9 @@ fn read_active_generation() -> Option<(u32, String)> {
     Some((num, age))
 }
 
-/// List every root-level flake input with its age and short rev.
-fn read_all_root_inputs(lock_path: &Path) -> Vec<(String, String, String)> {
+/// List every root-level flake input with its age string, age in
+/// days (for threshold checks), and short rev.
+fn read_all_root_inputs(lock_path: &Path) -> Vec<(String, String, u64, String)> {
     let content = match std::fs::read_to_string(lock_path) {
         Ok(c) => c,
         Err(_) => return Vec::new(),
@@ -283,19 +322,18 @@ fn read_all_root_inputs(lock_path: &Path) -> Vec<(String, String, String)> {
     for name in names {
         let ts = get_input_timestamp(&lock, &name).unwrap_or(0);
         let rev = get_input_rev(&lock, &name).unwrap_or_default();
-        let age = if ts == 0 {
-            "?".to_string()
+        let (age, days) = if ts == 0 {
+            ("?".to_string(), 0)
         } else {
-            format_age(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs()
-                    .saturating_sub(ts)
-                    / 86400,
-            )
+            let days = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+                .saturating_sub(ts)
+                / 86400;
+            (format_age(days), days)
         };
-        out.push((name, age, rev));
+        out.push((name, age, days, rev));
     }
     out.sort_by(|a, b| a.0.cmp(&b.0));
     out

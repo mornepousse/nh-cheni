@@ -157,22 +157,16 @@ fn print_nixpkgs_floor_line(nix_config: &config::NixConfig) {
     println!("  {}", line);
 }
 
-/// flake.lock dirty signal line. Best-effort `git diff --name-only`;
-/// silent for non-git flakes or when the lock is clean.
+/// flake.lock dirty signal line. Routes through the shared
+/// `nix::git::is_flake_lock_dirty` so the same cheni-wide signal
+/// fires on `status`, `doctor`, the upgrade preflight, and here.
 fn print_dirty_lock_line(nix_config: &config::NixConfig) {
-    let output = std::process::Command::new("git")
-        .args(["diff", "--name-only", "flake.lock"])
-        .current_dir(&nix_config.flake_dir)
-        .output();
-    if let Ok(o) = output {
-        if o.status.success() && !o.stdout.is_empty() {
-            println!(
-                "  {} {}",
-                "flake.lock:".dimmed(),
-                "dirty (uncommitted bumps will apply on next rebuild)"
-                    .yellow(),
-            );
-        }
+    if super::super::nix::git::is_flake_lock_dirty(&nix_config.flake_dir) {
+        println!(
+            "  {} {}",
+            "flake.lock:".dimmed(),
+            "dirty (uncommitted bumps will apply on next rebuild)".yellow(),
+        );
     }
 }
 

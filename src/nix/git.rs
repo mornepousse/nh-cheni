@@ -12,6 +12,26 @@ use std::time::SystemTime;
 
 use tracing::debug;
 
+/// True when `flake.lock` has uncommitted changes inside `flake_dir`.
+///
+/// Used by every "is the flake state about to surprise me?" surface
+/// (`cheni upgrade` preflight warning, `cheni doctor` health check,
+/// `cheni status` Suggestions, the interactive banner). Centralised
+/// here so all four read the same git output and stay in lockstep.
+///
+/// Returns `false` when `flake.lock` is clean, when the directory
+/// isn't a git work tree, or when `git` itself isn't available —
+/// the warning surface is a soft signal, not a gate, so a missing
+/// git just means the surface stays silent.
+pub fn is_flake_lock_dirty(flake_dir: &Path) -> bool {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(flake_dir)
+        .args(["diff", "--name-only", "flake.lock"])
+        .output();
+    matches!(output, Ok(o) if o.status.success() && !o.stdout.is_empty())
+}
+
 /// Whether `dir` is inside a git work tree.
 ///
 /// Callers gate optional features (history annotation, ...) on this

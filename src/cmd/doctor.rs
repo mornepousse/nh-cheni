@@ -486,18 +486,16 @@ fn check_nixpkgs_floor_age(flake_dir: &std::path::Path) -> CheckResult {
 /// — manual flake setups without git aren't broken, just outside
 /// the warning's purview.
 fn check_dirty_lock(flake_dir: &std::path::Path) -> CheckResult {
-    let output = std::process::Command::new("git")
-        .args(["diff", "--name-only", "flake.lock"])
-        .current_dir(flake_dir)
-        .output();
-    match output {
-        Ok(o) if o.status.success() && o.stdout.is_empty() => CheckResult {
+    if !crate::nix::git::is_repo(flake_dir) {
+        return CheckResult {
             severity: Severity::Ok,
             name: "flake.lock".to_string(),
-            message: "clean (no uncommitted changes)".to_string(),
+            message: "not a git repo (skipped)".to_string(),
             hint: None,
-        },
-        Ok(o) if o.status.success() => CheckResult {
+        };
+    }
+    if crate::nix::git::is_flake_lock_dirty(flake_dir) {
+        CheckResult {
             severity: Severity::Warning,
             name: "flake.lock".to_string(),
             message: "uncommitted input changes — next rebuild will apply them".to_string(),
@@ -505,13 +503,14 @@ fn check_dirty_lock(flake_dir: &std::path::Path) -> CheckResult {
                 "`git diff flake.lock` to inspect, `git checkout flake.lock` to discard."
                     .to_string(),
             ),
-        },
-        _ => CheckResult {
+        }
+    } else {
+        CheckResult {
             severity: Severity::Ok,
             name: "flake.lock".to_string(),
-            message: "not a git repo (skipped)".to_string(),
+            message: "clean (no uncommitted changes)".to_string(),
             hint: None,
-        },
+        }
     }
 }
 

@@ -7,7 +7,24 @@ semver.
 
 ## Unreleased
 
+### Added
+- **`cheni status` gains the freshness signals** previously only
+  visible in `cheni check` and the interactive banner: the
+  Flake inputs list highlights `nixpkgs` / `nixpkgs-latest` in
+  yellow when ≥3 days old, and the Suggestions section now
+  surfaces two new actionable lines — "nixpkgs floor is Xd ago,
+  run `cheni upgrade`" and "flake.lock has uncommitted bumps,
+  `git diff flake.lock`/`git checkout flake.lock`". `cheni status`
+  finally tells the user whether the snapshot they're reading is
+  fresh and consistent.
+
 ### Changed
+- **Centralised `is_flake_lock_dirty`** in `crate::nix::git`. The
+  same `git diff --name-only flake.lock` shell-out lived in
+  `cmd/upgrade.rs`, `cmd/doctor.rs`, and `cmd/interactive.rs`. Now
+  all four call sites (those three plus the new `cmd/status.rs`
+  use) route through one helper, so the dirty-lock signal can't
+  drift in wording or behaviour between surfaces.
 - **Unified `Xd ago` format** across `cheni status`, `cheni check`,
   `cheni doctor`, and the interactive banner. Previously two
   variants drifted in parallel — `1 day ago / N days ago` and
