@@ -58,12 +58,21 @@ fn make_minimal_flake() -> tempfile::TempDir {
 /// Crée un `Command` pré-configuré : binaire cheni, `CHENI_CONFIG`
 /// pointant sur `dir`, couleurs désactivées (sortie ASCII pure pour les
 /// assertions).
+///
+/// On injecte `HOSTNAME` pour satisfaire `config::detect_hostname()` dans
+/// le sandbox Nix : ni `hostname` binaire, ni `/etc/hostname`, ni `$HOSTNAME`
+/// n'y sont disponibles. Sans cette valeur les tests qui appellent `detect()`
+/// échoueraient avec "Could not determine hostname". La valeur est arbitraire
+/// — seul son caractère non-vide importe.
 fn cmd_in(dir: &tempfile::TempDir) -> Command {
     let mut c = Command::new(cheni_bin());
     c.env("CHENI_CONFIG", dir.path())
         .env("NO_COLOR", "1")
         // Évite toute interaction TTY dans le sandbox CI.
-        .env("TERM", "dumb");
+        .env("TERM", "dumb")
+        // Fournit un hostname fixe pour le sandbox Nix (pas de `hostname`
+        // binaire, /etc/hostname vide, $HOSTNAME absent).
+        .env("HOSTNAME", "cheni-test");
     c
 }
 
@@ -288,6 +297,19 @@ fn man_page_starts_with_roff_header() {
 
 #[test]
 fn history_list_exits_zero_and_shows_header() {
+    // Ce test exercice la lecture de /nix/var/nix/profiles/, qui est
+    // absente dans le sandbox de build Nix (on est dans un store isolé,
+    // pas sur un host NixOS). On skipe silencieusement dans ce contexte :
+    // la valeur canari (détecter un crash ou un exit non-zero) n'a pas de
+    // sens sans le répertoire de profils.
+    if !std::path::Path::new("/nix/var/nix/profiles").exists() {
+        eprintln!(
+            "[skip] /nix/var/nix/profiles not present (Nix sandbox or non-NixOS host) \
+             — skipping history smoke test"
+        );
+        return;
+    }
+
     let dir = make_minimal_flake();
     let out = cmd_in(&dir)
         .arg("history")
