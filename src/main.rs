@@ -145,7 +145,7 @@ enum Commands {
         yes: bool,
 
         /// Remove all pins at once
-        #[arg(long)]
+        #[arg(short = 'a', long)]
         all: bool,
     },
 
@@ -172,7 +172,7 @@ enum Commands {
         yes: bool,
 
         /// Remove every freeze at once
-        #[arg(long)]
+        #[arg(short = 'a', long)]
         all: bool,
     },
 
@@ -281,7 +281,7 @@ enum Commands {
     Rollback {
         /// Generation number to roll back to (omit for the previous generation)
         target: Option<u32>,
-        /// Skip the confirmation prompt.
+        /// Skip the confirmation prompt
         #[arg(short, long)]
         yes: bool,
     },

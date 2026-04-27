@@ -663,7 +663,7 @@ fn run_gc(yes: bool) -> Result<()> {
 
     let preview = crate::nix::gc::preview(&[])?;
     if preview.paths == 0 {
-        println!("  {}", "No dead store paths to remove.".dimmed());
+        println!("  {} No dead store paths to remove.", "✓".green());
         return Ok(());
     }
 

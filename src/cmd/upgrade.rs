@@ -1364,7 +1364,7 @@ fn clean_obsolete_pins(flake_dir: &Path) -> Result<()> {
     let current_pins = pins::read(flake_dir)?;
 
     if current_pins.is_empty() {
-        println!("  No pins to check.");
+        println!("  {} No pins to check.", "✓".green());
         return Ok(());
     }
 
