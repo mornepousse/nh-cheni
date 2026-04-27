@@ -310,9 +310,10 @@ fn warn_about_obsolete_pins(flake_dir: &std::path::Path) -> Result<()> {
     let obsolete = count_obsolete_pins(&flake_dir.join("flake.lock"), &current_pins);
     if obsolete > 0 {
         println!(
-            "{} {} obsolete pin(s) detected. Run '{}' to remove.\n",
+            "{} {} obsolete {} detected. Run '{}' to remove.\n",
             "Note:".yellow(),
             obsolete,
+            crate::util::pluralize(obsolete, "pin"),
             "cheni clean".bold()
         );
     }

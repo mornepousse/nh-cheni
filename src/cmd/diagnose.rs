@@ -570,9 +570,10 @@ pub(crate) fn print_hints_for(raw_output: &str) {
         return;
     }
     println!(
-        "\n{} matched {} known issue(s):",
+        "\n{} matched {} known {}:",
         "─── cheni diagnose ───".dimmed(),
-        findings.len().to_string().bold()
+        findings.len().to_string().bold(),
+        crate::util::pluralize(findings.len(), "issue")
     );
     for (i, f) in findings.iter().enumerate() {
         println!(
@@ -616,9 +617,10 @@ fn print_findings(findings: &[&Finding]) {
         return;
     }
     println!(
-        "  {} matched {} known issue(s):\n",
+        "  {} matched {} known {}:\n",
         "·".dimmed(),
-        findings.len().to_string().bold()
+        findings.len().to_string().bold(),
+        crate::util::pluralize(findings.len(), "issue")
     );
     for (i, f) in findings.iter().enumerate() {
         println!(

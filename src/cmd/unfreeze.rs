@@ -64,8 +64,9 @@ pub fn unfreeze_all(yes: bool) -> Result<()> {
 
     println!("{}\n", "=== cheni unfreeze ===".bold());
     println!(
-        "  This will release {} freeze(s):",
-        current.len().to_string().bold()
+        "  This will release {} {}:",
+        current.len().to_string().bold(),
+        crate::util::pluralize(current.len(), "freeze")
     );
 
     let total = current.len();
@@ -86,16 +87,17 @@ pub fn unfreeze_all(yes: bool) -> Result<()> {
     println!("  will move them to whatever version nixpkgs is on.");
     println!();
 
-    if !yes && !confirm(&format!("Unfreeze all {} freeze(s)?", current.len()), false)? {
+    if !yes && !confirm(&format!("Unfreeze all {}?", crate::util::count_phrase(current.len(), "freeze")), false)? {
         println!("{}", "  Cancelled — freezes kept.".yellow());
         return Ok(());
     }
 
     let count = freezes::clear(&nix_config.flake_dir)?;
     println!(
-        "{} Removed {} freeze(s).",
+        "{} Removed {} {}.",
         "✓".green(),
-        count.to_string().bold()
+        count.to_string().bold(),
+        crate::util::pluralize(count, "freeze")
     );
     println!("Run '{}' to apply.", "cheni build".bold());
     Ok(())

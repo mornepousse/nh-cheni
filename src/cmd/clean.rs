@@ -31,15 +31,17 @@ pub fn run() -> Result<()> {
         // nixpkgs has caught up with nixpkgs-latest: pins are obsolete
         let count = pins::clear(&nix_config.flake_dir)?;
         println!(
-            "{} Removed {} obsolete pin(s). nixpkgs has caught up with nixpkgs-latest.",
+            "{} Removed {} obsolete {}. nixpkgs has caught up with nixpkgs-latest.",
             "✓".green(),
-            count.to_string().bold()
+            count.to_string().bold(),
+            crate::util::pluralize(count, "pin")
         );
     } else {
         // nixpkgs-latest is still ahead, pins are still useful
         println!(
-            "Pins are still active (nixpkgs-latest is ahead). {} pin(s) kept.",
-            current_pins.len().to_string().bold()
+            "Pins are still active (nixpkgs-latest is ahead). {} {} kept.",
+            current_pins.len().to_string().bold(),
+            crate::util::pluralize(current_pins.len(), "pin")
         );
     }
 

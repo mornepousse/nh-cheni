@@ -161,9 +161,10 @@ fn print_suggestions(
     }
     if obsolete_count > 0 {
         println!(
-            "    {} {} obsolete pin(s) — run '{}' to remove",
+            "    {} {} obsolete {} — run '{}' to remove",
             "⚠".yellow(),
             obsolete_count,
+            crate::util::pluralize(obsolete_count, "pin"),
             "cheni clean".bold()
         );
         any = true;

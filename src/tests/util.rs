@@ -80,3 +80,18 @@ fn format_ymd_hm_pads_single_digit_hour_and_minute() {
     let secs = 3600 + 5 * 60;
     assert_eq!(format_ymd_hm(secs), "1970-01-01 01:05");
 }
+
+#[test]
+fn count_phrase_singular_and_plural() {
+    assert_eq!(count_phrase(0, "check"), "0 checks");
+    assert_eq!(count_phrase(1, "check"), "1 check");
+    assert_eq!(count_phrase(2, "check"), "2 checks");
+    assert_eq!(count_phrase(100, "pin"), "100 pins");
+}
+
+#[test]
+fn pluralize_drops_count_keeps_only_noun() {
+    assert_eq!(pluralize(0, "freeze"), "freezes");
+    assert_eq!(pluralize(1, "freeze"), "freeze");
+    assert_eq!(pluralize(7, "freeze"), "freezes");
+}

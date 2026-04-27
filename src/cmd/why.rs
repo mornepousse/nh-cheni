@@ -162,11 +162,13 @@ fn print_summary_footer(by_category: &GroupedMatches<'_>, match_count: usize) {
     println!(
         "{}",
         format!(
-            "{} match(es) in {} file(s) across {} categor{}",
+            "{} {} in {} {} across {} {}",
             match_count,
+            if match_count == 1 { "match" } else { "matches" },
             file_count,
+            crate::util::pluralize(file_count, "file"),
             cat_count,
-            if cat_count == 1 { "y" } else { "ies" }
+            if cat_count == 1 { "category" } else { "categories" }
         )
         .dimmed()
     );

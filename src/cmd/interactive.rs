@@ -116,8 +116,8 @@ fn print_pins_freezes_line(nix_config: &config::NixConfig) {
     };
     let pin_status = match (pins.len(), obsolete) {
         (0, _) => "no active pins".dimmed().to_string(),
-        (n, 0) => format!("{} active pin(s)", n).green().to_string(),
-        (n, o) => format!("{} active pin(s), {} obsolete", n, o)
+        (n, 0) => format!("{} active", crate::util::count_phrase(n, "pin")).green().to_string(),
+        (n, o) => format!("{} active, {} obsolete", crate::util::count_phrase(n, "pin"), o)
             .yellow()
             .to_string(),
     };

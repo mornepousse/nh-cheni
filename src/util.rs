@@ -86,6 +86,29 @@ pub fn confirm(question: &str, default_yes: bool) -> Result<bool> {
     Ok(answer == "y" || answer == "yes")
 }
 
+/// Pluralize an English noun by appending `s` when `n != 1`. Output is
+/// "1 check" or "0 checks" / "5 checks" — never the ugly "1 check(s)"
+/// that proliferates when format strings hard-code the parenthesis.
+/// Use for any user-facing "N <thing>" line where N is dynamic.
+pub fn count_phrase(n: usize, singular: &str) -> String {
+    if n == 1 {
+        format!("{} {}", n, singular)
+    } else {
+        format!("{} {}s", n, singular)
+    }
+}
+
+/// Pluralize bare. Returns the singular form when `n == 1`, the
+/// plural (singular + "s") otherwise. Used when the count and the
+/// noun aren't adjacent in the sentence.
+pub fn pluralize(n: usize, singular: &str) -> String {
+    if n == 1 {
+        singular.to_string()
+    } else {
+        format!("{}s", singular)
+    }
+}
+
 /// The tree-branch glyph for position `idx` in a list of `total` items.
 /// Returns `"└──"` for the last row and `"├──"` for every other row.
 /// Centralises the UTF-8 literals that would otherwise get pasted in

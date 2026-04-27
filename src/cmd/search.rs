@@ -364,7 +364,7 @@ fn print_footer(total: usize) {
     if total > MAX_DISPLAY {
         println!("{}", format!("Showing {} of {} results", MAX_DISPLAY, total).dimmed());
     } else {
-        println!("{}", format!("{} result(s)", total).dimmed());
+        println!("{}", crate::util::count_phrase(total, "result").dimmed());
     }
     if total > 0 {
         println!(

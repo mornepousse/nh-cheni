@@ -32,7 +32,11 @@ pub fn list_freezes() -> Result<()> {
         return Ok(());
     }
 
-    println!("  {} package(s) frozen", current.len().to_string().bold());
+    println!(
+        "  {} {} frozen",
+        current.len().to_string().bold(),
+        crate::util::pluralize(current.len(), "package")
+    );
     println!();
 
     let total = current.len();

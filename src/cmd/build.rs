@@ -200,10 +200,10 @@ fn run_nh_capturing_stderr(
 /// Render the parsed error list as the human-readable failure summary.
 fn print_parsed_errors(errors: &[ParsedError], elapsed: std::time::Duration) {
     println!(
-        "\n{} Build failed after {} with {} error(s):\n",
+        "\n{} Build failed after {} with {}:\n",
         "✗".red(),
         format_elapsed(elapsed).dimmed(),
-        errors.len()
+        crate::util::count_phrase(errors.len(), "error")
     );
     for (i, error) in errors.iter().enumerate() {
         println!(

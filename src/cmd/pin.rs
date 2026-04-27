@@ -39,8 +39,9 @@ pub fn list_pins() -> Result<()> {
     let all_obsolete = obsolete == current_pins.len() && obsolete > 0;
 
     println!(
-        "  {} pin(s) active{}",
+        "  {} {} active{}",
         current_pins.len().to_string().bold(),
+        crate::util::pluralize(current_pins.len(), "pin"),
         if all_obsolete {
             " (all obsolete — nixpkgs caught up)".yellow().to_string()
         } else if obsolete > 0 {
@@ -310,9 +311,10 @@ pub async fn pin_category(category: &str, force: bool) -> Result<()> {
     }
     let added = pins::add(&nix_config.flake_dir, &to_pin)?;
     println!(
-        "\n{} Pinned {} package(s).",
+        "\n{} Pinned {} {}.",
         "✓".green(),
-        added.len().to_string().bold()
+        added.len().to_string().bold(),
+        crate::util::pluralize(added.len(), "package")
     );
     println!("Run '{}' to apply.", "cheni build".bold());
     Ok(())
@@ -432,8 +434,8 @@ fn confirm_pin_block(
     println!();
 
     let prompt = match kind {
-        UpdateKind::Minor => format!("Pin {} minor update(s)?", updates.len()),
-        UpdateKind::Major => format!("Pin {} major update(s)?", updates.len()),
+        UpdateKind::Minor => format!("Pin {} minor {}?", updates.len(), crate::util::pluralize(updates.len(), "update")),
+        UpdateKind::Major => format!("Pin {} major {}?", updates.len(), crate::util::pluralize(updates.len(), "update")),
     };
     let default_yes = matches!(kind, UpdateKind::Minor);
 
@@ -518,8 +520,9 @@ pub fn unpin_all(yes: bool) -> Result<()> {
 
     println!("{}\n", "=== cheni unpin ===".bold());
     println!(
-        "  This will release {} pin(s):",
-        current_pins.len().to_string().bold()
+        "  This will release {} {}:",
+        current_pins.len().to_string().bold(),
+        crate::util::pluralize(current_pins.len(), "pin")
     );
     for (idx, name) in current_pins.iter().enumerate() {
         let glyph = crate::util::tree_glyph(idx, current_pins.len());
@@ -545,7 +548,7 @@ pub fn unpin_all(yes: bool) -> Result<()> {
 
     if !yes
         && !confirm(
-            &format!("Unpin all {} pin(s)?", current_pins.len()),
+            &format!("Unpin all {}?", crate::util::count_phrase(current_pins.len(), "pin")),
             false,
         )?
     {
@@ -554,7 +557,7 @@ pub fn unpin_all(yes: bool) -> Result<()> {
     }
 
     let count = pins::clear(&nix_config.flake_dir)?;
-    println!("{} Removed {} pin(s).", "✓".green(), count.to_string().bold());
+    println!("{} Removed {} {}.", "✓".green(), count.to_string().bold(), crate::util::pluralize(count, "pin"));
     println!("Run '{}' to apply.", "cheni build".bold());
     Ok(())
 }
@@ -592,7 +595,7 @@ pub async fn pin_flake_inputs() -> Result<()> {
 
     print_flake_updates_block(&with_updates);
     if !confirm(
-        &format!("Update {} flake input(s)?", with_updates.len()),
+        &format!("Update {} flake {}?", with_updates.len(), crate::util::pluralize(with_updates.len(), "input")),
         true,
     )? {
         println!("No flake inputs updated.");
@@ -600,9 +603,10 @@ pub async fn pin_flake_inputs() -> Result<()> {
     }
     let updated = apply_flake_updates(&nix_config.flake_dir, &with_updates);
     println!(
-        "\n{} Updated {} flake input(s).",
+        "\n{} Updated {} flake {}.",
         "✓".green(),
         updated.to_string().bold(),
+        crate::util::pluralize(updated, "input")
     );
     println!("Run '{}' to rebuild.", "cheni build".bold());
     Ok(())

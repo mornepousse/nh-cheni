@@ -81,15 +81,17 @@ fn print_ok_summary(checks: &[&CheckResult]) {
     let body = if checks.len() > display_limit {
         names.push("…");
         format!(
-            "{} other check(s) passed ({}, +{} more)",
+            "{} other {} passed ({}, +{} more)",
             checks.len(),
+            crate::util::pluralize(checks.len(), "check"),
             names[..display_limit].join(", "),
             checks.len() - display_limit,
         )
     } else {
         format!(
-            "{} other check(s) passed ({})",
+            "{} other {} passed ({})",
             checks.len(),
+            crate::util::pluralize(checks.len(), "check"),
             names.join(", "),
         )
     };
@@ -154,10 +156,10 @@ fn print_check(check: &CheckResult) {
 fn print_summary(ok_count: usize, warn_count: usize, err_count: usize) {
     println!();
     println!(
-        "{} {} passed | {} {} warning(s) | {} {} error(s)",
+        "{} {} passed | {} {} | {} {}",
         "●".green(), ok_count,
-        "●".yellow(), warn_count,
-        "●".red(), err_count,
+        "●".yellow(), crate::util::count_phrase(warn_count, "warning"),
+        "●".red(), crate::util::count_phrase(err_count, "error"),
     );
 }
 
@@ -242,7 +244,7 @@ fn check_pins_valid(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
         results.push(CheckResult {
             severity: Severity::Ok,
             name: "Pins validity".to_string(),
-            message: format!("all {} pin(s) point to installed packages", pins.len()),
+            message: format!("all {} point to installed packages", crate::util::count_phrase(pins.len(), "pin")),
             hint: None,
         });
     } else {
@@ -250,8 +252,8 @@ fn check_pins_valid(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
             severity: Severity::Warning,
             name: "Orphan pins".to_string(),
             message: format!(
-                "{} pin(s) for packages not in the store: {}",
-                orphan_pins.len(),
+                "{} for packages not in the store: {}",
+                crate::util::count_phrase(orphan_pins.len(), "pin"),
                 orphan_pins.join(", ")
             ),
             hint: Some("Run 'cheni unpin <pkg>' to remove orphan pins.".to_string()),
@@ -306,7 +308,7 @@ fn check_freezes_valid(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> 
         results.push(CheckResult {
             severity: Severity::Ok,
             name: "Freezes validity".to_string(),
-            message: format!("{} freeze(s) well-formed", frozen.len()),
+            message: format!("{} well-formed", crate::util::count_phrase(frozen.len(), "freeze")),
             hint: None,
         });
     } else {
@@ -314,8 +316,8 @@ fn check_freezes_valid(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> 
             severity: Severity::Warning,
             name: "Malformed freezes".to_string(),
             message: format!(
-                "{} freeze(s) with a bad rev or narHash: {}",
-                malformed.len(),
+                "{} with a bad rev or narHash: {}",
+                crate::util::count_phrase(malformed.len(), "freeze"),
                 malformed.join(", ")
             ),
             hint: Some(
@@ -344,8 +346,8 @@ fn check_freezes_valid(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> 
             severity: Severity::Warning,
             name: "Orphan freezes".to_string(),
             message: format!(
-                "{} freeze(s) for packages not in the store: {}",
-                orphans.len(),
+                "{} for packages not in the store: {}",
+                crate::util::count_phrase(orphans.len(), "freeze"),
                 orphans.join(", ")
             ),
             hint: Some("Run 'cheni unfreeze <pkg>' to drop orphan freezes.".to_string()),
@@ -384,7 +386,7 @@ fn check_flake_input_freshness(flake_dir: &std::path::Path) -> Vec<CheckResult> 
         vec![CheckResult {
             severity: Severity::Ok,
             name: "Flake input freshness".to_string(),
-            message: format!("all {} input(s) updated within 30 days", inputs.len()),
+            message: format!("all {} updated within 30 days", crate::util::count_phrase(inputs.len(), "input")),
             hint: None,
         }]
     } else {
@@ -425,14 +427,14 @@ fn check_obsolete_pins(flake_dir: &std::path::Path) -> CheckResult {
         CheckResult {
             severity: Severity::Ok,
             name: "Pins freshness".to_string(),
-            message: format!("{} active pin(s), nixpkgs-latest is ahead", pins.len()),
+            message: format!("{} active, nixpkgs-latest is ahead", crate::util::count_phrase(pins.len(), "pin")),
             hint: None,
         }
     } else {
         CheckResult {
             severity: Severity::Warning,
             name: "Obsolete pins".to_string(),
-            message: format!("{} pin(s) obsolete — nixpkgs caught up", obsolete),
+            message: format!("{} obsolete — nixpkgs caught up", crate::util::count_phrase(obsolete, "pin")),
             hint: Some("Run 'cheni clean' to remove them.".to_string()),
         }
     }
@@ -710,7 +712,7 @@ fn check_generations() -> CheckResult {
         CheckResult {
             severity: Severity::Ok,
             name: "System generations".to_string(),
-            message: format!("{} generation(s)", count),
+            message: crate::util::count_phrase(count, "generation"),
             hint: None,
         }
     }

@@ -488,9 +488,10 @@ fn print_flake_update_summary(updates: &[InputUpdate]) {
         return;
     }
     println!(
-        "  {} {} input(s) updated:",
+        "  {} {} {} updated:",
         "✓".green(),
-        updates.len().to_string().bold()
+        updates.len().to_string().bold(),
+        crate::util::pluralize(updates.len(), "input")
     );
     for u in updates {
         println!(
@@ -751,9 +752,10 @@ fn print_section_from_changes(
     // section to one line so it doesn't dominate the preview.
     if packages.is_empty() && !artefacts.is_empty() {
         println!(
-            "  {} {} system / home-manager artefact(s) {} ({})",
+            "  {} {} system / home-manager {} {} ({})",
             glyph_colored,
             artefacts.len().to_string().bold(),
+            crate::util::pluralize(artefacts.len(), "artefact"),
             label,
             artefact_sample(&artefacts).dimmed()
         );
@@ -762,7 +764,13 @@ fn print_section_from_changes(
 
     // Case 2: packages (with or without a tail of artefacts).
     let header = aggregate_header(&packages);
-    let head = format!("  {} {} package(s) {}", glyph_colored, packages.len(), label);
+    let head = format!(
+        "  {} {} {} {}",
+        glyph_colored,
+        packages.len(),
+        crate::util::pluralize(packages.len(), "package"),
+        label
+    );
     if header.is_empty() {
         println!("{}:", head);
     } else {
@@ -772,17 +780,20 @@ fn print_section_from_changes(
         println!("    {}", format_change(change));
     }
     if packages.len() > display_limit {
+        let remaining = packages.len() - display_limit;
         println!(
-            "    {} and {} more package(s)...",
+            "    {} and {} more {}...",
             "...".dimmed(),
-            packages.len() - display_limit
+            remaining,
+            crate::util::pluralize(remaining, "package")
         );
     }
     if !artefacts.is_empty() {
         println!(
-            "    {} +{} system artefact(s) ({})",
+            "    {} +{} system {} ({})",
             "…".dimmed(),
             artefacts.len(),
+            crate::util::pluralize(artefacts.len(), "artefact"),
             artefact_sample(&artefacts).dimmed()
         );
     }
@@ -1269,8 +1280,9 @@ fn run_gc_step(yes: bool) -> Result<()> {
         return Ok(());
     }
     println!(
-        "  {} store path(s) would be removed.",
-        preview.paths.to_string().bold()
+        "  {} store {} would be removed.",
+        preview.paths.to_string().bold(),
+        crate::util::pluralize(preview.paths, "path")
     );
 
     if !yes && !confirm("Proceed with garbage collection?")? {
@@ -1373,16 +1385,17 @@ fn clean_obsolete_pins(flake_dir: &Path) -> Result<()> {
     let obsolete = super::obsolete::count_obsolete_pins(&lock_path, &current_pins);
 
     if obsolete == 0 {
-        println!("  All {} pin(s) still needed.", current_pins.len());
+        println!("  All {} still needed.", crate::util::count_phrase(current_pins.len(), "pin"));
         return Ok(());
     }
 
     // If nixpkgs caught up, all pins are obsolete — clear them all
     let removed = pins::clear(flake_dir)?;
     println!(
-        "  {} Removed {} obsolete pin(s).",
+        "  {} Removed {} obsolete {}.",
         "✓".green(),
-        removed
+        removed,
+        crate::util::pluralize(removed, "pin")
     );
     debug!("Cleaned {} obsolete pins", removed);
 
