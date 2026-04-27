@@ -58,7 +58,7 @@ pub fn unfreeze_all(yes: bool) -> Result<()> {
     let current = freezes::read(&nix_config.flake_dir)?;
 
     if current.is_empty() {
-        println!("No freezes to remove.");
+        println!("{} No freezes to remove.", "✓".green());
         return Ok(());
     }
 

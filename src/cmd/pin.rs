@@ -257,6 +257,11 @@ pub async fn pin_category(category: &str, force: bool) -> Result<()> {
     let to_check = installed_packages_in_category(&nix_config.flake_dir, category)?;
     if to_check.is_empty() {
         println!("No installed packages found in modules/{}/.", category);
+        println!(
+            "  {} categories: {}",
+            "·".dimmed(),
+            config::list_module_categories(&nix_config.flake_dir).join(", ")
+        );
         return Ok(());
     }
 
@@ -272,7 +277,7 @@ pub async fn pin_category(category: &str, force: bool) -> Result<()> {
 
     let (minor_updates, major_updates) = classify_pin_targets(&to_check).await?;
     if minor_updates.is_empty() && major_updates.is_empty() {
-        println!("{}", "Everything is up to date!".green());
+        println!("{} Everything is up to date.", "✓".green());
         return Ok(());
     }
 
@@ -289,7 +294,7 @@ pub async fn pin_category(category: &str, force: bool) -> Result<()> {
     )?);
 
     if to_pin.is_empty() {
-        println!("\nNo packages pinned.");
+        println!("\n{} Nothing pinned.", "·".dimmed());
         return Ok(());
     }
     let added = pins::add(&nix_config.flake_dir, &to_pin)?;
@@ -488,7 +493,7 @@ pub fn unpin_all(yes: bool) -> Result<()> {
     let current_pins = pins::read(&nix_config.flake_dir)?;
 
     if current_pins.is_empty() {
-        println!("No pins to remove.");
+        println!("{} No pins to remove.", "✓".green());
         return Ok(());
     }
 

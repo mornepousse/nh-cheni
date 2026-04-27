@@ -34,17 +34,66 @@ struct CheckResult {
 /// Run `cheni doctor`.
 ///
 /// Runs a series of health checks and reports issues with severity levels.
+/// Output is severity-sorted: errors first, then warnings, then a single
+/// collapsed line for the OK checks. The user reads what needs attention
+/// without scanning through the green-checks list to find it.
 pub fn run() -> Result<()> {
     let nix_config = config::detect()?;
     print_doctor_header(&nix_config);
 
     let checks = run_all_checks(&nix_config.flake_dir)?;
     let (ok, warn, err) = tally_severities(&checks);
-    for check in &checks {
-        print_check(check);
+
+    let mut errors: Vec<&CheckResult> = Vec::new();
+    let mut warnings: Vec<&CheckResult> = Vec::new();
+    let mut ok_checks: Vec<&CheckResult> = Vec::new();
+    for c in &checks {
+        match c.severity {
+            Severity::Error => errors.push(c),
+            Severity::Warning => warnings.push(c),
+            Severity::Ok => ok_checks.push(c),
+        }
+    }
+    for c in &errors {
+        print_check(c);
+    }
+    for c in &warnings {
+        print_check(c);
+    }
+    if !ok_checks.is_empty() {
+        print_ok_summary(&ok_checks);
     }
     print_summary(ok, warn, err);
     Ok(())
+}
+
+/// Render the OK checks as a single collapsed line so the user
+/// doesn't have to wade through 10+ green checkmarks to find the
+/// items that need attention. Names of the first few checks are
+/// listed inline; the rest is a "(+N more)" tail.
+fn print_ok_summary(checks: &[&CheckResult]) {
+    let display_limit = 4;
+    let mut names: Vec<&str> = checks
+        .iter()
+        .take(display_limit)
+        .map(|c| c.name.as_str())
+        .collect();
+    let body = if checks.len() > display_limit {
+        names.push("…");
+        format!(
+            "{} other check(s) passed ({}, +{} more)",
+            checks.len(),
+            names[..display_limit].join(", "),
+            checks.len() - display_limit,
+        )
+    } else {
+        format!(
+            "{} other check(s) passed ({})",
+            checks.len(),
+            names.join(", "),
+        )
+    };
+    println!("  {}  {}", "✓".green(), body.dimmed());
 }
 
 fn print_doctor_header(nix_config: &config::NixConfig) {

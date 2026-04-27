@@ -20,7 +20,7 @@ pub fn run() -> Result<()> {
     let current_pins = pins::read(&nix_config.flake_dir)?;
 
     if current_pins.is_empty() {
-        println!("No pins to clean.");
+        println!("{} No pins to clean.", "✓".green());
         return Ok(());
     }
 
