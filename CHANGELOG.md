@@ -7,6 +7,16 @@ semver.
 
 ## Unreleased
 
+### Changed
+- **Interactive menu banner** now shows a multi-line "where am I"
+  snapshot before the action picker. Adds the nixpkgs floor age
+  (yellow + actionable hint when ≥3 days), an active-freezes count
+  on the same line as pins, a `flake.lock: dirty` warning when
+  uncommitted bumps are pending, and a "cheni vX.Y.Z available"
+  line when the cache reports a newer release. The user picks an
+  action with the current state in mind instead of having to run
+  `cheni status` separately first.
+
 ### Added
 - **`cheni doctor` gains three checks** that close gaps surfaced
   during the v0.5.0–v0.5.6 cycle:

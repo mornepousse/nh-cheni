@@ -72,37 +72,144 @@ pub async fn run() -> Result<()> {
     dispatch(action).await
 }
 
-/// Print a one-line status snapshot above the menu.
+/// Print a multi-line status snapshot above the menu.
+///
+/// Compact "where am I" view so the user picks an action with the
+/// current state in mind: config path, pins state, nixpkgs floor age,
+/// dirty-lock signal, and self-update availability. Each line is best-
+/// effort — a missing flake or an unparseable lock skips its line
+/// silently rather than blocking the menu.
 fn print_banner() -> Result<()> {
     println!("{}", "=== cheni ===".bold());
 
-    if let Ok(nix_config) = config::detect() {
-        let pins = pins::read(&nix_config.flake_dir).unwrap_or_default();
-        let lock_path = nix_config.flake_dir.join("flake.lock");
-        let obsolete = if pins.is_empty() {
-            0
-        } else {
-            count_obsolete_pins(&lock_path, &pins)
-        };
+    let Ok(nix_config) = config::detect() else {
+        println!();
+        return Ok(());
+    };
 
-        let pin_status = match (pins.len(), obsolete) {
-            (0, _) => "no active pins".dimmed().to_string(),
-            (n, 0) => format!("{} active pin(s)", n).green().to_string(),
-            (n, o) => format!("{} active pin(s), {} obsolete", n, o)
-                .yellow()
-                .to_string(),
-        };
+    println!(
+        "  {} {}",
+        "config:".dimmed(),
+        nix_config.flake_dir.display()
+    );
 
-        println!(
-            "  {} {}    {} {}",
-            "config:".dimmed(),
-            nix_config.flake_dir.display(),
-            "pins:".dimmed(),
-            pin_status,
-        );
-    }
+    print_pins_freezes_line(&nix_config);
+    print_nixpkgs_floor_line(&nix_config);
+    print_dirty_lock_line(&nix_config);
+    print_self_update_line(&nix_config);
+
     println!();
     Ok(())
+}
+
+/// Pins (+ freezes when active) summary line. Yellow when something
+/// needs attention (obsolete pins), green when the policy is in use
+/// and clean, dimmed when idle.
+fn print_pins_freezes_line(nix_config: &config::NixConfig) {
+    let pins = pins::read(&nix_config.flake_dir).unwrap_or_default();
+    let freezes = super::super::nix::freezes::read(&nix_config.flake_dir).unwrap_or_default();
+    let lock_path = nix_config.flake_dir.join("flake.lock");
+    let obsolete = if pins.is_empty() {
+        0
+    } else {
+        count_obsolete_pins(&lock_path, &pins)
+    };
+    let pin_status = match (pins.len(), obsolete) {
+        (0, _) => "no active pins".dimmed().to_string(),
+        (n, 0) => format!("{} active pin(s)", n).green().to_string(),
+        (n, o) => format!("{} active pin(s), {} obsolete", n, o)
+            .yellow()
+            .to_string(),
+    };
+    let freeze_tail = if freezes.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "  ·  {} {}",
+            "freezes:".dimmed(),
+            format!("{} held", freezes.len()).cyan(),
+        )
+    };
+    println!("  {} {}{}", "pins:".dimmed(), pin_status, freeze_tail);
+}
+
+/// nixpkgs floor age line — same threshold (3d) as `cheni check` and
+/// `cheni doctor`, kept in sync. Skipped silently when the input
+/// can't be located.
+fn print_nixpkgs_floor_line(nix_config: &config::NixConfig) {
+    let Some(input) = super::super::nix::flake::read_input_by_name(
+        &nix_config.flake_dir,
+        "nixpkgs",
+    ) else {
+        return;
+    };
+    let label = match input.days_old {
+        0 => "today".to_string(),
+        1 => "1d ago".to_string(),
+        n => format!("{}d ago", n),
+    };
+    let line = if input.days_old < 3 {
+        format!("{} {}", "nixpkgs floor:".dimmed(), label.dimmed())
+    } else {
+        format!(
+            "{} {}  {}",
+            "nixpkgs floor:".dimmed(),
+            label.yellow(),
+            "(consider cheni upgrade)".dimmed()
+        )
+    };
+    println!("  {}", line);
+}
+
+/// flake.lock dirty signal line. Best-effort `git diff --name-only`;
+/// silent for non-git flakes or when the lock is clean.
+fn print_dirty_lock_line(nix_config: &config::NixConfig) {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--name-only", "flake.lock"])
+        .current_dir(&nix_config.flake_dir)
+        .output();
+    if let Ok(o) = output {
+        if o.status.success() && !o.stdout.is_empty() {
+            println!(
+                "  {} {}",
+                "flake.lock:".dimmed(),
+                "dirty (uncommitted bumps will apply on next rebuild)"
+                    .yellow(),
+            );
+        }
+    }
+}
+
+/// "cheni vX.Y.Z available" line, sync-read from the cache filled by
+/// `cheni check`. Skipped silently when the user is on the latest or
+/// the cache is empty (= they haven't run `check` recently).
+fn print_self_update_line(nix_config: &config::NixConfig) {
+    let Ok(current_tag) = super::self_update::read_cheni_tag(&nix_config.flake_dir) else {
+        return;
+    };
+    if !crate::release::is_release_tag(&current_tag) {
+        return;
+    }
+    let Some(latest) = crate::release::cached_latest_release_tag() else {
+        return;
+    };
+    if latest == current_tag {
+        return;
+    }
+    let cur_v = crate::version::parse::parse_version(
+        current_tag.strip_prefix('v').unwrap_or(&current_tag),
+    );
+    let lat_v =
+        crate::version::parse::parse_version(latest.strip_prefix('v').unwrap_or(&latest));
+    if lat_v <= cur_v {
+        return;
+    }
+    println!(
+        "  {} {} {}",
+        "cheni:".dimmed(),
+        format!("{} available", latest).yellow(),
+        format!("(you're on {})", current_tag).dimmed(),
+    );
 }
 
 /// Static menu definition. Order = most common actions first.
