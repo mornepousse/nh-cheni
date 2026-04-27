@@ -30,20 +30,20 @@ pub fn run(opts: DiagnoseOptions) -> Result<()> {
 ///
 /// Lean on purpose: adding a pattern means appending one entry to
 /// `KNOWN_FINDINGS`. No regex, no URL lookups, no priority ordering.
-pub struct Finding {
+pub(crate) struct Finding {
     /// Case-insensitive substring we look for in the log.
-    pub matcher: &'static str,
+    pub(crate) matcher: &'static str,
     /// Short headline for the issue.
-    pub title: &'static str,
+    pub(crate) title: &'static str,
     /// Why the failure happens, in one or two sentences.
-    pub explanation: &'static str,
+    pub(crate) explanation: &'static str,
     /// What the user should do about it.
-    pub action: &'static str,
+    pub(crate) action: &'static str,
 }
 
 /// Curated list of known patterns. Order doesn't matter — we print
 /// every match found, in the order they appear here.
-pub const KNOWN_FINDINGS: &[Finding] = &[
+pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
     Finding {
         matcher: "Pre-switch check",
         title: "live switch refused (critical component change)",
@@ -553,7 +553,7 @@ LimitNOFILE = 1048576;` in your config (then `systemctl daemon-reload \
 
 /// Pure core: scan `log` for every pattern and return the ones that
 /// matched, in `KNOWN_FINDINGS` order, deduplicated.
-pub fn find_issues(log: &str) -> Vec<&'static Finding> {
+pub(crate) fn find_issues(log: &str) -> Vec<&'static Finding> {
     let haystack = log.to_lowercase();
     KNOWN_FINDINGS
         .iter()
@@ -564,7 +564,7 @@ pub fn find_issues(log: &str) -> Vec<&'static Finding> {
 /// Print a compact postscript of diagnose hints for `raw_output`, or
 /// nothing at all when no pattern matches. Shared by `cheni upgrade`
 /// and `cheni self-update` for the failure-mode hint injection.
-pub fn print_hints_for(raw_output: &str) {
+pub(crate) fn print_hints_for(raw_output: &str) {
     let findings = find_issues(raw_output);
     if findings.is_empty() {
         return;

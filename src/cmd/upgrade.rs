@@ -523,12 +523,12 @@ fn refresh_constrained_freezes_step(flake_dir: &Path) {
 /// Aggregated counts from the dry-run preview, reused by the final
 /// summary. `None` means "no changes, upgrade short-circuited".
 #[derive(Debug, Clone, Default)]
-pub struct UpgradeStats {
-    pub major: usize,
-    pub minor: usize,
-    pub patch: usize,
-    pub new: usize,
-    pub artefacts: usize,
+pub(crate) struct UpgradeStats {
+    pub(crate) major: usize,
+    pub(crate) minor: usize,
+    pub(crate) patch: usize,
+    pub(crate) new: usize,
+    pub(crate) artefacts: usize,
 }
 
 impl UpgradeStats {
@@ -540,14 +540,14 @@ impl UpgradeStats {
 /// Signals picked up during the run so the final summary can explain
 /// *why* things were (or weren't) rebuilt — not just count them.
 #[derive(Default)]
-pub struct UpgradeContext {
+pub(crate) struct UpgradeContext {
     /// Number of flake inputs that moved in step 1. Zero means
     /// everything was already up to date.
-    pub inputs_updated: usize,
+    pub(crate) inputs_updated: usize,
     /// `warning: Git tree '…' is dirty` was seen — the flake's own
     /// git checkout has uncommitted changes, which triggers a
     /// re-evaluation even when no input moved.
-    pub git_tree_dirty: bool,
+    pub(crate) git_tree_dirty: bool,
 }
 
 /// Step 2: evaluate pending changes via `nix build --dry-run`, show a
