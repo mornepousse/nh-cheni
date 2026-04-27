@@ -660,7 +660,7 @@ fn pin_flake_input(flake_dir: &std::path::Path, name: &str) -> Result<()> {
     );
 
     let status = std::process::Command::new("nix")
-        .args(["flake", "update", name])
+        .args(["flake", "update", "--", name])
         .current_dir(flake_dir)
         .status()
         .map_err(|e| crate::nix::tools::tool_error("nix", e))?;

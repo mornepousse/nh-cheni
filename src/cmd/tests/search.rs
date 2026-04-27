@@ -217,3 +217,26 @@ fn parse_and_sort_results_handles_missing_fields() {
     assert_eq!(results[0].1, "?");
     assert_eq!(results[0].2, "");
 }
+
+// --- nix_search_args: séparateur -- protège contre les queries-flags ---
+
+#[test]
+fn nix_search_args_positions_double_dash_before_query() {
+    // The "--" separator must appear between "nixpkgs" and the query so
+    // that nix never interprets a query like "--expr" as a flag.
+    let args = nix_search_args("firefox");
+    let dd_pos = args.iter().position(|&a| a == "--").expect("-- must be present");
+    let query_pos = args.iter().position(|&a| a == "firefox").expect("query must be present");
+    assert!(dd_pos < query_pos, "-- must come before the query");
+}
+
+#[test]
+fn nix_search_args_flag_like_query_stays_after_separator() {
+    // A query starting with "--" (attacker-controlled or accidental)
+    // must appear after the "--" separator, ensuring nix sees it as
+    // a positional argument rather than a flag.
+    let args = nix_search_args("--expr");
+    let dd_pos = args.iter().position(|&a| a == "--").expect("-- must be present");
+    let query_pos = args.iter().position(|&a| a == "--expr").expect("query must be present");
+    assert!(dd_pos < query_pos, "-- must come before the flag-like query");
+}

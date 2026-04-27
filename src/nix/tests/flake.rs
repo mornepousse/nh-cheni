@@ -79,6 +79,39 @@ fn is_revision_outdated_survives_non_ascii() {
     assert!(is_revision_outdated("é🦀x000000", "abc000000000"));
 }
 
+// --- is_valid_repo_slug ---
+
+#[test]
+fn repo_slug_accepts_typical_names() {
+    assert!(is_valid_repo_slug("nixpkgs"));
+    assert!(is_valid_repo_slug("harrael"));
+    assert!(is_valid_repo_slug("my-repo_42"));
+    assert!(is_valid_repo_slug("Org.Name"));
+}
+
+#[test]
+fn repo_slug_rejects_empty() {
+    assert!(!is_valid_repo_slug(""));
+}
+
+#[test]
+fn repo_slug_rejects_slashes_and_traversal() {
+    // A slash or ".." in owner/repo would allow constructing a URL
+    // that escapes the intended path (e.g. /repos/foo/../../../etc).
+    assert!(!is_valid_repo_slug("foo/bar"));
+    assert!(!is_valid_repo_slug(".."));
+    assert!(!is_valid_repo_slug("../etc"));
+    assert!(!is_valid_repo_slug("foo/../../bar"));
+}
+
+#[test]
+fn repo_slug_rejects_special_characters() {
+    assert!(!is_valid_repo_slug("foo bar"));
+    assert!(!is_valid_repo_slug("foo@bar"));
+    assert!(!is_valid_repo_slug("foo#bar"));
+    assert!(!is_valid_repo_slug("foo%2Fbar")); // URL-encoded slash
+}
+
 #[test]
 fn sanitize_username_accepts_typical_forms() {
     assert_eq!(sanitize_username("mae").as_deref(), Some("mae"));

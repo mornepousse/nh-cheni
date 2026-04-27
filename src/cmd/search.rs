@@ -238,12 +238,19 @@ fn repology_differs(version: &str, upstream: &str) -> bool {
     crate::version::compare::compare_versions(&v, &u) != crate::version::compare::VersionDiff::Equal
 }
 
+/// Build the argument list for `nix search`. The `--` separator ensures
+/// that a query starting with `--` (e.g. `--expr`) is always treated as
+/// a positional argument by nix, never as a flag.
+fn nix_search_args(query: &str) -> Vec<&str> {
+    vec!["search", "nixpkgs", "--", query, "--json"]
+}
+
 /// Shell out to `nix search nixpkgs <query> --json` and parse the
 /// resulting JSON document. The two failure paths (nix invocation,
 /// JSON parse) get distinct messages so a bug report is meaningful.
 fn run_nix_search(query: &str) -> Result<serde_json::Value> {
     let output = Command::new("nix")
-        .args(["search", "nixpkgs", query, "--json"])
+        .args(nix_search_args(query))
         .output()
         .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
     if !output.status.success() {

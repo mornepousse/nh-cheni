@@ -350,6 +350,17 @@ pub fn check_flake_updates(inputs: &mut [FlakeInput]) {
     });
 }
 
+/// Validate that a GitHub/GitLab owner or repo slug is safe to interpolate
+/// into an HTTPS URL. Accepts only ASCII alphanumerics plus `-`, `_`, `.`.
+/// Rejects empty strings, consecutive dots (`..`), slashes, and any other
+/// character that could alter the URL structure or cause path traversal.
+fn is_valid_repo_slug(s: &str) -> bool {
+    !s.is_empty()
+        && !s.contains("..")
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
 /// Single-input update check. Returns (has_update, remote_age):
 /// - `(None, None)` when we can't query (missing repo info, network error).
 /// - `(Some(false), None)` when the input is up to date.
@@ -364,6 +375,13 @@ fn check_one_input(
     let (Some(repo_type), Some(owner), Some(repo)) = (repo_type, repo_owner, repo_name) else {
         return (None, None);
     };
+    if !is_valid_repo_slug(&owner) || !is_valid_repo_slug(&repo) {
+        debug!(
+            "Skipping remote probe for {}/{}: slug contains disallowed characters",
+            owner, repo
+        );
+        return (None, None);
+    }
     let Some(info) = fetch_remote_info(client, &repo_type, &owner, &repo) else {
         return (None, None);
     };

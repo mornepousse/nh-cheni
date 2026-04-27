@@ -230,7 +230,10 @@ pub async fn latest_release_tag() -> Result<String> {
     if !resp.status().is_success() {
         anyhow::bail!("GitLab tags API returned HTTP {}", resp.status());
     }
-    let body = resp.text().await.context("reading tags response body")?;
+    http::check_content_length(resp.content_length(), http::MAX_BODY_BYTES)?;
+    let body_bytes = resp.bytes().await.context("reading tags response body")?;
+    http::verify_body_size(body_bytes.len(), http::MAX_BODY_BYTES)?;
+    let body = String::from_utf8(body_bytes.to_vec()).context("tags response is not valid UTF-8")?;
     pick_latest_tag(&body)
 }
 
