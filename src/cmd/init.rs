@@ -424,7 +424,12 @@ fn add_overlay(flake_path: &Path, content: &str, _hostname: &str) -> Result<()> 
     }
 
     if !found {
-        anyhow::bail!("Could not find 'nixpkgs.overlays = [' in flake.nix");
+        anyhow::bail!(
+            "Could not find 'nixpkgs.overlays = [' in flake.nix.\n\
+             cheni init expects the canonical nixos-flake form (see https://nixos.wiki/wiki/Flakes#NixOS).\n\
+             You can also paste the overlay manually inside your existing `nixpkgs.overlays = [ ... ]` list — \
+             see https://gitlab.com/harrael/cheni#manual-setup for the snippet."
+        );
     }
 
     let new_content = new_lines.join("\n") + "\n";
@@ -495,7 +500,12 @@ fn add_freeze_overlay(flake_path: &Path, content: &str) -> Result<()> {
     }
 
     if !found {
-        anyhow::bail!("Could not find 'nixpkgs.overlays = [' in flake.nix");
+        anyhow::bail!(
+            "Could not find 'nixpkgs.overlays = [' in flake.nix.\n\
+             cheni init expects the canonical nixos-flake form (see https://nixos.wiki/wiki/Flakes#NixOS).\n\
+             You can also paste the overlay manually inside your existing `nixpkgs.overlays = [ ... ]` list — \
+             see https://gitlab.com/harrael/cheni#manual-setup for the snippet."
+        );
     }
 
     let new_content = new_lines.join("\n") + "\n";

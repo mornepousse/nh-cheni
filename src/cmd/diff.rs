@@ -66,7 +66,11 @@ pub fn run(from: u32, to: u32) -> Result<()> {
         .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
     if !status.success() {
-        anyhow::bail!("Diff command failed");
+        anyhow::bail!(
+            "nix store diff-closures failed (gens {} → {}). Check both generations still exist with `cheni history`.",
+            from,
+            to
+        );
     }
 
     Ok(())

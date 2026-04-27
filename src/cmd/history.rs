@@ -641,7 +641,9 @@ fn apply_deletion(to_delete: &[u32]) -> Result<()> {
         .map_err(|e| crate::nix::tools::tool_error("sudo", e))
         .context("running nix-env --delete-generations")?;
     if !status.success() {
-        anyhow::bail!("Generation deletion failed");
+        anyhow::bail!(
+            "nix-env --delete-generations failed. Generations may have already been removed — run `cheni history` to confirm current state."
+        );
     }
     println!(
         "\n{} {} generation(s) removed.",
@@ -688,7 +690,9 @@ fn run_gc(yes: bool) -> Result<()> {
         .map_err(|e| crate::nix::tools::tool_error("sudo", e))
         .context("running nix-collect-garbage")?;
     if !gc_status.success() {
-        anyhow::bail!("Garbage collection failed");
+        anyhow::bail!(
+            "nix-collect-garbage failed. Disk may be full or a roots scan failed — try `nix-store --gc --print-roots` to inspect what's pinning paths."
+        );
     }
     println!("\n{} Disk space reclaimed.", "✓".green());
     Ok(())

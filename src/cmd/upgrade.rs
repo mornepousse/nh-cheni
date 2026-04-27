@@ -199,7 +199,11 @@ fn update_flake_inputs(flake_dir: &Path, pins_only: bool) -> Result<UpgradeConte
         if !captured.is_empty() {
             eprintln!("{}", captured);
         }
-        anyhow::bail!("nix flake update failed");
+        anyhow::bail!(
+            "nix flake update failed. Common causes: \
+             no network access, an input refers to a tag/branch that disappeared, \
+             or a private repo without auth. Output above shows the specific error."
+        );
     }
 
     let updates = parse_flake_update_events(&captured);

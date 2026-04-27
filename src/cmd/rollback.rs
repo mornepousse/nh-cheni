@@ -221,10 +221,18 @@ fn apply_rollback(target: Option<u32>) -> Result<()> {
         .map_err(|e| crate::nix::tools::tool_error("sudo", e))
         .context("running rollback")?;
     if !status.success() {
-        anyhow::bail!("Rollback failed");
+        match target {
+            None => anyhow::bail!(
+                "Rollback failed (nixos-rebuild --rollback). The previous generation may itself be broken — try `cheni history` and pick an older one with `cheni rollback <N>`."
+            ),
+            Some(n) => anyhow::bail!(
+                "Switching to generation {} failed. Confirm it still exists with `cheni history`.",
+                n
+            ),
+        }
     }
 
-    if target.is_some() {
+    if let Some(n) = target {
         println!("\n  Activating generation...");
         let activate_status = Command::new("sudo")
             .args([
@@ -235,7 +243,11 @@ fn apply_rollback(target: Option<u32>) -> Result<()> {
             .map_err(|e| crate::nix::tools::tool_error("sudo", e))
             .context("activating generation")?;
         if !activate_status.success() {
-            anyhow::bail!("Activation failed — system may be in inconsistent state");
+            anyhow::bail!(
+                "Activation failed — the kernel/init switched but switch-to-configuration refused. \
+                 Reboot to land in generation {} cleanly, or run `cheni rollback` to return to the previous one.",
+                n
+            );
         }
     }
 
