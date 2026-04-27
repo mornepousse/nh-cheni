@@ -7,6 +7,27 @@ semver.
 
 ## Unreleased
 
+### Added
+- **Dynamic shell completion (zsh)**. `cheni completion zsh`
+  now post-processes clap_complete's static output to swap
+  `_default` fallbacks for custom completers, plus appends a
+  helper-functions block. Tab-completion now offers:
+  - **Pinned package names** for `cheni unpin <Tab>` (reads
+    `package-pins.json`).
+  - **Frozen package names** for `cheni unfreeze <Tab>` and
+    `cheni freeze <Tab>` (reads `package-freezes.json`).
+  - **Generation numbers** for `cheni rollback <Tab>`,
+    `cheni diff <from> <to>`, and `cheni history --delete <Tab>`
+    (lists `/nix/var/nix/profiles/system-N-link`, newest first).
+  - **Module categories** for `-c / --category` flags on
+    `cheni check` and `cheni pin` (auto-detected from
+    `modules/`).
+  Backed by a hidden `cheni __complete <kind>` helper that prints
+  one candidate per line — fast enough for per-Tab calls (no
+  network, no eval). bash and fish keep clap_complete's static
+  output as before; the dynamic infrastructure can be ported to
+  them on demand.
+
 ### Documentation
 - **`cheni --help` after-help block restructured**. The single
   "Common workflows" dump (40+ lines) is now split into six purpose-

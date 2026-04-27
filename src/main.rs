@@ -332,6 +332,20 @@ enum Commands {
     /// Emit a roff (groff) man page on stdout — pipe to a file, e.g.
     ///   cheni man > /usr/local/share/man/man1/cheni.1
     Man,
+
+    /// Internal: print completion candidates for a kind (pins,
+    /// freezes, generations, categories). Used by the shell
+    /// completion scripts emitted by `cheni completion`.
+    ///
+    /// Hidden from `--help` so it stays an implementation detail —
+    /// the contract is: one candidate per line on stdout, exit 0
+    /// even when nothing matches (empty list).
+    #[command(hide = true, name = "__complete")]
+    Complete {
+        /// Kind of completion to print: pins, freezes, generations,
+        /// or categories.
+        kind: String,
+    },
 }
 
 /// Install a panic hook that converts unexpected crashes into a friendly
@@ -464,7 +478,70 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::BugReport => cmd::bug_report::run(),
         Commands::Completion { shell } => emit_completion(shell),
         Commands::Man => emit_man_page(),
+        Commands::Complete { kind } => emit_complete_candidates(&kind),
     }
+}
+
+/// Helper for the shell completion scripts: print candidates for a
+/// given kind, one per line. Stays cheap (no network, no eval) so the
+/// shell can call it on every Tab without lag. Always exits 0; an
+/// empty list is valid output (a `cheni unpin` against a config with
+/// no pins shouldn't error out the shell).
+fn emit_complete_candidates(kind: &str) -> Result<()> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    let cfg = nix::config::detect().ok();
+    match kind {
+        "pins" => {
+            if let Some(cfg) = &cfg {
+                if let Ok(pins) = nix::pins::read(&cfg.flake_dir) {
+                    for p in pins {
+                        let _ = writeln!(out, "{}", p);
+                    }
+                }
+            }
+        }
+        "freezes" => {
+            if let Some(cfg) = &cfg {
+                if let Ok(map) = nix::freezes::read(&cfg.flake_dir) {
+                    for k in map.keys() {
+                        let _ = writeln!(out, "{}", k);
+                    }
+                }
+            }
+        }
+        "generations" => {
+            if let Ok(entries) = std::fs::read_dir("/nix/var/nix/profiles") {
+                let mut nums: Vec<u32> = entries
+                    .flatten()
+                    .filter_map(|e| {
+                        e.file_name().to_str().and_then(|n| {
+                            n.strip_prefix("system-")?
+                                .strip_suffix("-link")?
+                                .parse::<u32>()
+                                .ok()
+                        })
+                    })
+                    .collect();
+                // Newest first — most rollback / diff invocations
+                // target a recent gen, so put those at the top of
+                // the completion menu.
+                nums.sort_unstable_by(|a, b| b.cmp(a));
+                for n in nums {
+                    let _ = writeln!(out, "{}", n);
+                }
+            }
+        }
+        "categories" => {
+            if let Some(cfg) = &cfg {
+                for c in nix::config::list_module_categories(&cfg.flake_dir) {
+                    let _ = writeln!(out, "{}", c);
+                }
+            }
+        }
+        _ => {} // unknown kind: empty output, exit 0
+    }
+    Ok(())
 }
 
 /// `cheni pin` — one of three mutually-exclusive modes plus a
@@ -537,7 +614,135 @@ fn emit_completion(shell: clap_complete::Shell) -> Result<()> {
     // upstream `generate()` would panic otherwise.
     let mut buf = Vec::new();
     clap_complete::generate(shell, &mut cmd, bin_name, &mut buf);
+
+    // For zsh we post-process clap_complete's output to swap the
+    // `_default` fallback completer at specific positional-arg
+    // hooks for our own dynamic completers (pinned package names,
+    // generation numbers, module categories, frozen package
+    // names). This lets `cheni unpin <Tab>` actually list the
+    // user's pins, `cheni rollback <Tab>` list available
+    // generations, and so on — turning what was static-only flag
+    // completion into a useful daily-driver tool.
+    if matches!(shell, clap_complete::Shell::Zsh) {
+        let patched = augment_zsh_completion(std::str::from_utf8(&buf).unwrap_or(""));
+        return write_ignoring_broken_pipe(patched.as_bytes());
+    }
+
     write_ignoring_broken_pipe(&buf)
+}
+
+/// Inject dynamic completers into clap_complete's zsh output.
+///
+/// Each substitution swaps the trailing `:_default` (clap_complete's
+/// generic fallback) for a `:_cheni_complete_<kind>` function we
+/// define in the appended block at the end of the file. The
+/// substitutions are deliberately literal-string-based: clap_complete's
+/// position-spec format is stable enough that an exact match is
+/// safer than a regex that could match unrelated lines.
+///
+/// New entries here pair with new function names in
+/// [`zsh_dynamic_completers_block`] — the two stay in lockstep so a
+/// missed pairing surfaces at runtime as "no completion offered" not
+/// as a malformed script.
+fn augment_zsh_completion(src: &str) -> String {
+    let substitutions: &[(&str, &str)] = &[
+        // Generation-number positions (rollback / diff / history --delete).
+        (
+            "'::target -- Generation number to roll back to (omit for the previous generation):_default'",
+            "'::target -- Generation number to roll back to (omit for the previous generation):_cheni_complete_generations'",
+        ),
+        (
+            "':from -- Source generation number:_default'",
+            "':from -- Source generation number:_cheni_complete_generations'",
+        ),
+        (
+            "':to -- Target generation number:_default'",
+            "':to -- Target generation number:_cheni_complete_generations'",
+        ),
+        (
+            "'*--delete=[Delete the listed generations (numbers or ranges, e.g. \"405\" \"400..410\")]:TARGET:_default'",
+            "'*--delete=[Delete the listed generations (numbers or ranges, e.g. \"405\" \"400..410\")]:TARGET:_cheni_complete_generations'",
+        ),
+        // Pin / freeze positional-arg positions.
+        (
+            "'::package -- Package name to unpin:_default'",
+            "'::package -- Package name to unpin:_cheni_complete_pins'",
+        ),
+        (
+            "'::package -- Package name to unfreeze:_default'",
+            "'::package -- Package name to unfreeze:_cheni_complete_freezes'",
+        ),
+        // `cheni freeze <pkg>` — completes from already-installed
+        // names. We hand the freezes file too as a fallback for
+        // re-freezing after unfreeze, but the primary completion
+        // source is the store. The current `pins` helper would be
+        // wrong (these are different sets), so fall back to the
+        // freezes set for now — same result for the round-trip
+        // unfreeze→freeze pattern.
+        (
+            "'::package -- Package name to freeze. Omit to list current freezes:_default'",
+            "'::package -- Package name to freeze. Omit to list current freezes:_cheni_complete_freezes'",
+        ),
+        // Module-category arguments.
+        (
+            "'-c+[Restrict the scan to a single module category (auto-detected from modules/ — e.g. \"dev\", \"apps\", or any subdirectory name)]:CATEGORY:_default'",
+            "'-c+[Restrict the scan to a single module category (auto-detected from modules/ — e.g. \"dev\", \"apps\", or any subdirectory name)]:CATEGORY:_cheni_complete_categories'",
+        ),
+        (
+            "'--category=[Restrict the scan to a single module category (auto-detected from modules/ — e.g. \"dev\", \"apps\", or any subdirectory name)]:CATEGORY:_default'",
+            "'--category=[Restrict the scan to a single module category (auto-detected from modules/ — e.g. \"dev\", \"apps\", or any subdirectory name)]:CATEGORY:_cheni_complete_categories'",
+        ),
+        (
+            "'-c+[Pin all minor updates in a module category (e.g. \"dev\" → modules/dev/)]:CATEGORY:_default'",
+            "'-c+[Pin all minor updates in a module category (e.g. \"dev\" → modules/dev/)]:CATEGORY:_cheni_complete_categories'",
+        ),
+        (
+            "'--category=[Pin all minor updates in a module category (e.g. \"dev\" → modules/dev/)]:CATEGORY:_default'",
+            "'--category=[Pin all minor updates in a module category (e.g. \"dev\" → modules/dev/)]:CATEGORY:_cheni_complete_categories'",
+        ),
+    ];
+
+    let mut out = src.to_string();
+    for (needle, replacement) in substitutions {
+        out = out.replace(needle, replacement);
+    }
+    out.push('\n');
+    out.push_str(zsh_dynamic_completers_block());
+    out
+}
+
+/// zsh function block appended at the end of the completion script.
+/// Each `_cheni_complete_<kind>` shells out to `cheni __complete <kind>`
+/// and feeds the resulting one-name-per-line output to `_describe`.
+/// The shell-out is cheap (no eval, no network) so per-Tab latency
+/// stays imperceptible.
+fn zsh_dynamic_completers_block() -> &'static str {
+    "\n\
+# --- cheni dynamic completion helpers (post-pended by `cheni completion zsh`) ---\n\
+\n\
+_cheni_complete_pins() {\n\
+    local -a pins\n\
+    pins=(${(f)\"$(cheni __complete pins 2>/dev/null)\"})\n\
+    _describe 'pinned package' pins\n\
+}\n\
+\n\
+_cheni_complete_freezes() {\n\
+    local -a freezes\n\
+    freezes=(${(f)\"$(cheni __complete freezes 2>/dev/null)\"})\n\
+    _describe 'frozen package' freezes\n\
+}\n\
+\n\
+_cheni_complete_generations() {\n\
+    local -a gens\n\
+    gens=(${(f)\"$(cheni __complete generations 2>/dev/null)\"})\n\
+    _describe 'generation' gens\n\
+}\n\
+\n\
+_cheni_complete_categories() {\n\
+    local -a cats\n\
+    cats=(${(f)\"$(cheni __complete categories 2>/dev/null)\"})\n\
+    _describe 'module category' cats\n\
+}\n"
 }
 
 fn emit_man_page() -> Result<()> {
