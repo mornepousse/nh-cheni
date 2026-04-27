@@ -20,6 +20,7 @@ pub fn run() -> Result<()> {
     let flake_dir = &nix_config.flake_dir;
 
     print_init_header(flake_dir, &nix_config.hostname);
+    print_init_preview(flake_dir);
     let _ = create_pins_file(flake_dir)?;
     let _ = create_freezes_file(flake_dir)?;
 
@@ -37,8 +38,76 @@ pub fn run() -> Result<()> {
         return Ok(());
     }
 
-    println!("\n{} cheni is ready! Try '{}'.", "✓".green(), "cheni check".bold());
+    print_init_next_steps();
     Ok(())
+}
+
+/// Print a short upfront summary of what `cheni init` is about to do
+/// and how to back out if the user changes their mind. New users
+/// shouldn't have to read the source to know whether their flake is
+/// safe — the preview lists the three changes plainly, and the final
+/// `cheni init` is reversible because every modification it makes is
+/// idempotent (re-running `init` is safe and skips already-applied
+/// steps).
+fn print_init_preview(flake_dir: &Path) {
+    let pins = flake_dir.join("package-pins.json");
+    let freezes = flake_dir.join("package-freezes.json");
+    let pin_status = if pins.exists() {
+        "(already exists, skipped)".dimmed()
+    } else {
+        "(empty `[]` array)".dimmed()
+    };
+    let freeze_status = if freezes.exists() {
+        "(already exists, skipped)".dimmed()
+    } else {
+        "(empty `{}` map)".dimmed()
+    };
+
+    println!("  {}", "I will:".bold());
+    println!(
+        "    {} create {} {}",
+        "·".dimmed(),
+        "package-pins.json".cyan(),
+        pin_status
+    );
+    println!(
+        "    {} create {} {}",
+        "·".dimmed(),
+        "package-freezes.json".cyan(),
+        freeze_status
+    );
+    println!(
+        "    {} add {} input + two overlays to {} (atomic write)",
+        "·".dimmed(),
+        "nixpkgs-latest".cyan(),
+        "flake.nix".cyan()
+    );
+    println!(
+        "  {}",
+        "Each step is idempotent — re-running cheni init is safe and skips done work.".dimmed()
+    );
+    println!(
+        "  {}",
+        "To undo: `git diff flake.nix` then `git checkout flake.nix` plus `rm package-{pins,freezes}.json`.".dimmed()
+    );
+    println!();
+}
+
+/// Print the post-init "what now" block. Replaces the bare one-liner
+/// with two concrete next actions for a new user.
+fn print_init_next_steps() {
+    println!();
+    println!("{} cheni is ready.", "✓".green());
+    println!(
+        "  {} run `{}` to see what's outdated.",
+        "·".dimmed(),
+        "cheni check".bold()
+    );
+    println!(
+        "  {} run `{}` to fetch the latest flake inputs and rebuild.",
+        "·".dimmed(),
+        "cheni upgrade".bold()
+    );
 }
 
 fn print_init_header(flake_dir: &Path, hostname: &str) {
