@@ -7,6 +7,17 @@ semver.
 
 ## Unreleased
 
+### Documentation
+- **`cheni --help` after-help block restructured**. The single
+  "Common workflows" dump (40+ lines) is now split into six purpose-
+  sorted sections: *Daily flow* (interactive menu, check, upgrade,
+  status), *Per-package policy* (pin/freeze/clean), *Build vs
+  upgrade cheat sheet* (now including `--boot`), *History &
+  rollback* (collapsed redundant `--delete` examples),
+  *Discovery* (search, why), *Maintenance* (doctor, self-update,
+  verify, diagnose), *Environment*. Each line is one verb with one
+  purpose, scanned at a glance.
+
 ### Changed
 - **Interactive menu banner** now shows a multi-line "where am I"
   snapshot before the action picker. Adds the nixpkgs floor age

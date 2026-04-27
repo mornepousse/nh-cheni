@@ -27,53 +27,52 @@ use tracing_subscriber::EnvFilter;
         on NixOS, integrated with your flake configuration.\n\
         Packages are pinned to nixpkgs-latest for safe, incremental updates.",
     after_help = "\
-Common workflows:\n  \
-  cheni check                  See what's outdated (packages + flake inputs)\n  \
-  cheni check -c dev           Restrict to modules/dev/\n  \
-  cheni pin vivaldi            Pin a single package to nixpkgs-latest (newer version)\n  \
-  cheni pin -c dev             Pin all minor updates in modules/dev/\n  \
-  cheni pin --flakes           Update flake inputs (zen-browser, claude-code, ...)\n  \
-  cheni freeze nvidia-x11      Hold a package at its CURRENT version (inverse of pin)\n  \
-  cheni unfreeze nvidia-x11    Release a frozen package\n  \
-  cheni build                  Just rebuild the current flake state — no fetch\n  \
-  cheni check --pending        Repology view + closure dry-run (kernel + base included)\n  \
-  cheni upgrade                Full upgrade: refresh ALL inputs, preview, rebuild\n  \
-  cheni upgrade --pins-only    Apply pins: refresh nixpkgs-latest only, rebuild\n\
+Daily flow:\n  \
+  cheni                          Interactive menu (state snapshot + action picker)\n  \
+  cheni check                    See what's outdated (Repology + flake input ages)\n  \
+  cheni check --pending          Add closure dry-run (kernel + base packages too)\n  \
+  cheni upgrade                  Full upgrade: refresh, preview, rebuild\n  \
+  cheni upgrade --boot           Stage for next boot (when nh refuses live switch)\n  \
+  cheni status                   Where am I — config, pins, flake input ages\n\
 \n\
-Build vs upgrade — the short version:\n  \
+Per-package policy:\n  \
+  cheni pin <pkg>                Pin to nixpkgs-latest (get a newer version)\n  \
+  cheni pin -c <category>        Pin all minor updates in modules/<category>/\n  \
+  cheni pin --flakes             Update flake inputs (zen-browser, claude-code, …)\n  \
+  cheni freeze <pkg>             Hold at current version (inverse of pin)\n  \
+  cheni unpin <pkg>              Release a pin (or --all)\n  \
+  cheni unfreeze <pkg>           Release a freeze (or --all)\n  \
+  cheni clean                    Remove obsolete pins (nixpkgs caught up)\n\
+\n\
+Build vs upgrade (cheat sheet):\n  \
   build                  =  rebuild with whatever's already in flake.lock\n  \
-  upgrade --pins-only    =  refresh nixpkgs-latest only, then rebuild  (applies pending pins)\n  \
-  upgrade                =  refresh every flake input, preview, then rebuild\n\
+  upgrade --pins-only    =  refresh nixpkgs-latest only, then rebuild (apply pins)\n  \
+  upgrade                =  refresh every flake input, preview, then rebuild\n  \
+  upgrade --boot         =  same as upgrade but stages for next boot, no live switch\n\
 \n\
 History & rollback:\n  \
-  cheni history                List recent generations with package diffs\n  \
-  cheni history --limit 30     Show more generations\n  \
-  cheni history --diff         Show full per-package diff between generations\n  \
-  cheni rollback               Roll back to the previous generation\n  \
-  cheni rollback 405           Roll back to a specific generation\n  \
-  cheni diff 405 409           Compare two generations\n  \
-  cheni history --prune        Pick generations to delete interactively\n  \
-  cheni history --delete 405 406  Delete specific generations\n  \
-  cheni history --delete 400..410 Delete a range\n  \
-  cheni history --keep 20      Keep only the 20 most recent\n  \
-  cheni history --older-than 30d  Delete generations older than 30 days\n\
+  cheni history                  List recent generations with diffs\n  \
+  cheni history --diff           Full per-package nvd output between gens\n  \
+  cheni rollback [N]             Switch to previous gen (or to specific N)\n  \
+  cheni diff <from> <to>         Compare two generations\n  \
+  cheni history --prune          Delete generations interactively\n  \
+  cheni history --keep N         Keep N most recent (delete the rest)\n  \
+  cheni history --older-than 30d Delete by age\n\
 \n\
 Discovery:\n  \
-  cheni search firefox         Search nixpkgs\n  \
-  cheni why kitty              Find which .nix file declares a package\n  \
-  cheni status                 Show config path, active pins, flake inputs\n\
+  cheni search <query>           nixpkgs search + Repology + pin/freeze badges\n  \
+  cheni why <pkg>                Which .nix file declares this?\n\
 \n\
 Maintenance:\n  \
-  cheni clean                  Remove obsolete pins (caught up by nixpkgs)\n  \
-  cheni doctor                 Health checks on the cheni setup\n  \
-  cheni self-update            Update cheni itself\n  \
-  cheni verify                 Check the installed cheni against a signed release\n  \
-  cheni diagnose [file]        Scan a rebuild log for known-issue hints\n\
+  cheni doctor                   Health check (paths, lock, pins, freezes, age)\n  \
+  cheni self-update              Update cheni itself (auto-bumps tag pin)\n  \
+  cheni verify [tag]             Verify installed cheni signature\n  \
+  cheni diagnose [file]          Explain a rebuild log\n\
 \n\
 Environment:\n  \
-  CHENI_CONFIG=<path>          Override the NixOS flake directory\n  \
-  CHENI_HTTP_TIMEOUT=<secs>    Per-request HTTP timeout (default 30, min 5)\n  \
-  NO_COLOR=1                   Disable coloured output"
+  CHENI_CONFIG=<path>            Override the NixOS flake directory\n  \
+  CHENI_HTTP_TIMEOUT=<secs>      Per-request HTTP timeout (default 30, min 5)\n  \
+  NO_COLOR=1                     Disable coloured output"
 )]
 struct Cli {
     /// Increase verbosity (-v for debug, -vv for trace)
