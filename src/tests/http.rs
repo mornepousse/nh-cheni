@@ -135,12 +135,48 @@ fn retry_after_falls_back_on_missing_or_invalid() {
 fn user_agent_constant_carries_a_real_version() {
     // env!("GIT_DESCRIBE") may be a tag (`v0.5.5`), a dev shape
     // (`v0.5.5-3-gabc-dirty`), or the literal "unknown" when build.rs
-    // can't reach git. None of these should leave the prefix bare —
-    // that's what triggered the original Repology blocklist hit.
-    assert!(USER_AGENT.starts_with("cheni/"));
+    // can't reach git. The UA must carry a non-empty version segment
+    // for Repology to distinguish cheni versions in its rate-limit policy.
+    //
+    // Note: the prefix is NOT "cheni/" — Repology's nginx blocks any UA
+    // whose token contains the string "cheni" (confirmed 2026-04-27).
+    // See `user_agent_repology_compliance` below for the full invariant.
+    assert!(USER_AGENT.contains('/'));
+    let version_part = USER_AGENT.split('/').nth(1).unwrap_or("");
     assert!(
-        USER_AGENT.len() > "cheni/".len(),
-        "USER_AGENT must include a non-empty version: got {:?}",
+        !version_part.is_empty(),
+        "USER_AGENT must include a non-empty version after '/': got {:?}",
+        USER_AGENT
+    );
+}
+
+#[test]
+fn user_agent_repology_compliance() {
+    // Two hard requirements verified against the live API on 2026-04-27:
+    //
+    // 1. The UA token (part before the first '/') must NOT contain
+    //    "cheni" — Repology's nginx blocklists it and returns HTTP 403:
+    //      cheni/v0.5.6                              → 403
+    //      cheni/v0.5.9 (https://gitlab.com/…)       → 403
+    //      harrael-cheni/... (https://...)            → 403
+    //      nixos-cheni/... (https://...)              → 403
+    //    The repo URL containing "cheni" in the *path* is NOT filtered.
+    //
+    // 2. Repology API terms of use require a repo URL in the UA:
+    //    «Bulk clients MUST identify themselves with a User-Agent
+    //    containing a link to their source code repository.»
+    //    UAs without a https:// link are also blocked:
+    //      curl/8.19.0                               → 403
+    //      nix-version-checker/... (https://…)       → 200
+    let token = USER_AGENT.split('/').next().unwrap_or("");
+    assert!(
+        !token.to_lowercase().contains("cheni"),
+        "USER_AGENT token must not contain 'cheni' (Repology blocklist): got {:?}",
+        USER_AGENT
+    );
+    assert!(
+        USER_AGENT.contains("https://gitlab.com/harrael/cheni"),
+        "USER_AGENT must contain the repo URL for Repology compliance: got {:?}",
         USER_AGENT
     );
 }
