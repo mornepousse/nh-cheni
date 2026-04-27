@@ -212,7 +212,13 @@ enum Commands {
     Clean,
 
     /// Run health checks on the cheni setup (paths, pins, flake, store access)
-    Doctor,
+    Doctor {
+        /// Hide the collapsed "N other checks passed" line and the per-check
+        /// hint paragraphs. Show only warnings + errors. Useful for piping
+        /// into a status bar or running on a fast feedback loop.
+        #[arg(long)]
+        brief: bool,
+    },
 
     /// Update cheni itself (refresh the cheni flake input and rebuild)
     #[command(name = "self-update")]
@@ -312,7 +318,13 @@ enum Commands {
 
     /// Show config path, active pins, and flake input ages
     #[command(alias = "st")]
-    Status,
+    Status {
+        /// Print only the lines that signal anomalies (dirty lock, stale
+        /// nixpkgs, obsolete pins). Drops the full inputs table when
+        /// nothing's wrong. Compose-friendly for shell prompts and bars.
+        #[arg(long)]
+        brief: bool,
+    },
 
     /// Print a diagnostic report to paste into a GitLab issue
     #[command(name = "bug-report")]
@@ -459,7 +471,7 @@ async fn dispatch(command: Commands) -> Result<()> {
             })
         }
         Commands::Build => cmd::build::run(),
-        Commands::Doctor => cmd::doctor::run(),
+        Commands::Doctor { brief } => cmd::doctor::run(brief),
         Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned).await,
         Commands::Verify { tag } => cmd::verify::run(cmd::verify::VerifyOptions { tag }).await,
         Commands::Diagnose { path } => cmd::diagnose::run(cmd::diagnose::DiagnoseOptions { path }),
@@ -474,7 +486,7 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Why { package } => cmd::why::run(&package),
         Commands::Clean => cmd::clean::run(),
         Commands::Init => cmd::init::run(),
-        Commands::Status => cmd::status::run(),
+        Commands::Status { brief } => cmd::status::run(brief),
         Commands::BugReport => cmd::bug_report::run(),
         Commands::Completion { shell } => emit_completion(shell),
         Commands::Man => emit_man_page(),

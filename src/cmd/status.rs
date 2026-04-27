@@ -15,8 +15,11 @@ use crate::nix::{config, freezes, pins};
 
 use super::obsolete::count_obsolete_pins;
 
-/// Run `cheni status`.
-pub fn run() -> Result<()> {
+/// Run `cheni status`. `brief` collapses the output to just the
+/// suggestions section: drops the config block, the flake inputs
+/// table, the pins block, and the freezes block. Useful for piping
+/// into a shell prompt or status bar where only anomalies matter.
+pub fn run(brief: bool) -> Result<()> {
     let nix_config = config::detect()?;
     let current_pins = pins::read(&nix_config.flake_dir)?;
     let current_freezes = freezes::read(&nix_config.flake_dir)?;
@@ -29,18 +32,22 @@ pub fn run() -> Result<()> {
     let active = read_active_generation();
     let lock_newer_than_active = is_lock_newer_than_active(&lock_path, &active);
 
-    println!("{}\n", "=== cheni status ===".bold());
-    print_config_section(&nix_config, &active);
-    print_flake_inputs_section(&lock_path);
-    print_pins_section(&current_pins, obsolete_count);
-    print_freezes_section(&current_freezes);
+    if !brief {
+        println!("{}\n", "=== cheni status ===".bold());
+        print_config_section(&nix_config, &active);
+        print_flake_inputs_section(&lock_path);
+        print_pins_section(&current_pins, obsolete_count);
+        print_freezes_section(&current_freezes);
+    }
     print_suggestions(
         &nix_config,
         obsolete_count,
         lock_newer_than_active,
         &current_pins,
     );
-    println!();
+    if !brief {
+        println!();
+    }
     Ok(())
 }
 

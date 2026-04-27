@@ -115,7 +115,7 @@ fn print_doctor_section() {
     println!("## Doctor");
     println!();
     println!("```");
-    if let Err(e) = super::doctor::run() {
+    if let Err(e) = super::doctor::run(false) {
         println!("_cheni doctor failed: {}_", e);
     }
     println!("```");

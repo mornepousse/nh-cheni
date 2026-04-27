@@ -37,9 +37,11 @@ struct CheckResult {
 /// Output is severity-sorted: errors first, then warnings, then a single
 /// collapsed line for the OK checks. The user reads what needs attention
 /// without scanning through the green-checks list to find it.
-pub fn run() -> Result<()> {
+pub fn run(brief: bool) -> Result<()> {
     let nix_config = config::detect()?;
-    print_doctor_header(&nix_config);
+    if !brief {
+        print_doctor_header(&nix_config);
+    }
 
     let checks = run_all_checks(&nix_config.flake_dir)?;
     let (ok, warn, err) = tally_severities(&checks);
@@ -55,12 +57,12 @@ pub fn run() -> Result<()> {
         }
     }
     for c in &errors {
-        print_check(c);
+        print_check(c, brief);
     }
     for c in &warnings {
-        print_check(c);
+        print_check(c, brief);
     }
-    if !ok_checks.is_empty() {
+    if !brief && !ok_checks.is_empty() {
         print_ok_summary(&ok_checks);
     }
     print_summary(ok, warn, err);
@@ -142,15 +144,17 @@ fn tally_severities(checks: &[CheckResult]) -> (usize, usize, usize) {
     (ok, warn, err)
 }
 
-fn print_check(check: &CheckResult) {
+fn print_check(check: &CheckResult, brief: bool) {
     let symbol = match check.severity {
         Severity::Ok => "✓".green(),
         Severity::Warning => "⚠".yellow(),
         Severity::Error => "✗".red(),
     };
     println!("  {}  {} — {}", symbol, check.name.bold(), check.message);
-    if let Some(hint) = &check.hint {
-        println!("     {} {}", "Hint:".cyan(), hint);
+    if !brief {
+        if let Some(hint) = &check.hint {
+            println!("     {} {}", "Hint:".cyan(), hint);
+        }
     }
 }
 
