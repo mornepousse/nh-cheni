@@ -358,6 +358,13 @@ fn print_footer(total: usize) {
     } else {
         println!("{}", format!("{} result(s)", total).dimmed());
     }
+    if total > 0 {
+        println!(
+            "{}",
+            "Tip: pin one with `cheni pin <name>` (newer version via nixpkgs-latest)."
+                .dimmed()
+        );
+    }
 }
 
 /// Lower number = more relevant. Used to sort search results so that

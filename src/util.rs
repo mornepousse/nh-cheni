@@ -118,6 +118,21 @@ pub fn format_ymd_hm(secs: u64) -> String {
     format!("{:04}-{:02}-{:02} {:02}:{:02}", y, m, d, hours, minutes)
 }
 
+/// Format a number of days as a compact "ago" label.
+///
+/// Single source of truth across the cheni surface (`status`,
+/// `check`, `doctor`, interactive banner). Compact form is preferred
+/// over the verbose "N days ago" because it lines up nicely in
+/// column reports — the readability gain in a sentence ("1 day ago"
+/// vs "1d ago") doesn't justify the column drift in a list view.
+pub fn format_days_ago(days: u64) -> String {
+    match days {
+        0 => "today".to_string(),
+        1 => "1d ago".to_string(),
+        n => format!("{}d ago", n),
+    }
+}
+
 /// Format a Unix timestamp as `YYYY-MM-DDTHH:MM:SSZ` (UTC, ISO 8601).
 ///
 /// Tools like `git log --before=` accept this form unambiguously,

@@ -5,6 +5,25 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## Unreleased
+
+### Changed
+- **Unified `Xd ago` format** across `cheni status`, `cheni check`,
+  `cheni doctor`, and the interactive banner. Previously two
+  variants drifted in parallel — `1 day ago / N days ago` and
+  `1d ago / Nd ago`. Single source of truth in
+  `crate::util::format_days_ago`; column views and inline narration
+  both use the compact form for consistency in cross-command
+  reading.
+- **`cheni search` and `cheni why` get cross-reference tips** at
+  their footers:
+  - `cheni search` ends with `Tip: pin one with \`cheni pin <name>\`
+    (newer version via nixpkgs-latest).` so a user who searched a
+    package name knows the next action.
+  - `cheni why` ends with `Tip: see if it has updates with \`cheni
+    check\`.` so the discovery flow ("which file declares X?")
+    points at the obvious follow-up.
+
 ## [0.5.7] — 2026-04-27
 
 ### Added

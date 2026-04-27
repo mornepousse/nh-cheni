@@ -301,13 +301,12 @@ fn read_all_root_inputs(lock_path: &Path) -> Vec<(String, String, String)> {
     out
 }
 
-/// "today" / "1 day ago" / "N days ago".
+/// Thin alias to `crate::util::format_days_ago` so the local call
+/// sites stay short. The shared formatter keeps every "Xd ago"
+/// surface in lockstep across `status` / `check` / `doctor` /
+/// interactive banner.
 fn format_age(days: u64) -> String {
-    match days {
-        0 => "today".to_string(),
-        1 => "1 day ago".to_string(),
-        n => format!("{} days ago", n),
-    }
+    crate::util::format_days_ago(days)
 }
 
 /// Resolve a root input name to its actual node.

@@ -143,11 +143,7 @@ fn print_nixpkgs_floor_line(nix_config: &config::NixConfig) {
     ) else {
         return;
     };
-    let label = match input.days_old {
-        0 => "today".to_string(),
-        1 => "1d ago".to_string(),
-        n => format!("{}d ago", n),
-    };
+    let label = crate::util::format_days_ago(input.days_old);
     let line = if input.days_old < 3 {
         format!("{} {}", "nixpkgs floor:".dimmed(), label.dimmed())
     } else {

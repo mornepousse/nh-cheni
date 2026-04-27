@@ -459,11 +459,7 @@ fn check_nixpkgs_floor_age(flake_dir: &std::path::Path) -> CheckResult {
         };
     };
     let days = input.days_old;
-    let label = match days {
-        0 => "today".to_string(),
-        1 => "1 day ago".to_string(),
-        n => format!("{} days ago", n),
-    };
+    let label = crate::util::format_days_ago(days);
     if days < 3 {
         CheckResult {
             severity: Severity::Ok,

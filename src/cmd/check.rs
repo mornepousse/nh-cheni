@@ -750,18 +750,11 @@ fn print_flake_inputs_block(inputs: &[&flake::FlakeInput]) {
     println!();
 }
 
-/// Format the local input age as `today` / `1d ago` / `Nd ago` —
-/// compact column inline with the input list, distinct from the
-/// "remote age" date string. Lets the user see at a glance how old
-/// their `flake.lock` snapshot is relative to today, which is the
-/// other half of the freshness equation that `cheni check`
-/// previously left implicit.
+/// Local alias for the shared `util::format_days_ago` so the call
+/// sites in `check` keep their narrow naming. All "Xd ago" surfaces
+/// in cheni share the same helper now.
 fn format_local_age(days: u64) -> String {
-    match days {
-        0 => "today".to_string(),
-        1 => "1d ago".to_string(),
-        n => format!("{}d ago", n),
-    }
+    crate::util::format_days_ago(days)
 }
 
 

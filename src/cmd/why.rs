@@ -170,6 +170,10 @@ fn print_summary_footer(by_category: &GroupedMatches<'_>, match_count: usize) {
         )
         .dimmed()
     );
+    println!(
+        "{}",
+        "Tip: see if it has updates with `cheni check`.".dimmed()
+    );
 }
 
 /// Map a path (relative to the flake root) to a human-readable category.
