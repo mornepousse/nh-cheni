@@ -270,3 +270,44 @@ fn is_sri_hash_rejects_non_sri_and_injection() {
     assert!(!is_sri_hash("sha256-AAA\nBBB")); // control char
     assert!(!is_sri_hash(&format!("sha256-{}", "A".repeat(250)))); // way too long
 }
+
+// ─── check_pin_freeze_conflict ────────────────────────────────────────────────
+
+#[test]
+fn pin_freeze_conflict_returns_ok_when_disjoint() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("package-pins.json"),
+        r#"["firefox", "vivaldi"]"#,
+    ).unwrap();
+    std::fs::write(
+        dir.path().join("package-freezes.json"),
+        r#"{"alacritty": {"version": "0.13", "rev": "deadbeef", "narHash": "sha256-AAA="}}"#,
+    ).unwrap();
+    let result = check_pin_freeze_conflict(dir.path()).unwrap();
+    assert_eq!(result.severity, Severity::Ok);
+}
+
+#[test]
+fn pin_freeze_conflict_returns_ok_when_both_empty() {
+    let dir = tempfile::tempdir().unwrap();
+    let result = check_pin_freeze_conflict(dir.path()).unwrap();
+    assert_eq!(result.severity, Severity::Ok);
+}
+
+#[test]
+fn pin_freeze_conflict_flags_overlap_as_error() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("package-pins.json"),
+        r#"["firefox", "vivaldi"]"#,
+    ).unwrap();
+    std::fs::write(
+        dir.path().join("package-freezes.json"),
+        r#"{"firefox": {"version": "140.0", "rev": "deadbeef", "narHash": "sha256-AAA="}}"#,
+    ).unwrap();
+    let result = check_pin_freeze_conflict(dir.path()).unwrap();
+    assert_eq!(result.severity, Severity::Error);
+    assert!(result.message.contains("firefox"));
+    assert!(result.hint.is_some(), "must point at the manual edit needed");
+}

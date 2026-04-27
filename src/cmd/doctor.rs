@@ -116,6 +116,7 @@ fn run_all_checks(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
     ];
     checks.extend(check_pins_valid(flake_dir)?);
     checks.extend(check_freezes_valid(flake_dir)?);
+    checks.push(check_pin_freeze_conflict(flake_dir)?);
     checks.extend(check_flake_input_freshness(flake_dir));
     checks.push(check_obsolete_pins(flake_dir));
     checks.push(check_store_size());
@@ -354,6 +355,46 @@ fn check_freezes_valid(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> 
         });
     }
     Ok(results)
+}
+
+/// Detect packages that appear in both pins and freezes — a corrupt
+/// state since the two overlays target the same attribute. Pin/freeze
+/// command paths reject the conflict at write-time (see freeze.rs's
+/// `reject_if_pinned` and pin.rs's symmetric guard added in v0.5.7),
+/// but a hand-edited JSON can still produce a conflict. This check is
+/// the safety net that catches it before the next rebuild.
+fn check_pin_freeze_conflict(flake_dir: &std::path::Path) -> Result<CheckResult> {
+    let pins = pins::read(flake_dir)?;
+    let frozen = crate::nix::freezes::read(flake_dir)?;
+    let pin_set: std::collections::HashSet<&str> = pins.iter().map(String::as_str).collect();
+    let conflicts: Vec<&str> = frozen
+        .keys()
+        .map(String::as_str)
+        .filter(|name| pin_set.contains(name))
+        .collect();
+    if conflicts.is_empty() {
+        Ok(CheckResult {
+            severity: Severity::Ok,
+            name: "Pin/freeze coherence".to_string(),
+            message: "no package is both pinned and frozen".to_string(),
+            hint: None,
+        })
+    } else {
+        Ok(CheckResult {
+            severity: Severity::Error,
+            name: "Pin/freeze conflict".to_string(),
+            message: format!(
+                "{} pinned AND frozen at the same time: {}",
+                conflicts.len(),
+                conflicts.join(", ")
+            ),
+            hint: Some(
+                "Edit package-pins.json or package-freezes.json by hand to keep only one. \
+                 The two overlays would otherwise race on the same attribute."
+                    .to_string(),
+            ),
+        })
+    }
 }
 
 /// Return true when `s` is a plausibly-shaped hex git revision.
