@@ -698,3 +698,322 @@ fn test_panic_finding_does_not_fire_on_clean_build() {
         "aes_generic finding fired on a clean build log"
     );
 }
+
+// ── Findings positive cases manquants ───────────────────────────────────────
+
+#[test]
+fn detects_switching_not_recommended() {
+    // Second Activate-scoped finding, distinct de "Pre-switch check".
+    // Le log minimal : juste la ligne incriminée, pas de phase marker
+    // → fallback Global (any_phase_seen = false).
+    let log = "Switching into this system is not recommended; please reboot.";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().any(|f| f.title.contains("live switch not recommended")),
+        "live-switch-not-recommended finding did not fire"
+    );
+}
+
+#[test]
+fn switching_not_recommended_silent_in_build_phase() {
+    // Scoped Activate → doit être silencieux si on est clairement en
+    // buildPhase et que le matcher ne s'y trouve pas.
+    // Note : le texte exact "Switching into this system" est lui-même
+    // un marker de phase Activate — on teste donc avec un log dont la
+    // phase est explicitement buildPhase et dont aucune ligne ne
+    // contient la phrase incriminée.
+    let log = "\
+nixos-system> buildPhase
+nixos-system> compile step 1
+nixos-system> compile step 2
+error: builder for '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-nixos-system.drv' failed
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter()
+            .all(|f| !f.title.contains("live switch not recommended")),
+        "live-switch-not-recommended fired inside buildPhase"
+    );
+}
+
+#[test]
+fn detects_insecure_package() {
+    let log =
+        "error: Package 'qtwebengine-5.15.19' in /nix/store/.../default.nix:5 \
+         is marked as insecure, refusing to evaluate.\n\
+         Known CVEs: CVE-2024-1234";
+    let hits = find_issues(log);
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].title.contains("insecure"),
+        "insecure-package finding did not fire"
+    );
+}
+
+#[test]
+fn insecure_package_silent_in_build_phase() {
+    // "is marked as insecure" is Eval-scoped — must not fire if the
+    // log context is clearly buildPhase.
+    let log = "\
+pkg> buildPhase
+pkg> error: is marked as insecure — hypothetical build log line
+error: builder for '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-pkg.drv' failed with exit code 1
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("insecure")),
+        "insecure-package finding fired inside buildPhase (wrong scope)"
+    );
+}
+
+// ── Tests négatifs manquants pour findings scoped ───────────────────────────
+
+#[test]
+fn oom_kill_137_silent_in_activate_phase() {
+    // exit code 137 is Build-scoped. In an activation context
+    // (boot loader install), the string must not trigger the OOM hint.
+    let log = "\
+activating the configuration...
+installing the boot loader...
+error: failed with exit code 137
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("OOM killer")),
+        "OOM-killer finding fired inside Activate phase"
+    );
+}
+
+#[test]
+fn auth_failed_silent_in_build_phase() {
+    // "Authentication failed for" is Fetch-scoped — must not fire when
+    // the log is clearly in a buildPhase context.
+    let log = "\
+mypkg> buildPhase
+mypkg> fatal: Authentication failed for 'https://github.com/example/repo.git'
+error: builder for '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-mypkg.drv' failed
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("private repository")),
+        "private-repo-auth finding fired inside buildPhase (wrong scope)"
+    );
+}
+
+#[test]
+fn failed_to_start_silent_in_build_phase() {
+    // "Failed to start" is Activate-scoped — must not fire if we're
+    // clearly in a build context.
+    let log = "\
+mypkg> buildPhase
+mypkg> make: Failed to start subprocess
+error: builder for '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-mypkg.drv' failed
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("systemd")),
+        "systemd-failed-to-start finding fired inside buildPhase"
+    );
+}
+
+#[test]
+fn hash_mismatch_silent_in_build_phase() {
+    // "hash mismatch in fixed-output derivation" is Fetch-scoped.
+    // A build-phase log that mentions "hash mismatch" in a different
+    // context (e.g. a test checking hashes) must not trigger the finding.
+    let log = "\
+mypkg> buildPhase
+mypkg> self-test: hash mismatch in fixed-output derivation (expected)
+error: builder for '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-mypkg.drv' failed
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("hash mismatch")),
+        "hash-mismatch finding fired inside buildPhase (wrong scope)"
+    );
+}
+
+#[test]
+fn rust_test_panic_silent_wrong_phase_with_anchor() {
+    // FailingDerivationPhase(Check): even if we have the anchor AND
+    // nh prefixes, the finding must NOT fire if the matching line is
+    // in buildPhase, not checkPhase.
+    let log = "\
+mypkg> buildPhase
+mypkg> test result: FAILED. 0 passed; 1 failed
+error: Cannot build '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-mypkg.drv'.
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("Rust test panicked")),
+        "test-panic finding fired in buildPhase instead of checkPhase"
+    );
+}
+
+// ── Edge cases du parser ─────────────────────────────────────────────────────
+
+#[test]
+fn single_line_log_no_panic() {
+    // Un log d'une seule ligne ne doit pas provoquer de panic.
+    let result = find_issues("error: undefined variable 'pkgs'");
+    // Avec fallback (any_phase_seen = false) → Phase(Eval) dégradé en Global.
+    // On vérifie surtout qu'il n'y a pas de panic.
+    let _ = result;
+}
+
+#[test]
+fn non_ascii_in_log_no_panic() {
+    // Des caractères non-ASCII au milieu d'une ligne ne doivent pas
+    // provoquer de panic (boundary UTF-8 dans split_derivation_prefix).
+    let log = "mypkg> buildPhase\n\
+               mypkg> erreur : fichier introuvable — chemin « /nix/store/… »\n\
+               mypkg> No space left on device\n";
+    let hits = find_issues(log);
+    // "No space left on device" est Global → doit fire.
+    assert!(hits.iter().any(|f| f.title.contains("disk full")));
+}
+
+#[test]
+fn large_log_no_oom_or_panic() {
+    // Un log de 15 000 lignes ne doit pas OOM ni paniquer.
+    // On génère des lignes de ~80 chars avec contenu varié.
+    let mut log = String::with_capacity(15_000 * 80);
+    for i in 0..15_000_usize {
+        log.push_str(&format!("mypkg> building object file number {i} out of 14999\n"));
+    }
+    log.push_str("error: Cannot build '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-mypkg.drv'.\n");
+    // Aucun matcher ne devrait fire ici, et surtout pas de panic.
+    let hits = find_issues(&log);
+    let _ = hits; // le test réussit si on arrive ici sans OOM
+}
+
+#[test]
+fn malformed_nh_prefix_no_bracket_no_crash() {
+    // Un `>` collé sans espace après, ou avec tab, ne doit pas paniquer
+    // et doit être traité comme une ligne sans prefix.
+    let log = ">no space after bracket\n\
+               mypkg>\tTab after bracket\n\
+               plain line\n";
+    // split_derivation_prefix doit rejeter ">no space after bracket"
+    // (nom vide) et "mypkg>\t..." (tab n'est pas ' ').
+    let ctx = super::parse_log_context(log);
+    // La première ligne a un nom vide → pas de derivation reconnue.
+    // La deuxième a un tab → rest commence au tab, derivation = "mypkg".
+    // On vérifie surtout l'absence de panic.
+    let _ = ctx;
+}
+
+#[test]
+fn multi_failure_picks_first_anchor() {
+    // Quand deux `error: Cannot build` apparaissent, find_failing_derivation
+    // retourne le premier (comportement documenté : on prend le plus proche
+    // dans le log). Le deuxième ne doit pas écraser le premier.
+    let log = "\
+foo> checkPhase
+foo> test result: FAILED. 0 passed; 1 failed
+error: Cannot build '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-foo.drv'.
+error: Cannot build '/nix/store/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-bar.drv'.
+";
+    let failing = super::find_failing_derivation(log);
+    assert_eq!(failing, Some("foo"), "expected first anchor to win");
+}
+
+#[test]
+fn conflicting_phase_markers_sticky_per_derivation() {
+    // eval → fetch → eval : la phase doit être sticky par derivation.
+    // Les marqueurs globaux (sans prefix) ne doivent pas contaminer
+    // les derivation-prefixed streams.
+    let log = "\
+evaluating flake outputs...
+foo> buildPhase
+foo> compile step
+downloading 'https://cache.nixos.org/nar/abc.nar'
+foo> still in foo's buildPhase
+";
+    let ctx = super::parse_log_context(log);
+    // La ligne "foo> still in foo's buildPhase" doit rester en Build.
+    let foo_still = ctx
+        .lines
+        .iter()
+        .find(|l| l.derivation == Some("foo") && l.text.contains("still"));
+    assert_eq!(
+        foo_still.and_then(|l| l.phase),
+        Some(super::Phase::Build),
+        "foo's phase should remain Build despite an intervening global Fetch marker"
+    );
+    // La ligne de download (global) doit être Fetch.
+    let dl = ctx
+        .lines
+        .iter()
+        .find(|l| l.derivation.is_none() && l.text.contains("downloading"));
+    assert_eq!(
+        dl.and_then(|l| l.phase),
+        Some(super::Phase::Fetch),
+        "global download line should carry Fetch phase"
+    );
+}
+
+// ── Backward compat : fallback sans phase markers ────────────────────────────
+
+#[test]
+fn phase_scoped_finding_fires_when_log_has_no_phase_markers() {
+    // Fallback 1 : log sans AUCUN phase marker → Phase(X) se dégrade
+    // en Global. Une ligne brute avec "undefined variable" doit fire
+    // même si on n'est pas en Eval explicite.
+    let log = "error: undefined variable 'pkgs'";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().any(|f| f.title.contains("undefined variable")),
+        "Phase(Eval) finding must fire when no phase markers are present (fallback)"
+    );
+}
+
+#[test]
+fn failing_derivation_phase_fires_in_degraded_mode_no_nh_prefixes() {
+    // Fallback 2 : log sans préfixes nh mais avec un anchor
+    // `error: Cannot build` → FailingDerivationPhase doit fire car
+    // any_deriv_prefix = false (mode dégradé, on accepte toutes les lignes).
+    let log = "\
+@nix { \"action\": \"setPhase\", \"phase\": \"checkPhase\" }
+checkPhase
+running 3 tests
+test result: FAILED. 0 passed; 3 failed
+error: Cannot build '/nix/store/aaabbbcccdddeeefffggghhhiiijjjkk-mypkg.drv'.
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().any(|f| f.title.contains("Rust test panicked")),
+        "FailingDerivationPhase finding must fire in degraded mode (no nh prefixes)"
+    );
+}
+
+#[test]
+fn failing_derivation_phase_silent_without_anchor_even_degraded() {
+    // Même en mode dégradé (pas de préfixes nh), l'absence d'anchor
+    // `error: Cannot build` doit garder FailingDerivation* silencieux.
+    let log = "\
+checkPhase
+running 3 tests
+test result: FAILED. 0 passed; 3 failed
+";
+    let hits = find_issues(log);
+    assert!(
+        hits.iter().all(|f| !f.title.contains("Rust test panicked")),
+        "FailingDerivationPhase must NOT fire without anchor, even without nh prefixes"
+    );
+}
+
+#[test]
+fn global_log_no_prefixes_no_phases_behaves_as_legacy() {
+    // Un log totalement plat (style `nix build` brut, sans préfixes
+    // ni phase markers) → les findings Global doivent fire, les
+    // findings Phase(X) aussi grâce au fallback, les findings
+    // FailingDerivation* uniquement s'il y a un anchor.
+    let log = "error: No space left on device\n\
+               error: hash mismatch in fixed-output derivation '/nix/store/abc.drv'";
+    let hits = find_issues(log);
+    // Global finding.
+    assert!(hits.iter().any(|f| f.title.contains("disk full")));
+    // Phase(Fetch) finding — fallback dégradé.
+    assert!(hits.iter().any(|f| f.title.contains("hash mismatch")));
+}
