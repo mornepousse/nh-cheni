@@ -680,10 +680,16 @@ in pkgs.{pkg_name}.version",
         pkg_name = pkg_name
     );
 
-    let output = std::process::Command::new("nix")
+    let output = match std::process::Command::new("nix")
         .args(["eval", "--raw", "--expr", &expr])
         .output()
-        .ok()?;
+    {
+        Ok(o) => o,
+        Err(e) => {
+            debug!("{}", crate::nix::tools::tool_error("nix", e));
+            return None;
+        }
+    };
     if !output.status.success() {
         debug!(
             "nix eval failed for '{}' at rev {}: {}",

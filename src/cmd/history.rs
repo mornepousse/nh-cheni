@@ -1142,7 +1142,7 @@ fn get_diff(from: &str, to: &str) -> Result<String> {
     let nix_diff = Command::new("nix")
         .args(["store", "diff-closures", from, to])
         .output()
-        .context("Neither 'nvd' nor 'nix store diff-closures' available")?;
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
     let stdout = String::from_utf8_lossy(&nix_diff.stdout);
     Ok(stdout.to_string())
