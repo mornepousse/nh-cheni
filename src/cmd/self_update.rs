@@ -75,14 +75,14 @@ pub async fn run(allow_unsigned: bool) -> Result<()> {
     Ok(())
 }
 
-/// Render `[N/total] Title` — matches the shape used by `cheni upgrade`.
+/// Local thin alias to the shared `crate::output::print_step`.
 fn print_step(n: usize, total: usize, title: &str) {
-    println!("{} {}", format!("[{}/{}]", n, total).dimmed(), title.bold());
+    crate::output::print_step(n, total, title);
 }
 
-/// Horizontal rule between steps — matches `cheni upgrade`.
+/// Local thin alias to the shared `crate::output::print_separator`.
 fn print_separator() {
-    println!("{}", "───────────────────────────────────────────".dimmed());
+    crate::output::print_separator();
 }
 
 /// Local alias to the shared `crate::util::format_elapsed`.

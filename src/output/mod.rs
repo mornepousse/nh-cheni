@@ -14,3 +14,20 @@
 
 pub mod prettify;
 pub mod stream;
+
+use colored::Colorize;
+
+/// Render `[N/total] Title` step header — same shape across every
+/// multi-step command (`cheni upgrade`, `cheni self-update`). Single
+/// source of truth so adding a step somewhere else gets the same
+/// visual without copy-pasting the println.
+pub fn print_step(n: usize, total: usize, title: &str) {
+    println!("{} {}", format!("[{}/{}]", n, total).dimmed(), title.bold());
+}
+
+/// Horizontal rule between steps. Keeps multi-step output skimmable —
+/// each step becomes a visually distinct block rather than running
+/// into its neighbours.
+pub fn print_separator() {
+    println!("{}", "───────────────────────────────────────────".dimmed());
+}

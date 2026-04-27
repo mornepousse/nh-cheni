@@ -8,6 +8,12 @@ semver.
 ## Unreleased
 
 ### Changed
+- **`print_step` and `print_separator` consolidated** in
+  `crate::output`. The two helpers were duplicated byte-for-byte
+  in `cmd/upgrade.rs` and `cmd/self_update.rs` (the only multi-step
+  commands today). Both call sites now thin-alias to the shared
+  helpers, so adding a step to a third command picks up the same
+  visual without a third copy.
 - **`format_elapsed` consolidated** in `crate::util` — four
   identical copies in `cmd/build.rs`, `cmd/upgrade.rs`,
   `cmd/rollback.rs`, `cmd/self_update.rs` collapsed to thin

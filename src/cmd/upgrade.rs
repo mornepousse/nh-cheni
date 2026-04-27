@@ -139,16 +139,15 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
     Ok(())
 }
 
-/// Render `[N/total] Title` in a consistent shape across the run.
+/// Local thin alias to the shared `crate::output::print_step` so
+/// the existing `print_step(...)` call sites stay short.
 fn print_step(n: usize, total: usize, title: &str) {
-    println!("{} {}", format!("[{}/{}]", n, total).dimmed(), title.bold());
+    crate::output::print_step(n, total, title);
 }
 
-/// Horizontal rule between steps. Keeps the output skimmable — each
-/// step becomes a visually distinct block rather than running into
-/// its neighbours.
+/// Local thin alias to the shared `crate::output::print_separator`.
 fn print_separator() {
-    println!("{}", "───────────────────────────────────────────".dimmed());
+    crate::output::print_separator();
 }
 
 /// Step 1: refresh flake inputs.
