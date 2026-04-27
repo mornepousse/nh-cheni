@@ -370,19 +370,7 @@ fn summary_no_follow_up_when_inputs_moved() {
     assert!(explain_no_op_rebuild(&stats, &ctx).is_none());
 }
 
-#[test]
-fn format_elapsed_under_a_minute() {
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(0)), "0s");
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(42)), "42s");
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(59)), "59s");
-}
-
-#[test]
-fn format_elapsed_over_a_minute() {
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(60)), "1m00s");
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(125)), "2m05s");
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(3_600)), "60m00s");
-}
+// format_elapsed is fully covered in src/tests/util.rs — no duplication here.
 
 // --- detect_critical_component_changes ---
 
@@ -503,4 +491,229 @@ fn initrd_linux_still_classified_as_artefact() {
     // package the user installs).
     let initrd = change("initrd-linux-zen", "6.19.12");
     assert!(is_system_artefact(&initrd));
+}
+
+// --- get_input_timestamp ---
+
+/// Build a minimal flake.lock JSON value with two inputs
+/// (`nixpkgs` at `base_ts` and `nixpkgs-latest` at `latest_ts`).
+/// Passing `None` for an input omits it entirely so tests can
+/// exercise the "absent input" branch.
+fn make_lock(
+    nixpkgs_ts: Option<u64>,
+    latest_ts: Option<u64>,
+) -> serde_json::Value {
+    let mut nodes = serde_json::json!({
+        "root": { "inputs": {} }
+    });
+    let mut root_inputs = serde_json::Map::new();
+    if let Some(ts) = nixpkgs_ts {
+        nodes["nixpkgs"] = serde_json::json!({
+            "locked": { "lastModified": ts }
+        });
+        root_inputs.insert("nixpkgs".to_string(), serde_json::json!("nixpkgs"));
+    }
+    if let Some(ts) = latest_ts {
+        nodes["nixpkgs-latest"] = serde_json::json!({
+            "locked": { "lastModified": ts }
+        });
+        root_inputs.insert("nixpkgs-latest".to_string(), serde_json::json!("nixpkgs-latest"));
+    }
+    nodes["root"]["inputs"] = serde_json::Value::Object(root_inputs);
+    serde_json::json!({ "nodes": nodes })
+}
+
+#[test]
+fn get_input_timestamp_returns_last_modified_for_known_input() {
+    let lock = make_lock(Some(1_700_000_000), Some(1_700_010_000));
+    assert_eq!(get_input_timestamp(&lock, "nixpkgs"), Some(1_700_000_000));
+    assert_eq!(get_input_timestamp(&lock, "nixpkgs-latest"), Some(1_700_010_000));
+}
+
+#[test]
+fn get_input_timestamp_returns_none_when_input_absent() {
+    let lock = make_lock(Some(1_700_000_000), None);
+    assert_eq!(get_input_timestamp(&lock, "nixpkgs-latest"), None);
+}
+
+#[test]
+fn get_input_timestamp_returns_none_on_malformed_lock() {
+    let lock = serde_json::json!({ "not_nodes": {} });
+    assert_eq!(get_input_timestamp(&lock, "nixpkgs"), None);
+}
+
+// --- check_nixpkgs_order (reads a real flake.lock file) ---
+
+fn write_lock_file(dir: &std::path::Path, nixpkgs_ts: u64, latest_ts: u64) {
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": {
+                "inputs": {
+                    "nixpkgs": "nixpkgs",
+                    "nixpkgs-latest": "nixpkgs-latest"
+                }
+            },
+            "nixpkgs": {
+                "locked": { "lastModified": nixpkgs_ts }
+            },
+            "nixpkgs-latest": {
+                "locked": { "lastModified": latest_ts }
+            }
+        },
+        "root": "root",
+        "version": 7
+    });
+    std::fs::write(dir.join("flake.lock"), lock.to_string()).unwrap();
+}
+
+#[test]
+fn check_nixpkgs_order_latest_is_newer() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lock_file(dir.path(), 1_000_000, 2_000_000);
+    assert_eq!(check_nixpkgs_order(dir.path()), InputOrder::LatestIsNewer);
+}
+
+#[test]
+fn check_nixpkgs_order_same() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lock_file(dir.path(), 1_500_000, 1_500_000);
+    assert_eq!(check_nixpkgs_order(dir.path()), InputOrder::Same);
+}
+
+#[test]
+fn check_nixpkgs_order_latest_is_older() {
+    let dir = tempfile::tempdir().unwrap();
+    write_lock_file(dir.path(), 2_000_000, 1_000_000);
+    assert_eq!(check_nixpkgs_order(dir.path()), InputOrder::LatestIsOlder);
+}
+
+#[test]
+fn check_nixpkgs_order_unknown_when_input_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    // Only nixpkgs, no nixpkgs-latest.
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": { "nixpkgs": "nixpkgs" } },
+            "nixpkgs": { "locked": { "lastModified": 1_000_000u64 } }
+        },
+        "root": "root",
+        "version": 7
+    });
+    std::fs::write(dir.path().join("flake.lock"), lock.to_string()).unwrap();
+    assert_eq!(check_nixpkgs_order(dir.path()), InputOrder::Unknown);
+}
+
+#[test]
+fn check_nixpkgs_order_unknown_on_malformed_json() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("flake.lock"), "this is not json").unwrap();
+    assert_eq!(check_nixpkgs_order(dir.path()), InputOrder::Unknown);
+}
+
+#[test]
+fn check_nixpkgs_order_unknown_when_no_lock_file() {
+    let dir = tempfile::tempdir().unwrap();
+    // No flake.lock written → read_to_string fails.
+    assert_eq!(check_nixpkgs_order(dir.path()), InputOrder::Unknown);
+}
+
+// --- extract_store_name ---
+
+#[test]
+fn extract_store_name_strips_hash_prefix() {
+    // Standard /nix/store/<32-char-hash>-<name> path.
+    let path = "/nix/store/abcdefghijklmnopqrstuvwxyz012345-vivaldi-7.9";
+    assert_eq!(extract_store_name(path), Some("vivaldi-7.9".to_string()));
+}
+
+#[test]
+fn extract_store_name_strips_drv_suffix() {
+    let path = "/nix/store/abcdefghijklmnopqrstuvwxyz012345-firefox-150.0.drv";
+    assert_eq!(extract_store_name(path), Some("firefox-150.0".to_string()));
+}
+
+#[test]
+fn extract_store_name_returns_none_for_short_path() {
+    // Less than 33 chars after the /nix/store/ prefix → can't slice.
+    let path = "/nix/store/tooshort";
+    assert_eq!(extract_store_name(path), None);
+}
+
+#[test]
+fn extract_store_name_returns_none_without_nix_store_prefix() {
+    assert_eq!(extract_store_name("/usr/local/bin/something"), None);
+}
+
+// --- parse_dry_run_summary ---
+
+#[test]
+fn parse_dry_run_summary_empty_on_no_changes() {
+    let stderr = "nothing to do\n";
+    let (build, fetch) = parse_dry_run_summary(stderr);
+    assert!(build.is_empty());
+    assert!(fetch.is_empty());
+}
+
+#[test]
+fn parse_dry_run_summary_parses_build_section() {
+    let hash = "a".repeat(32);
+    let stderr = format!(
+        "these 2 derivations will be built:\n  /nix/store/{hash}-openssl-3.5.0.drv\n  /nix/store/{hash}-python3-3.12.0.drv\n",
+        hash = hash
+    );
+    let (build, fetch) = parse_dry_run_summary(&stderr);
+    assert_eq!(build, vec!["openssl-3.5.0", "python3-3.12.0"]);
+    assert!(fetch.is_empty());
+}
+
+#[test]
+fn parse_dry_run_summary_parses_fetch_section() {
+    let hash = "b".repeat(32);
+    let stderr = format!(
+        "these 3 paths will be fetched (45.0 MiB download, 120 MiB unpacked):\n  /nix/store/{hash}-firefox-150.0\n  /nix/store/{hash}-kicad-9.0.1\n  /nix/store/{hash}-vivaldi-7.9\n",
+        hash = hash
+    );
+    let (build, fetch) = parse_dry_run_summary(&stderr);
+    assert!(build.is_empty());
+    assert_eq!(fetch, vec!["firefox-150.0", "kicad-9.0.1", "vivaldi-7.9"]);
+}
+
+#[test]
+fn parse_dry_run_summary_handles_both_sections() {
+    let hash = "c".repeat(32);
+    let stderr = format!(
+        "these 1 derivations will be built:\n  /nix/store/{h}-openssl-3.5.0.drv\nthese 2 paths will be fetched (10 MiB download, 30 MiB unpacked):\n  /nix/store/{h}-firefox-150.0\n  /nix/store/{h}-chromium-130.0\n",
+        h = hash
+    );
+    let (build, fetch) = parse_dry_run_summary(&stderr);
+    assert_eq!(build, vec!["openssl-3.5.0"]);
+    assert_eq!(fetch, vec!["firefox-150.0", "chromium-130.0"]);
+}
+
+#[test]
+fn parse_dry_run_summary_singular_headers_are_recognised() {
+    // `nix build --dry-run` uses the singular form when exactly one
+    // derivation / path is involved.
+    let hash = "d".repeat(32);
+    let stderr = format!(
+        "this derivation will be built:\n  /nix/store/{h}-git-2.49.0.drv\nthis path will be fetched (5 MiB download, 18 MiB unpacked):\n  /nix/store/{h}-neovim-0.11.0\n",
+        h = hash
+    );
+    let (build, fetch) = parse_dry_run_summary(&stderr);
+    assert_eq!(build, vec!["git-2.49.0"]);
+    assert_eq!(fetch, vec!["neovim-0.11.0"]);
+}
+
+#[test]
+fn parse_dry_run_summary_section_ends_at_non_store_line() {
+    // A non-/nix/store/ line resets the active section, so entries
+    // that appear after an unrelated line are not mistakenly bucketed.
+    let hash = "e".repeat(32);
+    let stderr = format!(
+        "these 1 derivations will be built:\n  /nix/store/{h}-openssl-3.5.0.drv\nsome other output line\n  /nix/store/{h}-unrelated-1.0.drv\n",
+        h = hash
+    );
+    let (build, _) = parse_dry_run_summary(&stderr);
+    // Only the first entry, before the reset line, is captured.
+    assert_eq!(build, vec!["openssl-3.5.0"]);
 }

@@ -160,3 +160,83 @@ fn read_file_at_time_picks_the_latest_commit_at_or_before_the_query() {
     assert!(after_content.contains("v1"));
     assert!(after_content.contains("v2"));
 }
+
+// --- is_flake_lock_dirty ---
+
+#[test]
+fn is_flake_lock_dirty_false_when_committed_and_clean() {
+    // flake.lock committed, no modifications → not dirty.
+    let (dir, _) = fixture_repo("flake.lock", "{\"version\":7}", 1_700_000_000);
+    assert!(!is_flake_lock_dirty(dir.path()));
+}
+
+#[test]
+fn is_flake_lock_dirty_true_when_modified_unstaged() {
+    // flake.lock committed then modified in the working tree without staging.
+    let (dir, _) = fixture_repo("flake.lock", "{\"version\":7}", 1_700_000_000);
+    std::fs::write(dir.path().join("flake.lock"), "{\"version\":8}").unwrap();
+    assert!(is_flake_lock_dirty(dir.path()));
+}
+
+#[test]
+fn is_flake_lock_dirty_false_when_modification_is_staged() {
+    // `git diff --name-only flake.lock` compares working tree against the
+    // index (not HEAD). Once the change is staged the working tree matches
+    // the index, so the diff is empty and the function returns false.
+    // Callers that want to catch staged changes must use `--cached` — this
+    // test documents the current behaviour so any accidental change is caught.
+    let (dir, _) = fixture_repo("flake.lock", "{\"version\":7}", 1_700_000_000);
+    std::fs::write(dir.path().join("flake.lock"), "{\"version\":8}").unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["add", "flake.lock"])
+        .status()
+        .unwrap();
+    assert!(!is_flake_lock_dirty(dir.path()));
+}
+
+#[test]
+fn is_flake_lock_dirty_false_when_directory_is_not_a_git_repo() {
+    // Outside a git repo `git diff` exits non-zero → we treat it as
+    // "not dirty" rather than crashing. The warning surface is optional.
+    let dir = tempfile::tempdir().unwrap();
+    assert!(!is_flake_lock_dirty(dir.path()));
+}
+
+#[test]
+fn is_flake_lock_dirty_false_when_flake_lock_is_untracked() {
+    // An untracked flake.lock doesn't appear in `git diff` (index vs
+    // worktree) because it was never staged. Returns false.
+    let dir = tempfile::tempdir().unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["init", "-q", "-b", "main"])
+        .status()
+        .unwrap();
+    // Commit an unrelated file so the repo has a HEAD.
+    std::fs::write(dir.path().join("other.txt"), "hello").unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .args(["add", "other.txt"])
+        .status()
+        .unwrap();
+    Command::new("git")
+        .arg("-C")
+        .arg(dir.path())
+        .env("GIT_AUTHOR_DATE", "2024-01-01T00:00:00Z")
+        .env("GIT_COMMITTER_DATE", "2024-01-01T00:00:00Z")
+        .args([
+            "-c", "user.email=test@cheni",
+            "-c", "user.name=test",
+            "-c", "commit.gpgsign=false",
+            "commit", "-q", "--no-gpg-sign", "-m", "fixture",
+        ])
+        .status()
+        .unwrap();
+    // Now drop an untracked flake.lock.
+    std::fs::write(dir.path().join("flake.lock"), "{\"version\":7}").unwrap();
+    assert!(!is_flake_lock_dirty(dir.path()));
+}

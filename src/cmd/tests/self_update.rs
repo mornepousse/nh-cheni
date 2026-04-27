@@ -111,17 +111,7 @@ fn cheni_timestamp_is_none_when_input_absent() {
     assert_eq!(get_input_timestamp(&lock, "cheni"), None);
 }
 
-#[test]
-fn format_elapsed_under_a_minute() {
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(0)), "0s");
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(42)), "42s");
-}
-
-#[test]
-fn format_elapsed_over_a_minute() {
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(60)), "1m00s");
-    assert_eq!(format_elapsed(std::time::Duration::from_secs(125)), "2m05s");
-}
+// format_elapsed is fully covered in src/tests/util.rs — no duplication here.
 
 // --- bump_cheni_pin_in_flake_text ---
 

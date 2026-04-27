@@ -321,6 +321,7 @@ fn verify_nixpkgs_order(flake_dir: &Path) -> bool {
 }
 
 /// Outcome of comparing `nixpkgs.lastModified` vs `nixpkgs-latest.lastModified`.
+#[derive(Debug, PartialEq, Eq)]
 enum InputOrder {
     /// nixpkgs-latest is at a newer commit (safe to apply pins).
     LatestIsNewer,
