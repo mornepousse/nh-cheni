@@ -29,7 +29,7 @@ pub fn run() -> Result<()> {
     let active = read_active_generation();
     let lock_newer_than_active = is_lock_newer_than_active(&lock_path, &active);
 
-    println!("{}", "=== cheni status ===\n".bold());
+    println!("{}\n", "=== cheni status ===".bold());
     print_config_section(&nix_config, &active);
     print_flake_inputs_section(&lock_path);
     print_pins_section(&current_pins, obsolete_count);
