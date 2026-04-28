@@ -133,6 +133,35 @@ pub(crate) fn check_safety_guard(kept_count: usize, force: bool) -> Result<()> {
     Ok(())
 }
 
+use std::process::Command;
+
+/// Run the apply phase: delete the planned generations, then run gc.
+/// Caller has already shown the audit and obtained confirmation.
+pub(crate) fn apply_gc(plan: &PrunePlan) -> Result<()> {
+    if plan.deleted_ids.is_empty() {
+        // Edge case: keep >= total. Nothing to delete; still run gc
+        // to clean any pre-existing dead paths.
+    } else {
+        println!("\n{}", "Pruning generations...".bold());
+        crate::cmd::history::apply_deletion(&plan.deleted_ids)?;
+        println!("  {} {} generations removed", "✓".green(), plan.deleted_ids.len());
+    }
+
+    println!("\n{}", "Running garbage collection...".bold());
+    let status = Command::new("sudo")
+        .args(["/run/current-system/sw/bin/nix-collect-garbage"])
+        .status()
+        .map_err(|e| crate::nix::tools::tool_error("sudo", e))?;
+    if !status.success() {
+        anyhow::bail!(
+            "nix-collect-garbage failed. Disk may be full or a roots scan failed — \
+             try `nix-store --gc --print-roots` to inspect what's pinning paths."
+        );
+    }
+    println!("  {} reclaim complete", "✓".green());
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "tests/gc.rs"]
 mod tests;
