@@ -4,9 +4,6 @@
 //! guards and a structured preview. See
 //! `docs/superpowers/specs/2026-04-28-cheni-gc-design.md`.
 
-#![allow(dead_code)]
-// Task 7 will remove this once run() is wired into main dispatch.
-
 use anyhow::Result;
 
 /// Refuse to gc if the user would keep fewer than this — without `--force`.
