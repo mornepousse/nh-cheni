@@ -42,7 +42,8 @@ Per-package policy:\n  \
   cheni freeze <pkg>             Hold at current version (inverse of pin)\n  \
   cheni unpin <pkg>              Release a pin (or --all)\n  \
   cheni unfreeze <pkg>           Release a freeze (or --all)\n  \
-  cheni clean                    Remove obsolete pins (nixpkgs caught up)\n\
+  cheni clean                    Remove obsolete pins (nixpkgs caught up)\n  \
+  cheni gc                       Reclaim disk: prune generations + nix-collect-garbage\n\
 \n\
 Build vs upgrade (cheat sheet):\n  \
   build                  =  rebuild with whatever's already in flake.lock\n  \
@@ -217,6 +218,33 @@ enum Commands {
         /// Remove every freeze at once
         #[arg(short = 'a', long)]
         all: bool,
+    },
+
+    /// Reclaim disk space — prune old generations and run nix-collect-garbage.
+    ///
+    /// Refuses to leave fewer than 3 generations without --force. Pass
+    /// --dry-run to see what would happen without committing.
+    #[command(after_help = "Example: cheni gc --keep 5 --dry-run")]
+    Gc {
+        /// Number of recent generations to keep (default 10).
+        #[arg(long, default_value_t = 10usize)]
+        keep: usize,
+
+        /// Audit + preview only, do not delete anything.
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Skip confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+
+        /// One-line summary instead of the full report.
+        #[arg(long)]
+        brief: bool,
+
+        /// Override the safety floor (allow keep below the minimum).
+        #[arg(long)]
+        force: bool,
     },
 
     /// Full system upgrade: refresh flake inputs, preview, rebuild, clean pins
@@ -524,6 +552,16 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Unpin { package, all, yes } => dispatch_unpin(package, all, yes),
         Commands::Freeze { package, major } => dispatch_freeze(package, major),
         Commands::Unfreeze { package, all, yes } => dispatch_unfreeze(package, all, yes),
+        Commands::Gc { keep, dry_run, yes, brief, force } => {
+            cmd::gc::run(cmd::gc::GcOptions {
+                keep,
+                dry_run,
+                yes,
+                brief,
+                force,
+            })?;
+            Ok(())
+        }
         Commands::Upgrade { gc, no_clean_pins, yes, pins_only, boot, brief } => {
             cmd::upgrade::run(cmd::upgrade::UpgradeOptions {
                 gc,
