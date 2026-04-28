@@ -116,7 +116,6 @@ pub(crate) fn compute_next_action(report: &AuditReport) -> Option<String> {
 
 /// Options controlling audit's output.
 #[derive(Debug, Default)]
-#[allow(dead_code)]
 pub struct AuditOptions {
     pub brief: bool,
     pub json: bool,
@@ -127,7 +126,6 @@ pub struct AuditOptions {
 /// Appelle `collect_health`, `collect_updates`, `collect_state` (la version
 /// updates est async à cause du batch eval sous-jacent).
 /// Compose un `AuditReport` et le rend.
-#[allow(dead_code)]
 pub async fn run(opts: AuditOptions) -> Result<()> {
     let nix_config = config::detect()?;
 
