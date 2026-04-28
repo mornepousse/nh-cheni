@@ -115,12 +115,8 @@ impl VersionCache {
             std::fs::create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_vec_pretty(&self)?;
-        // `atomic_write` expects `&str`; the JSON serializer produces valid
-        // UTF-8 so this conversion is infallible.
-        let content_str = String::from_utf8(content)
-            .expect("serde_json::to_vec_pretty always emits valid UTF-8");
-        crate::util::atomic_write(path, &content_str)?;
+        let content = serde_json::to_string_pretty(&self)?;
+        crate::util::atomic_write(path, &content)?;
 
         debug!("version_cache: saved to {}", path.display());
         Ok(())
