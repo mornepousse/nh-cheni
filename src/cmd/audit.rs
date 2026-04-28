@@ -84,6 +84,43 @@ pub struct AuditReport {
     pub next_action: Option<String>,
 }
 
+/// Dérive le verdict global à partir de la santé et des mises à jour.
+#[allow(dead_code)]
+pub(crate) fn compute_verdict(health: &HealthReport, updates: &UpdatesReport) -> AuditVerdict {
+    if !health.errors.is_empty() {
+        return AuditVerdict::Errors;
+    }
+    let actionable_updates = updates.minor + updates.major
+        + updates.flake_inputs_with_update.len();
+    if !health.warnings.is_empty() || actionable_updates > 0 {
+        return AuditVerdict::Warnings;
+    }
+    AuditVerdict::Clear
+}
+
+/// Détermine l'action la plus prioritaire à suggérer à l'utilisateur.
+/// Retourne None quand le verdict est Clear (aucune action nécessaire).
+#[allow(dead_code)]
+pub(crate) fn compute_next_action(report: &AuditReport) -> Option<String> {
+    if let Some(err) = report.health.errors.first() {
+        return Some(format!("Address `{}` first — it blocks rebuild.", err.name));
+    }
+    if report.updates.major > 0 {
+        return Some(
+            "Run `cheni check --details` to see major updates, then `cheni upgrade` to take them.".into(),
+        );
+    }
+    if !report.updates.flake_inputs_with_update.is_empty() {
+        return Some(
+            "Run `cheni upgrade` to take the flake-input updates listed above.".into(),
+        );
+    }
+    if let Some(warn) = report.health.warnings.first() {
+        return Some(format!("Optional: address `{}` (warning).", warn.name));
+    }
+    None
+}
+
 #[cfg(test)]
 #[path = "tests/audit.rs"]
 mod tests;
