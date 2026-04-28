@@ -222,3 +222,26 @@ fn local_age_plural_for_more_than_one_day() {
     assert_eq!(format_local_age(2), "2d ago");
     assert_eq!(format_local_age(45), "45d ago");
 }
+
+// --- resolve_brief_mode (--brief / --json interaction) ---
+
+#[test]
+fn brief_mode_disabled_when_neither_flag_set() {
+    assert!(!resolve_brief_mode(false, false));
+}
+
+#[test]
+fn brief_mode_enabled_when_brief_set_without_json() {
+    assert!(resolve_brief_mode(false, true));
+}
+
+#[test]
+fn json_overrides_brief() {
+    // --json always wins — machine output is unambiguous.
+    assert!(!resolve_brief_mode(true, true));
+}
+
+#[test]
+fn brief_stays_off_when_only_json_set() {
+    assert!(!resolve_brief_mode(true, false));
+}

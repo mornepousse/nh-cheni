@@ -39,6 +39,10 @@ pub(super) struct PackageChange {
 /// critical-component change is detected and the user opts into the
 /// boot-mode rebuild — that's why `opts` is a mutable borrow rather
 /// than a value or `yes: bool`.
+///
+/// In `brief` mode (opts.brief = true) the per-package lists are
+/// suppressed; the critical-component warning and the confirmation
+/// prompt are still shown when applicable.
 pub(super) fn preview_and_confirm(
     config_path: &str,
     hostname: &str,
@@ -57,12 +61,14 @@ pub(super) fn preview_and_confirm(
     let build_changes_vec = build_changes(&to_build, &installed);
     let critical = detect_critical_component_changes(&fetch_changes, &build_changes_vec);
 
-    if !fetch_changes.is_empty() {
-        print_section_from_changes("↓", "to download", &fetch_changes, 20, Color::Cyan);
-    }
-    if !build_changes_vec.is_empty() {
-        println!();
-        print_section_from_changes("⚒", "to build locally", &build_changes_vec, 10, Color::Yellow);
+    if !opts.brief {
+        if !fetch_changes.is_empty() {
+            print_section_from_changes("↓", "to download", &fetch_changes, 20, Color::Cyan);
+        }
+        if !build_changes_vec.is_empty() {
+            println!();
+            print_section_from_changes("⚒", "to build locally", &build_changes_vec, 10, Color::Yellow);
+        }
     }
     let stats = aggregate_stats(&fetch_changes, &build_changes_vec);
 
@@ -70,13 +76,17 @@ pub(super) fn preview_and_confirm(
     // activation pre-check will refuse the live switch. Either flip
     // to boot mode now (saves the user the post-failure debug cycle)
     // or proceed and let it fail explicitly if they prefer.
+    // Critical-component warning is always shown, even in brief mode —
+    // it's safety-relevant.
     if !critical.is_empty() && !opts.boot {
         warn_critical_changes_and_offer_boot_mode(&critical, opts)?;
     }
 
-    if let Some(warning) = preview_noop_warning(&stats, context) {
-        println!();
-        println!("  {} {}", "⚠".yellow().bold(), warning.yellow());
+    if !opts.brief {
+        if let Some(warning) = preview_noop_warning(&stats, context) {
+            println!();
+            println!("  {} {}", "⚠".yellow().bold(), warning.yellow());
+        }
     }
 
     if opts.yes {

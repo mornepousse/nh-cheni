@@ -69,13 +69,18 @@ struct JsonSummary {
 /// Run the `cheni check` command.
 ///
 /// If `category` is Some, only show packages from that module directory.
+/// If `brief` is true, only the verdict line is printed (no spinner, no
+/// details). `json` overrides `brief` — machine output is unambiguous.
 pub async fn run(
     category: Option<&str>,
     details: bool,
     json: bool,
     refresh: bool,
     pending: bool,
+    brief: bool,
 ) -> Result<()> {
+    // --json always wins over --brief (machine output is unambiguous).
+    let brief = resolve_brief_mode(json, brief);
     apply_early_flags(json, refresh);
 
     let nix_config = config::detect()?;
@@ -104,8 +109,8 @@ pub async fn run(
     let current_freezes = freezes::read(&nix_config.flake_dir)?;
     let frozen_rows = split_out_frozen(&mut scan.packages, &current_freezes);
 
-    print_check_header(&scan, category, json);
-    let (lookup_map, flake_inputs) = fetch_updates_concurrently(&nix_config, &scan, json).await?;
+    print_check_header(&scan, category, json, brief);
+    let (lookup_map, flake_inputs) = fetch_updates_concurrently(&nix_config, &scan, json, brief).await?;
 
     let classification = classify_lookups(
         &scan.packages,
@@ -125,6 +130,10 @@ pub async fn run(
 
     if json {
         print_json(&classification, &visible_flake_inputs, &frozen_rows)?;
+    } else if brief {
+        // --brief: verdict line only — no spinner was started, no
+        // details blocks, no tip, no self-update hint.
+        print_summary_line(&classification, frozen_rows.len());
     } else {
         print_human(
             &classification,
@@ -143,15 +152,16 @@ pub async fn run(
     // by default because it adds 30–60s of evaluation; --json
     // ignores it because the section isn't represented in the
     // schema yet (machine consumers usually want the structured
-    // nix-eval view alone).
-    if pending && !json {
+    // nix-eval view alone). Also skipped in --brief mode.
+    if pending && !json && !brief {
         append_pending_section(&nix_config)?;
     }
 
     // Best-effort self-update hint at the very tail. Cached for 24h
     // so the GitLab API isn't hit on every check. Silent on failure
     // — `cheni check` must keep working offline / under rate limit.
-    if !json {
+    // Skipped in --brief mode (just the verdict).
+    if !json && !brief {
         maybe_print_self_update_hint(&nix_config.flake_dir).await;
     }
     Ok(())
@@ -270,6 +280,15 @@ fn split_out_frozen(
     rows
 }
 
+/// Resolve whether brief mode is active for a given invocation.
+/// `json` always overrides `brief` — machine output is unambiguous.
+///
+/// Extracted as a pure function so the priority rule is testable without
+/// driving the full async `run()` pipeline.
+pub(crate) fn resolve_brief_mode(json: bool, brief: bool) -> bool {
+    brief && !json
+}
+
 /// Apply the two flags that affect the rest of the run before any
 /// work is done: `--json` disables colour, `--refresh` wipes the
 /// version cache so every eval re-runs.
@@ -385,8 +404,8 @@ fn gather_packages_to_check(
     Ok(Some(PackagesToCheck { packages, names_with_files, active_set }))
 }
 
-fn print_check_header(scan: &PackagesToCheck, category: Option<&str>, json: bool) {
-    if json {
+fn print_check_header(scan: &PackagesToCheck, category: Option<&str>, json: bool, brief: bool) {
+    if json || brief {
         return;
     }
     let header = match category {
@@ -405,10 +424,13 @@ fn print_check_header(scan: &PackagesToCheck, category: Option<&str>, json: bool
 /// sync subprocess), flake checks fan out on the same pool. On return
 /// the spinner is stopped and a blank line printed so subsequent output
 /// starts cleanly.
+///
+/// In `brief` mode the spinner is not started (no progress output).
 async fn fetch_updates_concurrently(
     nix_config: &config::NixConfig,
     scan: &PackagesToCheck,
     json: bool,
+    brief: bool,
 ) -> Result<(HashMap<String, Option<String>>, Vec<flake::FlakeInput>)> {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -418,7 +440,7 @@ async fn fetch_updates_concurrently(
     let flake_done = Arc::new(AtomicBool::new(false));
 
     let spinner = start_spinner(
-        !json,
+        !json && !brief,
         resolved.clone(),
         total_packages,
         flake_done.clone(),
@@ -474,7 +496,10 @@ async fn fetch_updates_concurrently(
     let lookups = eval_handle.await.unwrap_or_else(|_| Ok(HashMap::new()))?;
     let flake_inputs = flake_handle.await.unwrap_or_default();
     spinner.stop();
-    println!();
+    // In brief mode there was no header line, so no blank separator needed.
+    if !json && !brief {
+        println!();
+    }
     Ok((lookups, flake_inputs))
 }
 

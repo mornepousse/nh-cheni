@@ -34,6 +34,9 @@ pub struct HistoryOptions {
     pub gc: bool,
     /// Skip confirmation prompt.
     pub yes: bool,
+    /// Print a one-line summary instead of the per-generation list.
+    /// --diff overrides --brief (specific request wins).
+    pub brief: bool,
 }
 
 /// A single NixOS generation.
@@ -84,6 +87,13 @@ pub fn run(opts: HistoryOptions) -> Result<()> {
         return run_delete(&opts, &generations);
     }
 
+    // --diff overrides --brief (specific request wins).
+    let brief = opts.brief && !opts.diff;
+
+    if brief {
+        return run_brief(&generations);
+    }
+
     println!("{}\n", "=== cheni history ===".bold());
 
     let total = generations.len();
@@ -110,6 +120,30 @@ pub fn run(opts: HistoryOptions) -> Result<()> {
 
     println!();
     print_history_footer(total, to_show, opts.full);
+    Ok(())
+}
+
+/// Print a one-line summary of the generation list.
+/// Format: `<N> generations | latest: <date>`
+/// Used by `--brief` mode (no spinner, no per-generation blocks).
+pub(crate) fn run_brief(generations: &[Generation]) -> Result<()> {
+    let total = generations.len();
+    let latest = generations
+        .iter()
+        .max_by_key(|g| g.number)
+        .map(|g| g.date.as_str())
+        .unwrap_or("?");
+    let current = generations.iter().find(|g| g.is_current).map(|g| g.number);
+    let current_str = current
+        .map(|n| format!(", current: gen {}", n))
+        .unwrap_or_default();
+    println!(
+        "{} generation{} | latest: {}{}",
+        total.to_string().bold(),
+        if total == 1 { "" } else { "s" },
+        latest.dimmed(),
+        current_str.dimmed(),
+    );
     Ok(())
 }
 

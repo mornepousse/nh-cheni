@@ -53,6 +53,10 @@ pub struct UpgradeOptions {
     /// init swap, …). When this flag is off, cheni still detects those
     /// changes during preview and offers to flip the mode interactively.
     pub boot: bool,
+    /// Suppress cheni's own narration (policy block, step headers).
+    /// Underlying tools (nh, nix) still produce their own output.
+    /// The final outcome line (✓/✗ + elapsed) is always printed.
+    pub brief: bool,
 }
 
 /// Run `cheni upgrade`.
@@ -70,7 +74,9 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
         .context("Config path is not valid UTF-8")?;
     let total_steps = if opts.gc { 5 } else { 4 };
 
-    println!("{}\n", "=== cheni upgrade ===".bold());
+    if !opts.brief {
+        println!("{}\n", "=== cheni upgrade ===".bold());
+    }
 
     // --pins-only with no pins is meaningless — bail before touching
     // anything so the user gets a clear "use plain upgrade" pointer
@@ -90,14 +96,18 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
     // the current flag scope (--pins-only) implies a smaller refresh.
     // Surfacing the state up front prevents the "why did my kernel
     // update?" surprise.
-    warn_if_dirty_lock(&nix_config.flake_dir);
+    if !opts.brief {
+        warn_if_dirty_lock(&nix_config.flake_dir);
+    }
 
     let step1_title = if opts.pins_only {
         "Updating nixpkgs-latest"
     } else {
         "Updating flake inputs"
     };
-    print_step(1, total_steps, step1_title);
+    if !opts.brief {
+        print_step(1, total_steps, step1_title);
+    }
     let context = flake_update::update_flake_inputs(&nix_config.flake_dir, opts.pins_only)?;
 
     // Anti-downgrade guard for the targeted refresh: if nixpkgs has
@@ -108,9 +118,10 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
     }
 
     rebuild::refresh_constrained_freezes_step(&nix_config.flake_dir);
-    print_separator();
-
-    print_step(2, total_steps, "Previewing changes");
+    if !opts.brief {
+        print_separator();
+        print_step(2, total_steps, "Previewing changes");
+    }
     let stats = match preview::preview_and_confirm(
         config_path,
         &nix_config.hostname,
@@ -120,32 +131,64 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
         Some(s) => s,
         None => return Ok(()),
     };
-    print_separator();
+    if !opts.brief {
+        print_separator();
+    }
 
     let step3_title = if opts.boot {
         "Staging system for next boot"
     } else {
         "Rebuilding system"
     };
-    print_step(3, total_steps, step3_title);
-    rebuild::rebuild_system(config_path, opts.boot)?;
-    print_separator();
+    if !opts.brief {
+        print_step(3, total_steps, step3_title);
+    }
+    let rebuild_result = rebuild::rebuild_system(config_path, opts.boot);
+    if !opts.brief {
+        print_separator();
+    }
+    // In brief mode: surface the rebuild error with the one-liner verdict.
+    if let Err(e) = rebuild_result {
+        let elapsed = crate::util::format_elapsed(started.elapsed());
+        println!(
+            "{} Upgrade failed: {} ({})",
+            "✗".red().bold(),
+            e,
+            elapsed.dimmed(),
+        );
+        return Err(e);
+    }
 
-    print_step(4, total_steps, "Checking obsolete pins");
+    if !opts.brief {
+        print_step(4, total_steps, "Checking obsolete pins");
+    }
     cleanup::run_pin_cleanup_step(&nix_config.flake_dir, opts.no_clean_pins)?;
 
     if opts.gc {
-        print_separator();
-        print_step(5, total_steps, "Collecting garbage (> 30 days)");
+        if !opts.brief {
+            print_separator();
+            print_step(5, total_steps, "Collecting garbage (> 30 days)");
+        }
         cleanup::run_gc_step(opts.yes)?;
     }
 
-    print_separator();
-    summary::print_final_summary(started.elapsed(), &stats, &context, opts.boot);
-    if !opts.gc {
+    if !opts.brief {
+        print_separator();
+        summary::print_final_summary(started.elapsed(), &stats, &context, opts.boot);
+        if !opts.gc {
+            println!(
+                "{}",
+                "  Old generations kept for rollback. Use --gc to reclaim disk space later.".dimmed()
+            );
+        }
+    } else {
+        // --brief: one-liner verdict only.
+        let elapsed = crate::util::format_elapsed(started.elapsed());
         println!(
-            "{}",
-            "  Old generations kept for rollback. Use --gc to reclaim disk space later.".dimmed()
+            "{} {} ({})",
+            "✓".green().bold(),
+            if opts.boot { "Upgrade staged for next boot" } else { "Upgrade complete" },
+            elapsed.dimmed(),
         );
     }
     Ok(())
