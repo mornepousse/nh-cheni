@@ -192,7 +192,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  pick up the new generation through a clean boot rather than \
                  a runtime swap.",
         scope: Scope::Phase(Phase::Activate),
-        severity: Severity::Warning,
+        severity: Severity::Critical,
     },
     Finding {
         matcher: "module 'aes_generic' not found",
@@ -438,7 +438,8 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `--extra-experimental-features 'nix-command flakes'`.",
         // This always trips before any phase signal lands.
         scope: Scope::Global,
-        severity: Severity::Warning,
+        // One-liner config fix; not urgent once you know what it is.
+        severity: Severity::Hint,
     },
     Finding {
         matcher: "is in the way of",
@@ -472,7 +473,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  api.github.com entirely.",
         // Lands at flake metadata resolution — pre-build, eval-ish.
         scope: Scope::Global,
-        severity: Severity::Hint,
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "exit code 137",
@@ -637,7 +638,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  look for large `attrNames` iterations or transitive \
                  `rec` webs in your config.",
         scope: Scope::Phase(Phase::Eval),
-        severity: Severity::Warning,
+        severity: Severity::Critical,
     },
     Finding {
         matcher: "untrusted substituter",
@@ -1111,8 +1112,8 @@ fn print_findings(findings: &[&Finding]) {
     println!("{}\n", "=== cheni diagnose ===".bold());
     if findings.is_empty() {
         println!(
-            "  {} No known issues found in the log.",
-            "·".dimmed()
+            "  {} No known issues detected in the log.",
+            "✓".green()
         );
         println!(
             "  {}",
