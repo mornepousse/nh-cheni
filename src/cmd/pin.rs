@@ -387,6 +387,12 @@ async fn classify_pin_targets(
     let cache_path = version_cache::cache_path();
     let mut cache = VersionCache::load(&cache_path)?;
     let rev = read_input_rev(flake_dir, "nixpkgs-latest");
+    if rev.is_none() {
+        eprintln!(
+            "  Note: input 'nixpkgs-latest' is not configured in flake.lock, \
+             so version targets are unknown. Add the input or ignore this note."
+        );
+    }
 
     let mut minor = Vec::new();
     let mut major = Vec::new();
