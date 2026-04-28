@@ -17,6 +17,8 @@ fn parse_version_rejects_empty() {
     assert_eq!(parse_eval_output(""), None);
     assert_eq!(parse_eval_output("\n"), None);
     assert_eq!(parse_eval_output("   "), None);
+    // Quoted-empty: covers the post-dequoting empty branch.
+    assert_eq!(parse_eval_output("\"\""), None);
 }
 
 #[test]

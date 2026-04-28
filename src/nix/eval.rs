@@ -76,7 +76,6 @@ pub fn eval_version(input: &str, attr: &str) -> Result<Option<String>> {
 /// 3. If the result is empty, return `None`.
 /// 4. If the result starts with `error:`, return `None` — this means nix
 ///    printed an error message to stdout instead of a clean value.
-#[allow(dead_code)]
 pub(crate) fn parse_eval_output(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
 
