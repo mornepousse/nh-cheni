@@ -28,7 +28,7 @@ use tracing_subscriber::EnvFilter;
     after_help = "\
 Daily flow:\n  \
   cheni                          Interactive menu (state snapshot + action picker)\n  \
-  cheni check                    See what's outdated (Repology + flake input ages)\n  \
+  cheni check                    See what's outdated (nixpkgs-latest + flake input ages)\n  \
   cheni check --pending          Add closure dry-run (kernel + base packages too)\n  \
   cheni upgrade                  Full upgrade: refresh, preview, rebuild\n  \
   cheni upgrade --boot           Stage for next boot (when nh refuses live switch)\n  \
@@ -59,7 +59,7 @@ History & rollback:\n  \
   cheni history --older-than 30d Delete by age\n\
 \n\
 Discovery:\n  \
-  cheni search <query>           nixpkgs search + Repology + pin/freeze badges\n  \
+  cheni search <query>           nixpkgs search + nixpkgs-latest delta + pin/freeze badges\n  \
   cheni why <pkg>                Which .nix file declares this?\n\
 \n\
 Maintenance:\n  \
@@ -105,7 +105,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Ignore the on-disk Repology cache and re-fetch every lookup
+        /// Ignore the on-disk version cache and re-evaluate every lookup
         #[arg(long)]
         refresh: bool,
 

@@ -89,7 +89,7 @@ pub async fn run(
         return Ok(());
     };
 
-    // Exclude frozen packages from the Repology check: the user has
+    // Exclude frozen packages from the upstream check: the user has
     // deliberately held them at a past version, so there's no update
     // decision to make. We still surface them in a "Frozen" block so
     // they're not invisible in the report.
@@ -228,7 +228,7 @@ fn append_pending_section(nix_config: &config::NixConfig) -> Result<()> {
 }
 
 /// Frozen-package row for display. Mirrors `CheckResult` at a higher
-/// level — we don't do Repology lookups for frozen entries, so the
+/// level — we don't run nix-eval lookups for frozen entries, so the
 /// report comes straight from `package-freezes.json` + the store.
 struct FrozenRow {
     name: String,
@@ -707,7 +707,7 @@ fn suspicious_eval_silence(c: &Classification) -> Option<String> {
     ))
 }
 
-/// Render the "Frozen" block. No Repology column — the user's intent
+/// Render the "Frozen" block. No upstream column — the user's intent
 /// for these packages is "don't tell me about updates", so we just
 /// reaffirm the held version and freeze date.
 fn print_frozen_block(rows: &[FrozenRow]) {
@@ -927,8 +927,8 @@ impl Spinner {
 }
 
 /// Start a live progress indicator reading from two signals:
-/// - `resolved` — number of Repology packages resolved (cache hit or
-///   API response). `total` is the denominator.
+/// - `resolved` — number of packages whose version has been evaluated
+///   (cache hit or fresh nix eval). `total` is the denominator.
 /// - `flake_done` — flipped to true once the flake-input probe finishes.
 ///
 /// Renders one line that updates in place, so the output stays quiet
