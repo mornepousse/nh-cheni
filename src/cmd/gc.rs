@@ -44,6 +44,27 @@ impl Default for GcOptions {
     }
 }
 
+/// Refuse the gc plan if it would leave fewer than `MIN_SAFETY_FLOOR`
+/// generations. `force` overrides the floor but never zero (keeping
+/// zero generations would brick rollback entirely).
+pub(crate) fn check_safety_guard(kept_count: usize, force: bool) -> Result<()> {
+    if kept_count == 0 {
+        anyhow::bail!(
+            "Refusing to keep 0 generations — that would leave you unable \
+             to rollback. Increase --keep."
+        );
+    }
+    if kept_count < MIN_SAFETY_FLOOR && !force {
+        anyhow::bail!(
+            "Would keep only {} generation(s) — below the safety floor of {}. \
+             Use --force to override if you really mean it.",
+            kept_count,
+            MIN_SAFETY_FLOOR
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "tests/gc.rs"]
 mod tests;
