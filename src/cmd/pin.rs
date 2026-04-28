@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use crate::nix::{config, flake, freezes, pins, store, version_cache};
 use crate::nix::eval::lookup_or_eval;
-use crate::nix::flake::{read_input_rev, target_system};
+use crate::nix::flake::read_input_locked;
 use crate::nix::version_cache::VersionCache;
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::parse_version;
@@ -194,12 +194,11 @@ async fn lookup_available_version(
     name: &str,
     _installed: &str,
 ) -> Result<Option<String>> {
-    let Some(rev) = read_input_rev(flake_dir, "nixpkgs-latest") else {
+    let Some((rev, nar_hash)) = read_input_locked(flake_dir, "nixpkgs-latest") else {
         return Ok(None);
     };
-    let attr = format!("legacyPackages.{}.{}", target_system(), name);
     let mut cache = VersionCache::load(&version_cache::cache_path())?;
-    let result = lookup_or_eval(&mut cache, "nixpkgs-latest", &rev, &attr)?;
+    let result = lookup_or_eval(&mut cache, "nixpkgs-latest", &rev, &nar_hash, name)?;
     cache.save(&version_cache::cache_path())?;
     Ok(result)
 }
@@ -386,8 +385,8 @@ async fn classify_pin_targets(
 ) -> Result<(Vec<PinRow>, Vec<PinRow>)> {
     let cache_path = version_cache::cache_path();
     let mut cache = VersionCache::load(&cache_path)?;
-    let rev = read_input_rev(flake_dir, "nixpkgs-latest");
-    if rev.is_none() {
+    let locked = read_input_locked(flake_dir, "nixpkgs-latest");
+    if locked.is_none() {
         eprintln!(
             "  Note: input 'nixpkgs-latest' is not configured in flake.lock, \
              so version targets are unknown. Add the input or ignore this note."
@@ -398,9 +397,8 @@ async fn classify_pin_targets(
     let mut major = Vec::new();
 
     for (name, installed) in to_check {
-        let Some(ref rev) = rev else { continue; };
-        let attr = format!("legacyPackages.{}.{}", target_system(), name);
-        let Some(available) = lookup_or_eval(&mut cache, "nixpkgs-latest", rev, &attr)? else {
+        let Some((ref rev, ref nar_hash)) = locked else { continue; };
+        let Some(available) = lookup_or_eval(&mut cache, "nixpkgs-latest", rev, nar_hash, name)? else {
             continue;
         };
         match compare_versions(&parse_version(installed), &parse_version(&available)) {

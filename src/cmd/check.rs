@@ -436,20 +436,18 @@ async fn fetch_updates_concurrently(
     let eval_handle = tokio::task::spawn_blocking(
         move || -> Result<HashMap<String, Option<String>>> {
             use crate::nix::eval::lookup_or_eval;
-            use crate::nix::flake::{read_input_rev, target_system};
+            use crate::nix::flake::read_input_locked;
             use crate::nix::version_cache::{cache_path, VersionCache};
 
             let cache_path = cache_path();
             let mut cache = VersionCache::load(&cache_path).unwrap_or_default();
-            let rev = read_input_rev(&flake_dir_for_eval, "nixpkgs-latest");
-            let system = target_system();
+            let locked = read_input_locked(&flake_dir_for_eval, "nixpkgs-latest");
 
             let mut out: HashMap<String, Option<String>> = HashMap::with_capacity(names.len());
             for name in names {
-                let result = match &rev {
-                    Some(rev) => {
-                        let attr = format!("legacyPackages.{system}.{name}");
-                        lookup_or_eval(&mut cache, "nixpkgs-latest", rev, &attr)
+                let result = match &locked {
+                    Some((rev, nar_hash)) => {
+                        lookup_or_eval(&mut cache, "nixpkgs-latest", rev, nar_hash, &name)
                             .ok()
                             .flatten()
                     }

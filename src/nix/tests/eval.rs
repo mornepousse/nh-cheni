@@ -32,9 +32,27 @@ fn lookup_or_eval_cache_hit_returns_without_subprocess() {
     use crate::nix::version_cache::VersionCache;
 
     let mut cache = VersionCache::default();
-    cache.store("fake-input-that-doesnt-exist", "rev1", "firefox", "128.5.0");
+    cache.store("nixpkgs-latest", "rev1", "firefox", "128.5.0");
 
-    let v = lookup_or_eval(&mut cache, "fake-input-that-doesnt-exist", "rev1", "firefox")
+    let v = lookup_or_eval(&mut cache, "nixpkgs-latest", "rev1", "fake-nar-hash", "firefox")
         .expect("cache hit should not error");
     assert_eq!(v, Some("128.5.0".to_string()));
+}
+
+#[test]
+fn lookup_or_eval_cache_miss_with_invalid_rev_returns_none() {
+    // Invalid rev (not hex) → query_pkg_version_at_rev returns None.
+    // lookup_or_eval must propagate Ok(None), not panic.
+    use crate::nix::version_cache::VersionCache;
+
+    let mut cache = VersionCache::default();
+    let v = lookup_or_eval(
+        &mut cache,
+        "nixpkgs-latest",
+        "not-a-hex-rev",
+        "sha256-fakehash",
+        "firefox",
+    )
+    .expect("invalid rev should return Ok(None), not Err");
+    assert_eq!(v, None);
 }

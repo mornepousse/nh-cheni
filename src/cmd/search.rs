@@ -26,7 +26,7 @@ use std::path::Path;
 
 use crate::nix::{config, freezes, pins, version_cache};
 use crate::nix::eval::lookup_or_eval;
-use crate::nix::flake::{read_input_rev, target_system};
+use crate::nix::flake::read_input_locked;
 use crate::nix::version_cache::VersionCache;
 
 /// One result row from `nix search`: (short attr name, version, description).
@@ -191,7 +191,7 @@ async fn lookup_upstream(
             return std::collections::HashMap::new();
         }
     };
-    let Some(rev) = read_input_rev(flake_dir, "nixpkgs-latest") else {
+    let Some((rev, nar_hash)) = read_input_locked(flake_dir, "nixpkgs-latest") else {
         // No nixpkgs-latest input — silently return empty so search keeps
         // working without an upstream-delta annotation.
         return std::collections::HashMap::new();
@@ -199,8 +199,7 @@ async fn lookup_upstream(
 
     let mut out = std::collections::HashMap::new();
     for (name, _version, _desc) in rows.iter().take(MAX_UPSTREAM_LOOKUPS) {
-        let attr = format!("legacyPackages.{}.{}", target_system(), name);
-        match lookup_or_eval(&mut cache, "nixpkgs-latest", &rev, &attr) {
+        match lookup_or_eval(&mut cache, "nixpkgs-latest", &rev, &nar_hash, name) {
             Ok(Some(v)) => {
                 out.insert(name.clone(), v);
             }
