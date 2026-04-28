@@ -4,10 +4,8 @@
 //! guards and a structured preview. See
 //! `docs/superpowers/specs/2026-04-28-cheni-gc-design.md`.
 
-#![allow(dead_code, unused_imports)]
-// Tasks 3-7 progressively wire each item into call sites and
-// remove this module-level allow. Module-scoped is the simplest
-// transitional bridge.
+#![allow(dead_code)]
+// Task 7 will remove this once run() is wired into main dispatch.
 
 use anyhow::Result;
 
@@ -159,6 +157,76 @@ pub(crate) fn apply_gc(plan: &PrunePlan) -> Result<()> {
         );
     }
     println!("  {} reclaim complete", "✓".green());
+    Ok(())
+}
+
+use dialoguer::{theme::ColorfulTheme, Confirm};
+
+/// Orchestrate the gc flow: audit → safety → preview → confirm → apply.
+pub fn run(opts: GcOptions) -> Result<()> {
+    if !opts.brief {
+        println!("{}\n", "=== cheni gc ===".bold());
+    }
+
+    let audit = audit_plan(opts.keep)?;
+    check_safety_guard(audit.plan.kept_count(), opts.force)?;
+
+    let total_generations = audit.plan.kept_count() + audit.plan.deleted_ids.len();
+
+    if audit.plan.deleted_ids.is_empty() && audit.dead_paths_lower_bound == 0 {
+        if opts.brief {
+            println!("gc: nothing to do");
+        } else {
+            println!("{} Already minimal — nothing to remove.", "✓".green());
+        }
+        return Ok(());
+    }
+
+    if !opts.brief {
+        print_audit(&audit, total_generations);
+        println!();
+    }
+
+    if opts.dry_run {
+        if opts.brief {
+            println!(
+                "gc dry-run: {} gens would be removed, {} dead path(s)",
+                audit.plan.deleted_ids.len(),
+                audit.dead_paths_lower_bound,
+            );
+        } else {
+            println!("{}", "(dry-run — nothing applied)".dimmed());
+        }
+        return Ok(());
+    }
+
+    if !opts.yes {
+        let theme = ColorfulTheme::default();
+        let go = Confirm::with_theme(&theme)
+            .with_prompt("Proceed with gc?")
+            .default(false)
+            .interact()
+            .map_err(|e| anyhow::anyhow!("reading confirmation: {e}"))?;
+        if !go {
+            println!("{}", "  Cancelled — nothing removed.".yellow());
+            return Ok(());
+        }
+    }
+
+    let started = std::time::Instant::now();
+    apply_gc(&audit.plan)?;
+    let elapsed = started.elapsed();
+
+    if opts.brief {
+        println!(
+            "gc: {} gens, {}+ paths reclaimed in {}s",
+            audit.plan.deleted_ids.len(),
+            audit.dead_paths_lower_bound,
+            elapsed.as_secs(),
+        );
+    } else {
+        println!("\n{} Done in {}s.", "✓".green().bold(), elapsed.as_secs());
+    }
     Ok(())
 }
 
