@@ -12,3 +12,4 @@ pub mod git;
 pub mod pins;
 pub mod store;
 pub mod tools;
+pub mod version_cache;
