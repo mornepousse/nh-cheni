@@ -2,6 +2,7 @@
 //!
 //! Each subcommand lives in its own file.
 
+pub mod audit;
 pub mod bug_report;
 pub mod build;
 pub mod check;

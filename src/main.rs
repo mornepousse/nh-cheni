@@ -32,7 +32,8 @@ Daily flow:\n  \
   cheni check --pending          Add closure dry-run (kernel + base packages too)\n  \
   cheni upgrade                  Full upgrade: refresh, preview, rebuild\n  \
   cheni upgrade --boot           Stage for next boot (when nh refuses live switch)\n  \
-  cheni status                   Where am I — config, pins, flake input ages\n\
+  cheni status                   Where am I — config, pins, flake input ages\n  \
+  cheni audit                    Combined health: doctor + check + status, ordered\n\
 \n\
 Per-package policy:\n  \
   cheni pin <pkg>                Pin to nixpkgs-latest (get a newer version)\n  \
@@ -88,6 +89,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// One-shot health overview. Combines doctor + check + status into a
+    /// single ordered report with a verdict line and a next-action tip.
+    #[command(after_help = "Example: cheni audit --brief")]
+    Audit {
+        /// Print a one-line summary instead of the full report.
+        #[arg(long)]
+        brief: bool,
+
+        /// Output structured JSON for scripts.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Show available package updates (nixpkgs + flake inputs)
     #[command(alias = "ck", after_help = "Example: cheni check -c dev")]
     Check {
@@ -497,6 +511,10 @@ async fn resolve_command(cmd: Option<Commands>) -> Result<Option<Commands>> {
 /// for everything cheni can do.
 async fn dispatch(command: Commands) -> Result<()> {
     match command {
+        Commands::Audit { brief, json } => {
+            cmd::audit::run(cmd::audit::AuditOptions { brief, json }).await?;
+            Ok(())
+        }
         Commands::Check { category, details, json, refresh, pending, brief } => {
             cmd::check::run(category.as_deref(), details, json, refresh, pending, brief).await
         }

@@ -903,6 +903,31 @@ fn check_nh_installed() -> CheckResult {
     }
 }
 
+/// Collect doctor's findings as structured data, suitable for
+/// `cheni audit` composition.
+///
+/// Mirrors what `run()` does internally, minus printing. Errors / warnings
+/// are converted into `audit::HealthIssue` shape.
+pub(crate) fn collect_health(
+    flake_dir: &std::path::Path,
+) -> anyhow::Result<crate::cmd::audit::HealthReport> {
+    let checks = run_all_checks(flake_dir)?;
+    let mut report = crate::cmd::audit::HealthReport::default();
+    for c in &checks {
+        let issue = crate::cmd::audit::HealthIssue {
+            name: c.name.clone(),
+            message: c.message.clone(),
+            hint: c.hint.clone(),
+        };
+        match c.severity {
+            Severity::Error => report.errors.push(issue),
+            Severity::Warning => report.warnings.push(issue),
+            Severity::Ok => report.passed += 1,
+        }
+    }
+    Ok(report)
+}
+
 #[cfg(test)]
 #[path = "tests/doctor.rs"]
 mod tests;
