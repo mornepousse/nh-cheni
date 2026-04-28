@@ -289,6 +289,61 @@ pub(crate) fn resolve_brief_mode(json: bool, brief: bool) -> bool {
     brief && !json
 }
 
+/// Collect structured update data suitable for `cheni audit`.
+///
+/// Runs the same eval batch + flake-input probe as `run()`, but returns
+/// a structured [`crate::cmd::audit::UpdatesReport`] instead of printing.
+/// The spinner is suppressed via `brief=true` so the function is silent.
+/// The existing `run()` surface is unchanged.
+#[allow(dead_code)]
+pub(crate) async fn collect_updates(
+    nix_config: &config::NixConfig,
+) -> anyhow::Result<crate::cmd::audit::UpdatesReport> {
+    let Some(mut scan) = gather_packages_to_check(nix_config, None)? else {
+        return Ok(crate::cmd::audit::UpdatesReport::default());
+    };
+    let current_freezes = freezes::read(&nix_config.flake_dir)?;
+    let frozen_rows = split_out_frozen(&mut scan.packages, &current_freezes);
+
+    // json=false, brief=true — silences the spinner without altering eval.
+    let (lookup_map, flake_inputs) =
+        fetch_updates_concurrently(nix_config, &scan, false, true).await?;
+
+    let classification = classify_lookups(
+        &scan.packages,
+        &lookup_map,
+        &scan.names_with_files,
+        &nix_config.flake_dir,
+    );
+
+    let visible_flake_inputs = filter_visible_flake_inputs(
+        &flake_inputs,
+        &nix_config.flake_dir,
+        scan.active_set.as_ref(),
+        None,
+    );
+
+    let flake_inputs_with_update: Vec<crate::cmd::audit::FlakeInputUpdate> = visible_flake_inputs
+        .iter()
+        .filter(|i| i.has_update.unwrap_or(false))
+        .map(|i| crate::cmd::audit::FlakeInputUpdate {
+            name: i.name.clone(),
+            current: i.installed_version.clone(),
+            latest_remote_date: i.remote_age.clone(),
+        })
+        .collect();
+
+    Ok(crate::cmd::audit::UpdatesReport {
+        up_to_date: classification.up_to_date,
+        minor: classification.minor.len(),
+        major: classification.major.len(),
+        newer: classification.newer.len(),
+        unknown: classification.unknown.len(),
+        frozen: frozen_rows.len(),
+        flake_inputs_with_update,
+    })
+}
+
 /// Apply the two flags that affect the rest of the run before any
 /// work is done: `--json` disables colour, `--refresh` wipes the
 /// version cache so every eval re-runs.
