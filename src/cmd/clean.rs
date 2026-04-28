@@ -7,6 +7,8 @@
 //! With `--cruft`, also removes `result*` symlinks in flake_dir and
 //! truncates the version cache when over 10 MiB.
 
+use std::collections::HashSet;
+
 use anyhow::Result;
 use colored::Colorize;
 
@@ -70,6 +72,18 @@ fn run_obsolete_phase(nix_config: &config::NixConfig) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Returns the list of pin names that no active module declares.
+#[allow(dead_code)]
+pub(crate) fn find_orphan_pins(
+    pins: &[String],
+    declared_packages: &HashSet<String>,
+) -> Vec<String> {
+    pins.iter()
+        .filter(|name| !declared_packages.contains(*name))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
