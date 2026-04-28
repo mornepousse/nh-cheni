@@ -44,6 +44,74 @@ impl Default for GcOptions {
     }
 }
 
+use colored::Colorize;
+
+use crate::cmd::history::{plan_prune_keep_n, read_generations, PrunePlan};
+
+/// Result of the audit phase: the prune plan + the dead-path count.
+pub(crate) struct GcAudit {
+    pub plan: PrunePlan,
+    /// Lower bound on store paths that would be reclaimed.
+    /// Real reclaim is higher because deleting generations releases
+    /// additional closures the dry-run can't see.
+    pub dead_paths_lower_bound: usize,
+}
+
+/// Run the audit phase: read generations, build the prune plan,
+/// query the current dead-path count.
+pub(crate) fn audit_plan(keep: usize) -> Result<GcAudit> {
+    let generations = read_generations()?;
+    let plan = plan_prune_keep_n(&generations, keep);
+    let preview = crate::nix::gc::preview(&[])?;
+    Ok(GcAudit {
+        plan,
+        dead_paths_lower_bound: preview.paths,
+    })
+}
+
+/// Render the audit + preview block (used by run() before the apply phase).
+pub(crate) fn print_audit(audit: &GcAudit, total_generations: usize) {
+    println!("{}", "Audit:".bold());
+    let kept = audit.plan.kept_count();
+    let deleted = audit.plan.deleted_ids.len();
+
+    if kept > 0 {
+        let first = audit.plan.kept_ids.first().copied().unwrap_or(0);
+        let last = audit.plan.kept_ids.last().copied().unwrap_or(0);
+        println!(
+            "  {} generation(s), kept: {} most recent (gen {}..{})",
+            total_generations.to_string().bold(),
+            kept.to_string().green(),
+            first,
+            last,
+        );
+    } else {
+        println!(
+            "  {} generation(s), keeping NONE",
+            total_generations.to_string().bold(),
+        );
+    }
+
+    if deleted > 0 {
+        let first = audit.plan.deleted_ids.first().copied().unwrap_or(0);
+        let last = audit.plan.deleted_ids.last().copied().unwrap_or(0);
+        println!(
+            "  {} generation(s) to remove (gen {}..{})",
+            deleted.to_string().yellow(),
+            first,
+            last,
+        );
+    }
+
+    println!();
+    println!("{}", "Preview:".bold());
+    println!(
+        "  Currently dead: {} store path(s) {}",
+        audit.dead_paths_lower_bound.to_string().bold(),
+        "(lower bound — generations not yet released)".dimmed(),
+    );
+}
+
 /// Refuse the gc plan if it would leave fewer than `MIN_SAFETY_FLOOR`
 /// generations. `force` overrides the floor but never zero (keeping
 /// zero generations would brick rollback entirely).
