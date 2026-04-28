@@ -39,3 +39,32 @@ fn find_orphan_pins_when_no_modules_returns_all_as_orphans() {
     let orphans = find_orphan_pins(&pins, &decl);
     assert_eq!(orphans, vec!["firefox".to_string()]);
 }
+
+#[test]
+fn find_orphan_freezes_returns_freezes_not_in_declared() {
+    let mut freezes = std::collections::BTreeMap::new();
+    freezes.insert(
+        "firefox".to_string(),
+        crate::nix::freezes::FreezeEntry {
+            rev: "abc123".into(),
+            nar_hash: "sha256-abc".into(),
+            version: "1.0".into(),
+            frozen_at: "2026-04-28".into(),
+            major_constraint: None,
+        },
+    );
+    freezes.insert(
+        "kicad".to_string(),
+        crate::nix::freezes::FreezeEntry {
+            rev: "def456".into(),
+            nar_hash: "sha256-def".into(),
+            version: "2.0".into(),
+            frozen_at: "2026-04-28".into(),
+            major_constraint: None,
+        },
+    );
+    let decl = declared(&["kicad"]);
+    let mut orphans = find_orphan_freezes(&freezes, &decl);
+    orphans.sort();
+    assert_eq!(orphans, vec!["firefox".to_string()]);
+}
