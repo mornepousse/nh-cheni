@@ -2,7 +2,7 @@
 //!
 //! Shows available updates for installed packages.
 //! Compares local versions (from the nix store) with the latest
-//! versions available on nixos-unstable (via Repology API).
+//! versions available in `nixpkgs-latest` (via nix eval).
 
 use std::collections::HashMap;
 
@@ -12,7 +12,6 @@ use tracing::debug;
 
 use serde::Serialize;
 
-use crate::api::repology;
 use crate::nix::{config, flake, freezes, pins, store};
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::{is_prerelease, parse_version};
@@ -98,10 +97,7 @@ pub async fn run(
     let frozen_rows = split_out_frozen(&mut scan.packages, &current_freezes);
 
     print_check_header(&scan, category, json);
-    let (lookups, flake_inputs) = fetch_updates_concurrently(&nix_config, &scan, json).await?;
-
-    let lookup_map: HashMap<String, repology::PackageLookup> =
-        lookups.into_iter().map(|l| (l.name.clone(), l)).collect();
+    let (lookup_map, flake_inputs) = fetch_updates_concurrently(&nix_config, &scan, json).await?;
 
     let classification = classify_lookups(
         &scan.packages,
@@ -134,12 +130,12 @@ pub async fn run(
 
     // Optional second pass: closure-level dry-run, surfaces what
     // would actually rebuild — kernel, base system, transitive deps.
-    // Distinct view from the Repology section above (which only
-    // sees module-named packages with Repology coverage). Skipped
+    // Distinct view from the nix-eval section above (which only
+    // sees module-named packages present in nixpkgs). Skipped
     // by default because it adds 30–60s of evaluation; --json
     // ignores it because the section isn't represented in the
     // schema yet (machine consumers usually want the structured
-    // Repology view alone).
+    // nix-eval view alone).
     if pending && !json {
         append_pending_section(&nix_config)?;
     }
@@ -268,17 +264,17 @@ fn split_out_frozen(
 
 /// Apply the two flags that affect the rest of the run before any
 /// work is done: `--json` disables colour, `--refresh` wipes the
-/// Repology cache so every lookup re-hits the API.
+/// version cache so every eval re-runs.
 fn apply_early_flags(json: bool, refresh: bool) {
     if json {
         colored::control::set_override(false);
     }
     if refresh {
-        // Useful after adjusting NAME_MAPPINGS, or when a package's
-        // Repology entry just changed upstream.
+        // Useful after updating flake inputs or when a package's
+        // nixpkgs-latest entry changed.
         let _ = crate::api::cache::clear();
         if !json {
-            println!("{}", "(cache cleared — re-fetching every lookup)".dimmed());
+            println!("{}", "(cache cleared — re-evaluating every lookup)".dimmed());
         }
     }
 }
@@ -396,29 +392,20 @@ fn print_check_header(scan: &PackagesToCheck, category: Option<&str>, json: bool
     println!("{}", header.dimmed());
 }
 
-/// Run the Repology lookups and the flake-input update probes
-/// concurrently — Repology is async-reqwest, flake checks fan out on
-/// a scoped OS thread pool via `spawn_blocking`. On return the
-/// spinner is stopped and a blank line printed so subsequent output
+/// Run the nix-eval lookups and the flake-input update probes
+/// concurrently — the eval loop runs in `spawn_blocking` (nix is a
+/// sync subprocess), flake checks fan out on the same pool. On return
+/// the spinner is stopped and a blank line printed so subsequent output
 /// starts cleanly.
 async fn fetch_updates_concurrently(
     nix_config: &config::NixConfig,
     scan: &PackagesToCheck,
     json: bool,
-) -> Result<(Vec<repology::PackageLookup>, Vec<flake::FlakeInput>)> {
+) -> Result<(HashMap<String, Option<String>>, Vec<flake::FlakeInput>)> {
     use std::sync::Arc;
-    use std::sync::atomic::{AtomicBool, AtomicUsize};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    // Pass installed version as a hint so the matcher can disambiguate
-    // Repology projects with multiple nix entries (e.g. exo / xfce4-exo,
-    // libsForQt5.breeze-icons / kdePackages.breeze-icons).
-    let names_with_installed: Vec<(String, Option<String>)> = scan
-        .packages
-        .iter()
-        .map(|(n, v)| (n.clone(), Some(v.clone())))
-        .collect();
-
-    let total_packages = names_with_installed.len();
+    let total_packages = scan.packages.len();
     let resolved = Arc::new(AtomicUsize::new(0));
     let flake_done = Arc::new(AtomicBool::new(false));
 
@@ -433,19 +420,52 @@ async fn fetch_updates_concurrently(
     let flake_done_for_task = flake_done.clone();
     let flake_handle = tokio::task::spawn_blocking(move || {
         let Ok(mut inputs) = flake::read_flake_inputs(&flake_dir) else {
-            flake_done_for_task.store(true, std::sync::atomic::Ordering::Relaxed);
+            flake_done_for_task.store(true, Ordering::Relaxed);
             return Vec::new();
         };
         flake::check_flake_updates(&mut inputs);
-        flake_done_for_task.store(true, std::sync::atomic::Ordering::Relaxed);
+        flake_done_for_task.store(true, Ordering::Relaxed);
         inputs
     });
 
-    let lookups = repology::lookup_versions_with_progress(
-        &names_with_installed,
-        Some(resolved.clone()),
-    )
-    .await?;
+    // Eval loop in spawn_blocking — `nix eval` is a sync subprocess and
+    // blocking the tokio runtime directly would stall all async tasks.
+    let flake_dir_for_eval = nix_config.flake_dir.clone();
+    let names: Vec<String> = scan.packages.iter().map(|(n, _)| n.clone()).collect();
+    let resolved_for_eval = resolved.clone();
+    let eval_handle = tokio::task::spawn_blocking(
+        move || -> Result<HashMap<String, Option<String>>> {
+            use crate::nix::eval::lookup_or_eval;
+            use crate::nix::flake::{read_input_rev, target_system};
+            use crate::nix::version_cache::{cache_path, VersionCache};
+
+            let cache_path = cache_path();
+            let mut cache = VersionCache::load(&cache_path).unwrap_or_default();
+            let rev = read_input_rev(&flake_dir_for_eval, "nixpkgs-latest");
+            let system = target_system();
+
+            let mut out: HashMap<String, Option<String>> = HashMap::with_capacity(names.len());
+            for name in names {
+                let result = match &rev {
+                    Some(rev) => {
+                        let attr = format!("legacyPackages.{system}.{name}");
+                        lookup_or_eval(&mut cache, "nixpkgs-latest", rev, &attr)
+                            .ok()
+                            .flatten()
+                    }
+                    None => None,
+                };
+                out.insert(name, result);
+                resolved_for_eval.fetch_add(1, Ordering::Relaxed);
+            }
+
+            // Best-effort save — if it fails (disk full, perms) the run still works.
+            let _ = cache.save(&cache_path);
+            Ok(out)
+        },
+    );
+
+    let lookups = eval_handle.await.unwrap_or_else(|_| Ok(HashMap::new()))?;
     let flake_inputs = flake_handle.await.unwrap_or_default();
     spinner.stop();
     println!();
@@ -481,14 +501,14 @@ struct Classification {
     up_to_date: usize,
 }
 
-/// Compare each (name, installed_version) tuple against its Repology
+/// Compare each (name, installed_version) tuple against its nix-eval
 /// lookup and bucket the outcome. Pre-release "available" versions are
 /// treated as up-to-date when the installed version is stable —
-/// otherwise Repology's latest (e.g. python 3.15.0a7) would
+/// otherwise nixpkgs-latest (e.g. python 3.15.0a7) would
 /// permanently surface as a minor update against 3.14.3.
 fn classify_lookups(
     packages_to_check: &[(String, String)],
-    lookup_map: &HashMap<String, repology::PackageLookup>,
+    lookup_map: &HashMap<String, Option<String>>,
     names_with_files: &HashMap<String, Vec<std::path::PathBuf>>,
     flake_dir: &std::path::Path,
 ) -> Classification {
@@ -501,11 +521,11 @@ fn classify_lookups(
     };
 
     for (name, installed_version) in packages_to_check {
-        let Some(lookup) = lookup_map.get(name) else {
+        let Some(available_opt) = lookup_map.get(name) else {
             c.unknown.push(name.clone());
             continue;
         };
-        let Some(available) = &lookup.version else {
+        let Some(available) = available_opt else {
             c.unknown.push(name.clone());
             continue;
         };
@@ -649,34 +669,30 @@ fn print_human(
         c.unknown.len().to_string().dimmed(),
         frozen_tail,
     );
-    if let Some(message) = suspicious_repology_silence(c) {
+    if let Some(message) = suspicious_eval_silence(c) {
         println!();
         println!("  {} {}", "⚠".yellow().bold(), message.yellow());
     }
 }
 
-/// Detect the "Repology is silently broken" signature: every classified
-/// package landed in the Unknown bucket (zero matched Up-to-date /
-/// Minor / Major / Newer) over a non-trivial sample size. The legitimate
-/// "all my packages are obscure to Repology" outcome stays silent for
-/// small configs (< 10 packages) where it's plausible. Returns `None`
-/// when the report looks normal.
+/// Detect the "all packages are unknown" signature: every classified
+/// package landed in Unknown bucket. Now that the lookup is via nix
+/// eval against `nixpkgs-latest`, this typically means:
+///   - the user has no `nixpkgs-latest` input in their flake.lock
+///   - or `nix eval` is systemically failing (broken store, network
+///     for fetchTree, evaluator crash)
 ///
-/// This catches future API breakages — the v0.5.5 episode was a
-/// hardcoded `User-Agent: cheni/0.1` that Repology blocklisted, and
-/// `cheni check` quietly returned `Up to date: 0 | Unknown: 123`
-/// for an unknown span. Future blocks (TLS-fingerprint filtering,
-/// IP-range bans, full API outages) would produce the same shape;
-/// this guard makes the failure visible.
-fn suspicious_repology_silence(c: &Classification) -> Option<String> {
+/// Stays silent for small configs (< 10 packages) where the outcome
+/// can be legitimate. Returns `None` for normal reports.
+fn suspicious_eval_silence(c: &Classification) -> Option<String> {
     let classified = c.up_to_date + c.minor.len() + c.major.len() + c.newer.len();
     if classified > 0 || c.unknown.len() < 10 {
         return None;
     }
     Some(format!(
-        "All {} Repology lookups returned Unknown — the API may be \
-         blocklisting cheni or returning errors. Inspect with `cheni \
-         check -v --refresh` (debug logs show the real HTTP status).",
+        "All {} package lookups returned Unknown — likely missing \
+         `nixpkgs-latest` input in flake.lock, or systemic nix eval \
+         failure. Run with `-v` to see debug-level eval errors.",
         c.unknown.len()
     ))
 }
@@ -815,8 +831,8 @@ fn print_newer_block(newer: &[CheckResult]) {
 fn print_unknown_block(unknown: &[String]) {
     println!(
         "{} {}",
-        "Unknown to Repology".dimmed().bold(),
-        "(no version data — may need a name mapping):".dimmed()
+        "Unknown to nixpkgs-latest".dimmed().bold(),
+        "(no version data — package may not exist in nixpkgs):".dimmed()
     );
     for name in unknown {
         println!("  {}", name);

@@ -91,7 +91,7 @@ fn sample_entry(version: &str, date: &str) -> FreezeEntry {
 fn split_out_frozen_removes_matching_packages() {
     // Two packages, one frozen — the frozen one is extracted into a row
     // with its installed version & freeze date, and is no longer in the
-    // to-check list that goes to Repology.
+    // to-check list that goes to nix eval.
     let mut packages = vec![
         ("firefox".to_string(), "127.0.1".to_string()),
         ("vivaldi".to_string(), "7.9".to_string()),
@@ -158,7 +158,7 @@ fn split_out_frozen_skips_freezes_not_in_check_list() {
     assert!(rows.is_empty());
 }
 
-// --- suspicious_repology_silence ---
+// --- suspicious_eval_silence ---
 
 fn classification(up_to_date: usize, unknown: usize) -> Classification {
     Classification {
@@ -172,21 +172,19 @@ fn classification(up_to_date: usize, unknown: usize) -> Classification {
 
 #[test]
 fn silence_warning_fires_when_everything_is_unknown() {
-    // The v0.5.5 signature: zero classified, many Unknown. Future
-    // API breakages of any flavour (UA blocklist, IP ban, TLS
-    // fingerprint filter) will produce the same shape — the warning
-    // must surface so the user doesn't quietly rely on a broken
-    // report.
+    // Zero classified, many Unknown — the signature of a missing
+    // nixpkgs-latest input or a systemic nix eval failure. The warning
+    // must surface so the user doesn't quietly rely on a broken report.
     let c = classification(0, 123);
-    assert!(suspicious_repology_silence(&c).is_some());
+    assert!(suspicious_eval_silence(&c).is_some());
 }
 
 #[test]
 fn silence_warning_silent_for_a_normal_run() {
     // Most packages classified, a handful Unknown — the legitimate
-    // "Repology doesn't track these specific projects" outcome.
+    // "nixpkgs doesn't have a .version for these specific packages" outcome.
     let c = classification(100, 19);
-    assert!(suspicious_repology_silence(&c).is_none());
+    assert!(suspicious_eval_silence(&c).is_none());
 }
 
 #[test]
@@ -195,16 +193,16 @@ fn silence_warning_silent_for_a_tiny_config() {
     // (think: a config with only obscure self-built flakes). We'd
     // rather miss the false-alarm than nag every minimal setup.
     let c = classification(0, 5);
-    assert!(suspicious_repology_silence(&c).is_none());
+    assert!(suspicious_eval_silence(&c).is_none());
 }
 
 #[test]
 fn silence_warning_silent_when_one_classification_lands() {
     // Even a single Up-to-date / Minor / Major / Newer hit means
-    // Repology returned a usable response for at least one package
-    // — the API is reachable. Don't fire on that.
+    // nix eval returned a version for at least one package — eval
+    // is working. Don't fire on that.
     let c = classification(1, 50);
-    assert!(suspicious_repology_silence(&c).is_none());
+    assert!(suspicious_eval_silence(&c).is_none());
 }
 
 // --- format_local_age ---
