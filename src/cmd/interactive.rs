@@ -321,7 +321,7 @@ async fn dispatch(action: Action) -> Result<()> {
         Action::Search => dispatch_search(&theme).await?,
         Action::Why => dispatch_why(&theme)?,
         Action::Status => super::status::run(false)?,
-        Action::Clean => super::clean::run()?,
+        Action::Clean => super::clean::run(super::clean::CleanOptions::default())?,
         Action::Doctor => super::doctor::run(false)?,
         Action::SelfUpdate => super::self_update::run(false).await?,
         Action::Init => super::init::run()?,

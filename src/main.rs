@@ -284,9 +284,25 @@ enum Commands {
     #[command(alias = "b", after_help = "Example: cheni build")]
     Build,
 
-    /// Remove obsolete pins whose nixpkgs version has caught up
-    #[command(after_help = "Example: cheni clean")]
-    Clean,
+    /// Drop obsolete pins (and optionally orphan pins/freezes + cruft).
+    #[command(after_help = "Example: cheni clean --all")]
+    Clean {
+        /// Also remove pins/freezes that no module declares.
+        #[arg(long)]
+        orphans: bool,
+
+        /// Also remove `result*` symlinks + truncate oversized version cache.
+        #[arg(long)]
+        cruft: bool,
+
+        /// Shortcut for --orphans --cruft.
+        #[arg(long)]
+        all: bool,
+
+        /// Skip confirmation prompts.
+        #[arg(long)]
+        yes: bool,
+    },
 
     /// Run health checks on the cheni setup (paths, pins, flake, store access)
     #[command(after_help = "Example: cheni doctor --brief")]
@@ -586,7 +602,13 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Diff { from, to } => cmd::diff::run(from, to),
         Commands::Search { query } => cmd::search::run(&query).await,
         Commands::Why { package } => cmd::why::run(&package),
-        Commands::Clean => cmd::clean::run(),
+        Commands::Clean { orphans, cruft, all, yes } => {
+            cmd::clean::run(cmd::clean::CleanOptions {
+                orphans: orphans || all,
+                cruft: cruft || all,
+                yes,
+            })
+        }
         Commands::Init => cmd::init::run(),
         Commands::Status { brief } => cmd::status::run(brief),
         Commands::BugReport => cmd::bug_report::run(),
