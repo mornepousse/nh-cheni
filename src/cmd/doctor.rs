@@ -9,7 +9,6 @@
 use anyhow::Result;
 use colored::Colorize;
 
-use crate::api::cache;
 use crate::nix::{config, flake, freezes, pins, store};
 
 /// Severity of a check result.
@@ -124,7 +123,7 @@ fn run_all_checks(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
     checks.push(check_store_size());
     checks.push(check_generations());
     checks.push(check_nh_installed());
-    checks.push(check_cache());
+    checks.push(check_version_cache());
     checks.push(check_self_update_available(flake_dir));
     checks.push(check_overlay_resilience(flake_dir));
     Ok(checks)
@@ -818,47 +817,63 @@ fn check_overlay_resilience(flake_dir: &std::path::Path) -> CheckResult {
     }
 }
 
-/// Inspect the Repology cache file and warn about potential gotchas.
+/// Inspect the version cache file and warn about potential issues.
 ///
 /// The two failure modes worth surfacing here:
-/// - The cache contains entries with `version: null`. Older cheni versions
-///   used to persist these; they masquerade as "Unknown" forever.
-/// - The cache is hours old but hasn't been refreshed (rare since the TTL
-///   is 1h, but still a useful signal when versions look weirdly out of date).
-fn check_cache() -> CheckResult {
-    let s = cache::stats();
-    if !s.exists {
+/// - The cache file exists but cannot be parsed (truncated write, manual edit).
+/// - The cache file has grown unexpectedly large (> 10 MiB).
+fn check_version_cache() -> CheckResult {
+    let path = crate::nix::version_cache::cache_path();
+    if !path.exists() {
         return CheckResult {
             severity: Severity::Ok,
-            name: "Repology cache".to_string(),
-            message: "no cache yet (will be created on first 'cheni check')".to_string(),
+            name: "Version cache".to_string(),
+            message: "no cache yet (created on first version lookup)".to_string(),
             hint: None,
         };
     }
-    if s.null_entries > 0 {
-        return CheckResult {
-            severity: Severity::Warning,
-            name: "Repology cache".to_string(),
-            message: format!(
-                "{} stale 'unknown' entries out of {}",
-                s.null_entries, s.total_entries
-            ),
-            hint: Some(
-                "Wipe with 'cheni check --refresh' (or rm ~/.cache/cheni/versions.json)."
-                    .to_string(),
-            ),
-        };
-    }
-    let age_human = match s.age_secs {
-        n if n < 60 => format!("{}s old", n),
-        n if n < 3600 => format!("{}m old", n / 60),
-        n => format!("{}h old", n / 3600),
+    let metadata = match std::fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) => {
+            return CheckResult {
+                severity: Severity::Warning,
+                name: "Version cache".to_string(),
+                message: format!("cannot stat: {e}"),
+                hint: None,
+            }
+        }
+    };
+    let size_mb = metadata.len() as f64 / 1_048_576.0;
+    let parses = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| {
+            serde_json::from_str::<crate::nix::version_cache::VersionCache>(&s).ok()
+        })
+        .is_some();
+    let severity = if !parses || size_mb > 10.0 {
+        Severity::Warning
+    } else {
+        Severity::Ok
+    };
+    let hint = if !parses {
+        Some(format!(
+            "Cache may be corrupted. Remove it with: rm {}",
+            path.display()
+        ))
+    } else if size_mb > 10.0 {
+        Some(format!(
+            "Cache is unusually large ({:.2} MiB). Remove it with: rm {}",
+            size_mb,
+            path.display()
+        ))
+    } else {
+        None
     };
     CheckResult {
-        severity: Severity::Ok,
-        name: "Repology cache".to_string(),
-        message: format!("{} entries, {}", s.total_entries, age_human),
-        hint: None,
+        severity,
+        name: "Version cache".to_string(),
+        message: format!("{:.2} MiB, parses: {}", size_mb, parses),
+        hint,
     }
 }
 
