@@ -128,6 +128,11 @@ struct RepologyEntry {
 ///
 /// Pass `None` for callers that don't have an installed version
 /// handy (e.g. a single-package lookup from `cheni pin <name>`).
+///
+/// NOTE: All call sites have migrated to nix-eval (Task 6 + Task 7 of the
+/// quitter-repology refactor). This function will be removed in Task 11
+/// when the whole repology module is deleted.
+#[allow(dead_code)]
 pub async fn lookup_versions(
     packages: &[(String, Option<String>)],
 ) -> Result<Vec<PackageLookup>> {

@@ -128,37 +128,37 @@ fn local_state_combines_markers_in_canonical_order() {
     );
 }
 
-// --- repology_differs ---
+// --- versions_differ ---
 
 #[test]
-fn repology_differs_swallows_placeholder_versions() {
+fn versions_differ_swallows_placeholder_versions() {
     // "?" is the substitute we use when nix search has no version field.
     // Treating that as a delta would fire for every weird entry.
-    assert!(!repology_differs("?", "1.2.3"));
-    assert!(!repology_differs("1.2.3", "?"));
-    assert!(!repology_differs("", "1.2.3"));
+    assert!(!versions_differ("?", "1.2.3"));
+    assert!(!versions_differ("1.2.3", "?"));
+    assert!(!versions_differ("", "1.2.3"));
 }
 
 #[test]
-fn repology_differs_treats_missing_trailing_zero_as_equal() {
+fn versions_differ_treats_missing_trailing_zero_as_equal() {
     // 1.2 and 1.2.0 must not produce a "→ 1.2.0 upstream" annotation.
-    assert!(!repology_differs("1.2", "1.2.0"));
-    assert!(!repology_differs("1.2.0", "1.2"));
+    assert!(!versions_differ("1.2", "1.2.0"));
+    assert!(!versions_differ("1.2.0", "1.2"));
 }
 
 #[test]
-fn repology_differs_flags_real_version_drift() {
-    assert!(repology_differs("1.2.3", "1.2.4"));
-    assert!(repology_differs("1.2.3", "2.0.0"));
+fn versions_differ_flags_real_version_drift() {
+    assert!(versions_differ("1.2.3", "1.2.4"));
+    assert!(versions_differ("1.2.3", "2.0.0"));
 }
 
 #[test]
-fn repology_differs_compares_strings_when_parser_yields_nothing() {
+fn versions_differ_compares_strings_when_parser_yields_nothing() {
     // Hash-only "versions" can come out of nixpkgs-unstable for some
     // git-pinned derivations. Fall back to byte equality so we don't
     // wrongly flag identical strings as a drift.
-    assert!(!repology_differs("git-abc123", "git-abc123"));
-    assert!(repology_differs("git-abc123", "git-def456"));
+    assert!(!versions_differ("git-abc123", "git-abc123"));
+    assert!(versions_differ("git-abc123", "git-def456"));
 }
 
 // --- build_annotation ---
