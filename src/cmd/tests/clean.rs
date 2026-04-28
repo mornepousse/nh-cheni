@@ -41,6 +41,36 @@ fn find_orphan_pins_when_no_modules_returns_all_as_orphans() {
 }
 
 #[test]
+fn find_result_symlinks_in_tempdir() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let target = dir.path().join("target");
+    std::fs::create_dir(&target).unwrap();
+    std::os::unix::fs::symlink(&target, dir.path().join("result")).unwrap();
+    std::os::unix::fs::symlink(&target, dir.path().join("result-1")).unwrap();
+    std::fs::write(dir.path().join("flake.nix"), "").unwrap();
+
+    let mut found = find_result_symlinks(dir.path());
+    found.sort();
+    let names: Vec<String> = found
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(names, vec!["result".to_string(), "result-1".to_string()]);
+}
+
+#[test]
+fn find_result_symlinks_ignores_non_results() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let target = dir.path().join("t");
+    std::fs::create_dir(&target).unwrap();
+    std::os::unix::fs::symlink(&target, dir.path().join("flake.nix")).unwrap();
+    std::os::unix::fs::symlink(&target, dir.path().join("hello")).unwrap();
+
+    let found = find_result_symlinks(dir.path());
+    assert!(found.is_empty());
+}
+
+#[test]
 fn find_orphan_freezes_returns_freezes_not_in_declared() {
     let mut freezes = std::collections::BTreeMap::new();
     freezes.insert(
