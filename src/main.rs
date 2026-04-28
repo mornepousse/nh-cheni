@@ -28,7 +28,7 @@ use tracing_subscriber::EnvFilter;
     after_help = "\
 Daily flow:\n  \
   cheni                          Interactive menu (state snapshot + action picker)\n  \
-  cheni check                    See what's outdated (Repology + flake input ages)\n  \
+  cheni check                    See what's outdated (nixpkgs-latest + flake input ages)\n  \
   cheni check --pending          Add closure dry-run (kernel + base packages too)\n  \
   cheni upgrade                  Full upgrade: refresh, preview, rebuild\n  \
   cheni upgrade --boot           Stage for next boot (when nh refuses live switch)\n  \
@@ -59,7 +59,7 @@ History & rollback:\n  \
   cheni history --older-than 30d Delete by age\n\
 \n\
 Discovery:\n  \
-  cheni search <query>           nixpkgs search + Repology + pin/freeze badges\n  \
+  cheni search <query>           nixpkgs search + nixpkgs-latest delta + pin/freeze badges\n  \
   cheni why <pkg>                Which .nix file declares this?\n\
 \n\
 Maintenance:\n  \
@@ -89,7 +89,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Show available package updates (nixpkgs + flake inputs)
-    #[command(alias = "ck")]
+    #[command(alias = "ck", after_help = "Example: cheni check -c dev")]
     Check {
         /// Restrict the scan to a single module category (auto-detected
         /// from modules/ — e.g. "dev", "apps", or any subdirectory name).
@@ -105,7 +105,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Ignore the on-disk Repology cache and re-fetch every lookup
+        /// Ignore the on-disk version cache and re-evaluate every lookup
         #[arg(long)]
         refresh: bool,
 
@@ -135,6 +135,7 @@ enum Commands {
     },
 
     /// Remove a package pin (or all pins with --all)
+    #[command(after_help = "Example: cheni unpin firefox")]
     Unpin {
         /// Package name to unpin
         package: Option<String>,
@@ -149,6 +150,7 @@ enum Commands {
     },
 
     /// Hold a package at its current version (inverse of `pin`: freezes ≠ pins)
+    #[command(after_help = "Example: cheni freeze kicad")]
     Freeze {
         /// Package name to freeze. Omit to list current freezes.
         package: Option<String>,
@@ -162,6 +164,7 @@ enum Commands {
     },
 
     /// Release a frozen package (or all freezes with --all)
+    #[command(after_help = "Example: cheni unfreeze kicad")]
     Unfreeze {
         /// Package name to unfreeze
         package: Option<String>,
@@ -176,7 +179,7 @@ enum Commands {
     },
 
     /// Full system upgrade: refresh flake inputs, preview, rebuild, clean pins
-    #[command(alias = "ug")]
+    #[command(alias = "ug", after_help = "Example: cheni upgrade")]
     Upgrade {
         /// Also run garbage collection (DELETES old generations — no rollback!)
         #[arg(long)]
@@ -204,13 +207,15 @@ enum Commands {
     },
 
     /// Rebuild the current flake state, no input refresh
-    #[command(alias = "b")]
+    #[command(alias = "b", after_help = "Example: cheni build")]
     Build,
 
     /// Remove obsolete pins whose nixpkgs version has caught up
+    #[command(after_help = "Example: cheni clean")]
     Clean,
 
     /// Run health checks on the cheni setup (paths, pins, flake, store access)
+    #[command(after_help = "Example: cheni doctor --brief")]
     Doctor {
         /// Hide the collapsed "N other checks passed" line and the per-check
         /// hint paragraphs. Show only warnings + errors. Useful for piping
@@ -220,7 +225,7 @@ enum Commands {
     },
 
     /// Update cheni itself (refresh the cheni flake input and rebuild)
-    #[command(name = "self-update")]
+    #[command(name = "self-update", after_help = "Example: cheni self-update")]
     SelfUpdate {
         /// Skip the minisign signature check. Use only when recovering
         /// from a broken release, a key rotation, or for local testing.
@@ -236,13 +241,14 @@ enum Commands {
     },
 
     /// Scan a build log (file or stdin) and surface known-issue hints
+    #[command(after_help = "Example: cheni diagnose build.log\n         cheni build 2>&1 | cheni diagnose")]
     Diagnose {
         /// Path to a log file. Reads from stdin when omitted.
         path: Option<std::path::PathBuf>,
     },
 
     /// List system generations (or selectively delete them with --prune/--delete/--keep)
-    #[command(alias = "h")]
+    #[command(alias = "h", after_help = "Example: cheni history --limit 5")]
     History {
         /// Show full per-package diff between generations (uses nvd if available)
         #[arg(long)]
@@ -282,7 +288,7 @@ enum Commands {
     },
 
     /// Roll back to the previous generation (or a specific one)
-    #[command(alias = "rb")]
+    #[command(alias = "rb", after_help = "Example: cheni rollback 405")]
     Rollback {
         /// Generation number to roll back to (omit for the previous generation)
         target: Option<u32>,
@@ -292,6 +298,7 @@ enum Commands {
     },
 
     /// Compare two specific generations (uses nvd if available)
+    #[command(after_help = "Example: cheni diff 100 105")]
     Diff {
         /// Source generation number
         from: u32,
@@ -307,16 +314,18 @@ enum Commands {
     },
 
     /// Find which .nix file in the config declares a given package
+    #[command(after_help = "Example: cheni why firefox")]
     Why {
         /// Package name to search for
         package: String,
     },
 
     /// First-time setup: add the nixpkgs-latest input + overlay to your flake
+    #[command(after_help = "Example: cheni init")]
     Init,
 
     /// Show config path, active pins, and flake input ages
-    #[command(alias = "st")]
+    #[command(alias = "st", after_help = "Example: cheni status --brief")]
     Status {
         /// Print only the lines that signal anomalies (dirty lock, stale
         /// nixpkgs, obsolete pins). Drops the full inputs table when

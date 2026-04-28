@@ -129,6 +129,18 @@ pub(crate) struct LogContext<'a> {
 
 // ── Finding catalogue ───────────────────────────────────────────────────────
 
+/// How severe a [`Finding`] is, used to pick the title colour.
+///
+/// - `Critical` — blocks the rebuild or risks data loss (red)
+/// - `Warning`  — non-blocking or fixable without a reboot (yellow)
+/// - `Hint`     — informational, a "look here first" pointer (cyan)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Severity {
+    Critical,
+    Warning,
+    Hint,
+}
+
 /// A single known-failure pattern, with human-readable context and
 /// the scope where it is allowed to match.
 pub(crate) struct Finding {
@@ -142,6 +154,8 @@ pub(crate) struct Finding {
     pub(crate) action: &'static str,
     /// Where in the log this pattern can legitimately fire.
     pub(crate) scope: Scope,
+    /// How severe the issue is — controls title colour in output.
+    pub(crate) severity: Severity,
 }
 
 /// Curated list of known patterns. Order is the print order. Scope
@@ -165,6 +179,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  discouraged for these specific changes.",
         // Pre-switch is an activation concern.
         scope: Scope::Phase(Phase::Activate),
+        severity: Severity::Critical,
     },
     Finding {
         matcher: "Switching into this system is not recommended",
@@ -177,6 +192,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  pick up the new generation through a clean boot rather than \
                  a runtime swap.",
         scope: Scope::Phase(Phase::Activate),
+        severity: Severity::Critical,
     },
     Finding {
         matcher: "module 'aes_generic' not found",
@@ -190,6 +206,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         // false positive where the literal string appeared in an
         // unrelated test/eval context.
         scope: Scope::Phase(Phase::Build),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "test result: FAILED.",
@@ -204,6 +221,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         // Strictest scope: only fire if we can prove this came from
         // the failing derivation's checkPhase.
         scope: Scope::FailingDerivationPhase(Phase::Check),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "hash mismatch in fixed-output derivation",
@@ -215,6 +233,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  in the error. For nixpkgs, refresh the channel (`nix flake update`) — \
                  upstream typically gets a fix within hours.",
         scope: Scope::Phase(Phase::Fetch),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "No space left on device",
@@ -229,6 +248,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         // unpack), build (object files), install (copy out). Keeping
         // it Global is the right call.
         scope: Scope::Global,
+        severity: Severity::Critical,
     },
     Finding {
         matcher: "does not provide attribute",
@@ -240,6 +260,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         action: "List what the flake actually provides with \
                  `nix flake show <flake-url>` and adjust the reference.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "infinite recursion encountered",
@@ -250,6 +271,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         action: "Bisect the change: comment out recent `override`/`overrideAttrs` \
                  calls until evaluation succeeds, then reintroduce one at a time.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "has an unfree license",
@@ -262,6 +284,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  on `nix build`/`nix shell` lets a single invocation through without \
                  touching the config.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "is marked as broken",
@@ -275,6 +298,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  opts out at the overlay level. Check the nixpkgs issue tracker for \
                  the WHY — fixes tend to land fast on popular packages.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "is marked as insecure",
@@ -290,6 +314,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  version-specific so a later nixpkgs bump won't auto-allow a future \
                  vulnerable release.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "collision between",
@@ -304,6 +329,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         // assembly. Keep Global: the message can land before activation
         // markers are visible.
         scope: Scope::Global,
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "is forbidden in pure eval mode",
@@ -317,6 +343,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  the command with `--impure` — but avoid making that the default, \
                  you lose reproducibility guarantees.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "does not exist in the flake",
@@ -329,6 +356,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  the flake to see it). A trailing `warning: Git tree '...' is dirty` \
                  in the same output is the usual smoking gun.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "cached failure of attribute",
@@ -342,6 +370,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  the cache will update on the next successful eval. See \
                  https://github.com/NixOS/nix/issues/3872 for the root cause.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Hint,
     },
     Finding {
         matcher: "SSL peer certificate",
@@ -359,6 +388,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         // can also surface during eval (flake metadata fetch). Keep
         // Global to avoid silencing the eval-time variant.
         scope: Scope::Global,
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "undefined variable",
@@ -373,6 +403,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  missing `inputs.<foo>.follows = \"nixpkgs\";` wiring for a flake \
                  input that injects packages.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "cannot coerce",
@@ -387,6 +418,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  If it's an attribute set, you likely want a specific field \
                  (`pkg.out`, `\"${pkg}\"`, `pkg.meta.mainProgram`).",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "experimental Nix feature",
@@ -406,6 +438,8 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `--extra-experimental-features 'nix-command flakes'`.",
         // This always trips before any phase signal lands.
         scope: Scope::Global,
+        // One-liner config fix; not urgent once you know what it is.
+        severity: Severity::Hint,
     },
     Finding {
         matcher: "is in the way of",
@@ -421,6 +455,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  NixOS-level home-manager block. The second option stays \
                  idempotent across rebuilds.",
         scope: Scope::Phase(Phase::Activate),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "API rate limit exceeded",
@@ -438,6 +473,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  api.github.com entirely.",
         // Lands at flake metadata resolution — pre-build, eval-ish.
         scope: Scope::Global,
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "exit code 137",
@@ -453,6 +489,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  add RAM, pinning the package to a pre-built binary cache \
                  version via `cheni pin` sidesteps the local build entirely.",
         scope: Scope::Phase(Phase::Build),
+        severity: Severity::Critical,
     },
     Finding {
         matcher: "Temporary failure in name resolution",
@@ -472,6 +509,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
         // DNS can fail in fetch (substituter), build (network-allowed
         // fixed-output), or eval (flake metadata). Stay Global.
         scope: Scope::Global,
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "syntax error, unexpected",
@@ -489,6 +527,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  + Nix plugin, Emacs nix-mode, etc.) catches most of these \
                  live.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "is not of type",
@@ -507,6 +546,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  common trigger — check the release notes for renamed/retyped \
                  options.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "Failed to start",
@@ -525,6 +565,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  upstream issue), ad-hoc service definitions with a bad \
                  `ExecStart` path.",
         scope: Scope::Phase(Phase::Activate),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "cannot parse flake reference",
@@ -542,6 +583,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `path:./subflake`. Drop trailing slashes and quote the ref \
                  if it contains special characters.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "Authentication failed for",
@@ -558,6 +600,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  git@github.com` should say \"Hi <user>!\" before nix \
                  will have any luck.",
         scope: Scope::Phase(Phase::Fetch),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "failed to install the bootloader",
@@ -577,6 +620,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  remount `/boot` writable. `cheni rollback` is always \
                  available as an escape hatch.",
         scope: Scope::Phase(Phase::Activate),
+        severity: Severity::Critical,
     },
     Finding {
         matcher: "cannot allocate memory",
@@ -594,6 +638,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  look for large `attrNames` iterations or transitive \
                  `rec` webs in your config.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Critical,
     },
     Finding {
         matcher: "untrusted substituter",
@@ -611,6 +656,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  docs publish both the URL and the key. Without trust \
                  configured, Nix falls back to building locally.",
         scope: Scope::Global,
+        severity: Severity::Hint,
     },
     Finding {
         matcher: "refusing to overwrite",
@@ -627,6 +673,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  it — either remove the module declaration or mark the \
                  option with `lib.mkForce` to override the default.",
         scope: Scope::Phase(Phase::Activate),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "is used but not defined",
@@ -646,6 +693,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  (or the generic `nix eval .#nixosConfigurations.<host>.options.<path>`) \
                  is the fast way to check whether the option exists at all.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "NAR hash mismatch",
@@ -665,6 +713,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  (last-ditch). For submodule inputs, `flake = false;` on \
                  the input sidesteps the recursive-hash recomputation.",
         scope: Scope::Phase(Phase::Eval),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "dependencies couldn't be built",
@@ -683,6 +732,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  `--keep-going` so every failure surfaces in one pass \
                  instead of stopping at the first.",
         scope: Scope::Global,
+        severity: Severity::Hint,
     },
     Finding {
         matcher: "access to network is forbidden",
@@ -702,6 +752,7 @@ pub(crate) const KNOWN_FINDINGS: &[Finding] = &[
                  reach for `--option sandbox false`, that's a global \
                  security knob and should stay on.",
         scope: Scope::Phase(Phase::Build),
+        severity: Severity::Warning,
     },
     Finding {
         matcher: "Too many open files",
@@ -719,6 +770,7 @@ LimitNOFILE = 1048576;` in your config (then `systemctl daemon-reload \
                  `ulimit -n` don't help for systemd services — they \
                  need the `LimitNOFILE=` directive.",
         scope: Scope::Global,
+        severity: Severity::Warning,
     },
 ];
 
@@ -1060,8 +1112,8 @@ fn print_findings(findings: &[&Finding]) {
     println!("{}\n", "=== cheni diagnose ===".bold());
     if findings.is_empty() {
         println!(
-            "  {} No known issues found in the log.",
-            "·".dimmed()
+            "  {} No known issues detected in the log.",
+            "✓".green()
         );
         println!(
             "  {}",
@@ -1077,10 +1129,15 @@ fn print_findings(findings: &[&Finding]) {
         crate::util::pluralize(findings.len(), "issue")
     );
     for (i, f) in findings.iter().enumerate() {
+        let title = match f.severity {
+            Severity::Critical => f.title.bold().red().to_string(),
+            Severity::Warning  => f.title.bold().yellow().to_string(),
+            Severity::Hint     => f.title.bold().cyan().to_string(),
+        };
         println!(
             "{} {}",
             format!("[{}/{}]", i + 1, findings.len()).dimmed(),
-            f.title.bold()
+            title
         );
         println!("  {}: {}", "why".yellow(), f.explanation);
         println!("  {}: {}", "fix".green(), f.action);
