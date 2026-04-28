@@ -390,7 +390,6 @@ fn get_input_rev(lock: &serde_json::Value, name: &str) -> Option<String> {
 }
 
 /// Collect status's structured data, suitable for `cheni audit`.
-#[allow(dead_code)]
 pub(crate) fn collect_state(
     nix_config: &config::NixConfig,
 ) -> anyhow::Result<crate::cmd::audit::StateReport> {

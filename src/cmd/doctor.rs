@@ -908,7 +908,6 @@ fn check_nh_installed() -> CheckResult {
 ///
 /// Mirrors what `run()` does internally, minus printing. Errors / warnings
 /// are converted into `audit::HealthIssue` shape.
-#[allow(dead_code)]
 pub(crate) fn collect_health(
     flake_dir: &std::path::Path,
 ) -> anyhow::Result<crate::cmd::audit::HealthReport> {

@@ -295,7 +295,6 @@ pub(crate) fn resolve_brief_mode(json: bool, brief: bool) -> bool {
 /// a structured [`crate::cmd::audit::UpdatesReport`] instead of printing.
 /// The spinner is suppressed via `brief=true` so the function is silent.
 /// The existing `run()` surface is unchanged.
-#[allow(dead_code)]
 pub(crate) async fn collect_updates(
     nix_config: &config::NixConfig,
 ) -> anyhow::Result<crate::cmd::audit::UpdatesReport> {
