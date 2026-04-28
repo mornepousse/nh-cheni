@@ -388,3 +388,17 @@ fn get_input_rev(lock: &serde_json::Value, name: &str) -> Option<String> {
     // if a locked input ever lands with a non-standard 'rev' field.
     Some(rev.chars().take(12).collect())
 }
+
+/// Collect status's structured data, suitable for `cheni audit`.
+#[allow(dead_code)]
+pub(crate) fn collect_state(
+    nix_config: &config::NixConfig,
+) -> anyhow::Result<crate::cmd::audit::StateReport> {
+    let pins = pins::read(&nix_config.flake_dir).unwrap_or_default();
+    let freezes = freezes::read(&nix_config.flake_dir).unwrap_or_default();
+    Ok(crate::cmd::audit::StateReport {
+        pins_count: pins.len(),
+        freezes_count: freezes.len(),
+        flake_dir: nix_config.flake_dir.clone(),
+    })
+}
