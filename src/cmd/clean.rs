@@ -43,8 +43,9 @@ pub fn run(opts: CleanOptions) -> Result<()> {
         run_orphans_phase(&nix_config, opts.yes)?;
     }
 
-    // Task 5 will plug the cruft phase here.
-    let _ = opts.cruft;
+    if opts.cruft {
+        run_cruft_phase(&nix_config, opts.yes)?;
+    }
 
     Ok(())
 }
@@ -193,11 +194,9 @@ fn run_orphans_phase(nix_config: &config::NixConfig, yes: bool) -> Result<()> {
 
 /// Threshold above which the version cache is considered oversized
 /// and `cheni clean --cruft` proposes truncation.
-#[allow(dead_code)]
 pub(crate) const VERSION_CACHE_TRUNCATE_THRESHOLD: u64 = 10 * 1024 * 1024;
 
 /// Returns the paths of `result*` symlinks in `flake_dir`.
-#[allow(dead_code)]
 pub(crate) fn find_result_symlinks(flake_dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(flake_dir) else {
         return Vec::new();
@@ -217,10 +216,94 @@ pub(crate) fn find_result_symlinks(flake_dir: &Path) -> Vec<PathBuf> {
 }
 
 /// Returns the size in bytes of the version cache, or 0 if missing.
-#[allow(dead_code)]
 pub(crate) fn version_cache_size_bytes() -> u64 {
     let path = crate::nix::version_cache::cache_path();
     std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Deletes the `result*` symlinks. Returns the count of successfully removed.
+fn apply_remove_result_symlinks(paths: &[PathBuf]) -> Result<usize> {
+    let mut removed = 0usize;
+    for p in paths {
+        if let Err(e) = std::fs::remove_file(p) {
+            tracing::debug!("failed to remove {}: {}", p.display(), e);
+            continue;
+        }
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+/// Truncates the version cache by removing the file.
+fn apply_truncate_version_cache() -> Result<()> {
+    let path = crate::nix::version_cache::cache_path();
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
+fn run_cruft_phase(nix_config: &config::NixConfig, yes: bool) -> Result<()> {
+    println!("\n{}", "Cruft:".bold());
+
+    let symlinks = find_result_symlinks(&nix_config.flake_dir);
+    let cache_size = version_cache_size_bytes();
+    let cache_oversized = cache_size > VERSION_CACHE_TRUNCATE_THRESHOLD;
+
+    if symlinks.is_empty() && !cache_oversized {
+        println!("{} No cruft to clean.", "✓".green());
+        return Ok(());
+    }
+
+    if !symlinks.is_empty() {
+        println!(
+            "  Found {} result symlink(s):",
+            symlinks.len().to_string().bold()
+        );
+        for p in &symlinks {
+            println!("    · {}", p.display());
+        }
+    }
+    if cache_oversized {
+        let mib = cache_size as f64 / (1024.0 * 1024.0);
+        println!(
+            "  Version cache: {:.1} MiB (over the {} MiB threshold).",
+            mib,
+            VERSION_CACHE_TRUNCATE_THRESHOLD / (1024 * 1024)
+        );
+    } else if cache_size > 0 {
+        let mib = cache_size as f64 / (1024.0 * 1024.0);
+        println!("  Version cache: {:.1} MiB (below threshold, kept).", mib);
+    }
+
+    let proceed = if yes {
+        true
+    } else {
+        Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt("Remove the cruft?")
+            .default(false)
+            .interact()
+            .map_err(|e| anyhow::anyhow!("reading confirmation: {e}"))?
+    };
+
+    if !proceed {
+        println!("{}", "  Skipped.".dimmed());
+        return Ok(());
+    }
+
+    if !symlinks.is_empty() {
+        let removed = apply_remove_result_symlinks(&symlinks)?;
+        println!(
+            "{} Removed {} result symlink(s).",
+            "✓".green(),
+            removed
+        );
+    }
+    if cache_oversized {
+        apply_truncate_version_cache()?;
+        println!("{} Truncated version cache.", "✓".green());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
