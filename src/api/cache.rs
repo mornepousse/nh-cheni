@@ -105,6 +105,11 @@ pub fn load() -> Cache {
 
 /// Read-only stats about the on-disk cache. Used by `cheni doctor` to
 /// report freshness and surface stale-null cleanups.
+///
+/// NOTE: dead-code bridge — the whole `api::cache` module is deleted in
+/// Task 11 of the quitter-repology refactor. Kept compiling here so each
+/// task commits cleanly.
+#[allow(dead_code)]
 pub struct CacheStats {
     pub age_secs: u64,
     pub total_entries: usize,
@@ -112,6 +117,7 @@ pub struct CacheStats {
     pub exists: bool,
 }
 
+#[allow(dead_code)]
 pub fn stats() -> CacheStats {
     let path = cache_path();
     if !path.exists() {

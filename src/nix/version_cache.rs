@@ -93,6 +93,16 @@ impl VersionCache {
         }
     }
 
+    /// Total number of cached `(input, rev, attr) → version` triples.
+    /// Used for diagnostic reporting (`cheni bug-report`, `cheni doctor`).
+    pub fn entry_count(&self) -> usize {
+        self.entries
+            .values()
+            .flat_map(|revs| revs.values())
+            .map(|attrs| attrs.len())
+            .sum()
+    }
+
     /// Look up a cached version for `(input, rev, attr)`.
     ///
     /// Returns `None` if any level of the hierarchy is absent.
