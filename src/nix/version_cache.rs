@@ -1,9 +1,8 @@
 //! Nix-aware version cache keyed on `(input, rev, attr) → version`.
 //!
-//! Unlike the time-TTL Repology cache in `src/api/cache.rs`, this cache
-//! invalidates naturally: a different `rev` produces a different key, so
-//! updating a flake input automatically discards all stale entries for that
-//! input without any wall-clock expiry logic.
+//! The cache invalidates naturally: a different `rev` produces a different
+//! key, so updating a flake input automatically discards all stale entries
+//! for that input without any wall-clock expiry logic.
 //!
 //! The file format is plain JSON, three levels deep:
 //! ```json
