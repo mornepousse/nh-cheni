@@ -182,7 +182,7 @@ fn build_annotation_returns_only_upstream_when_no_local_state() {
 }
 
 #[test]
-fn build_annotation_returns_only_local_when_repology_matches_nixpkgs() {
+fn build_annotation_returns_only_local_when_versions_match() {
     let mut upstream = std::collections::HashMap::new();
     upstream.insert("firefox".to_string(), "1.0.0".to_string());
     let local = local_state(&[], &["firefox"], &[]);
