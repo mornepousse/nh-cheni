@@ -135,7 +135,18 @@ enum Commands {
     },
 
     /// Remove a package pin (or all pins with --all)
-    #[command(after_help = "Example: cheni unpin firefox")]
+    #[command(
+        long_about = "Remove a package pin (or all pins with --all).\n\
+            \n\
+            Reverts the package to its plain `nixpkgs` source — undoes a `cheni pin`.\n\
+            The pin entry is removed from the pins file and the next rebuild no longer\n\
+            routes the package through `nixpkgs-latest`.\n\
+            \n\
+            Pass a package name to unpin a single package, or use --all to release\n\
+            every active pin in one go. Use `cheni pin` (no arguments) to list\n\
+            current pins before deciding.",
+        after_help = "Example: cheni unpin firefox"
+    )]
     Unpin {
         /// Package name to unpin
         package: Option<String>,
@@ -164,7 +175,18 @@ enum Commands {
     },
 
     /// Release a frozen package (or all freezes with --all)
-    #[command(after_help = "Example: cheni unfreeze kicad")]
+    #[command(
+        long_about = "Release a frozen package (or all freezes with --all).\n\
+            \n\
+            Reverts the package to its normal upgrade path — undoes a `cheni freeze`.\n\
+            The freeze entry is removed from the pins file and the next rebuild will\n\
+            pick up whatever version nixpkgs currently carries for that package.\n\
+            \n\
+            Pass a package name to unfreeze a single package, or use --all to release\n\
+            every active freeze in one go. Use `cheni freeze` (no arguments) to list\n\
+            current freezes before deciding.",
+        after_help = "Example: cheni unfreeze kicad"
+    )]
     Unfreeze {
         /// Package name to unfreeze
         package: Option<String>,
