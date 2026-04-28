@@ -557,6 +557,26 @@ fn extract_root_input_rev(lock: &serde_json::Value, input_name: &str) -> Option<
     Some(locked.get("rev")?.as_str()?.to_string())
 }
 
+/// Read the full git rev of any named root-level input from `flake.lock`.
+///
+/// Unlike `FlakeInput::rev` (which is truncated to 12 chars for display),
+/// this returns the full 40-char rev, suitable for use as a stable cache
+/// key in `version_cache::VersionCache`.
+///
+/// Returns `None` when the lock file can't be read, the named input doesn't
+/// exist in `root.inputs`, or the `locked.rev` field is absent/malformed.
+// Wired in by Tasks 6-8 (pin/search/check migration). Until then,
+// suppress dead_code so `cargo clippy -D warnings` stays green.
+#[allow(dead_code)]
+pub fn read_input_rev(flake_dir: &Path, name: &str) -> Option<String> {
+    let lock_path = flake_dir.join("flake.lock");
+    let content = std::fs::read_to_string(&lock_path).ok()?;
+    let lock: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let rev = extract_root_input_rev(&lock, name)?;
+    debug!("read_input_rev: {} → {}", name, &rev[..rev.len().min(12)]);
+    Some(rev)
+}
+
 /// Prefetch a github:NixOS/nixpkgs/<rev> tarball and return its
 /// narHash (SRI form — `sha256-...`).
 ///

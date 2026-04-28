@@ -276,3 +276,46 @@ fn sanitize_username_rejects_empty_and_oversized() {
     let boundary = "a".repeat(32);
     assert_eq!(sanitize_username(&boundary).as_deref(), Some(boundary.as_str()));
 }
+
+// --- read_input_rev ---
+
+#[test]
+fn read_input_rev_returns_locked_rev() {
+    // Full end-to-end path through read_input_rev: writes a fixture
+    // flake.lock with an indirection node (root.inputs[name] → node_name)
+    // and verifies the full 40-char rev is returned.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": { "nixpkgs-latest": "nixpkgs-latest" } },
+            "nixpkgs-latest": {
+                "locked": { "rev": "abc123def456abc123def456abc123def456abc1", "type": "github" },
+                "original": {}
+            }
+        },
+        "root": "root"
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string_pretty(&lock).expect("serialize"),
+    )
+    .expect("write");
+
+    let rev = read_input_rev(dir.path(), "nixpkgs-latest");
+    assert_eq!(rev, Some("abc123def456abc123def456abc123def456abc1".to_string()));
+}
+
+#[test]
+fn read_input_rev_missing_input_returns_none() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": { "root": { "inputs": {} } },
+        "root": "root"
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string(&lock).expect("serialize"),
+    )
+    .expect("write");
+    assert_eq!(read_input_rev(dir.path(), "nixpkgs-latest"), None);
+}
