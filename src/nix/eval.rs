@@ -19,6 +19,23 @@ use anyhow::Result;
 
 use crate::nix::version_cache::VersionCache;
 
+/// Returns the attribute paths to try, in order, for a given package name.
+///
+/// The first attempt is always the short name (e.g. `"firefox"`).
+/// The second is the KDE 6 namespace fallback (`"kdePackages.firefox"`), which
+/// covers packages that were moved out of the top-level `pkgs.<name>` namespace
+/// during the KDE 5 → 6 migration (breeze-icons, qtbase, elisa, ghostwriter, …).
+///
+/// The caller iterates and returns the first that resolves. If the name is
+/// already dotted (e.g. already `"kdePackages.foo"`), the second attempt becomes
+/// `"kdePackages.kdePackages.foo"` — intentionally harmless, just a second miss.
+pub(crate) fn attr_paths_to_try(pkg_name: &str) -> Vec<String> {
+    vec![
+        pkg_name.to_string(),
+        format!("kdePackages.{}", pkg_name),
+    ]
+}
+
 /// Query the `.version` attribute of a package in a nixpkgs tree pinned at
 /// `rev` + `nar_hash`.
 ///
@@ -26,12 +43,21 @@ use crate::nix::version_cache::VersionCache;
 /// `builtins.fetchTree { type = "github"; owner = "NixOS"; repo = "nixpkgs";
 /// rev; narHash; }` — pure, content-addressed, no flake registry needed.
 ///
+/// Tries `pkg_name` first, then `kdePackages.<pkg_name>` as a fallback for
+/// packages migrated to the KDE 6 namespace. Returns the first version found.
+///
 /// Returns:
 /// - `Ok(Some(version))` — attribute exists and has a non-empty version string.
-/// - `Ok(None)` — attribute missing, has no `.version`, eval failed, or
-///   `rev`/`nar_hash` failed validation. Logged at `debug` level only.
+/// - `Ok(None)` — all attribute paths failed; attribute missing, has no
+///   `.version`, eval failed, or `rev`/`nar_hash` failed validation. Logged at
+///   `debug` level by the underlying eval.
 pub fn eval_version(rev: &str, nar_hash: &str, pkg_name: &str) -> Result<Option<String>> {
-    Ok(crate::nix::flake::query_pkg_version_at_rev(rev, nar_hash, pkg_name))
+    for attr in attr_paths_to_try(pkg_name) {
+        if let Some(v) = crate::nix::flake::query_pkg_version_at_rev(rev, nar_hash, &attr) {
+            return Ok(Some(v));
+        }
+    }
+    Ok(None)
 }
 
 /// Parse the raw stdout of `nix eval --raw` into a clean version string.

@@ -1,4 +1,4 @@
-use super::{lookup_or_eval, parse_eval_output};
+use super::{attr_paths_to_try, lookup_or_eval, parse_eval_output};
 
 #[test]
 fn parse_version_strips_trailing_newline() {
@@ -37,6 +37,35 @@ fn lookup_or_eval_cache_hit_returns_without_subprocess() {
     let v = lookup_or_eval(&mut cache, "nixpkgs-latest", "rev1", "fake-nar-hash", "firefox")
         .expect("cache hit should not error");
     assert_eq!(v, Some("128.5.0".to_string()));
+}
+
+#[test]
+fn attr_paths_to_try_includes_short_then_kde() {
+    let paths = attr_paths_to_try("firefox");
+    assert_eq!(
+        paths,
+        vec!["firefox".to_string(), "kdePackages.firefox".to_string()]
+    );
+}
+
+#[test]
+fn attr_paths_to_try_kde_package_names() {
+    // Typical KDE 6 packages that triggered the bug.
+    for name in &["breeze-icons", "qtbase", "elisa", "ghostwriter"] {
+        let paths = attr_paths_to_try(name);
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], *name);
+        assert_eq!(paths[1], format!("kdePackages.{}", name));
+    }
+}
+
+#[test]
+fn attr_paths_to_try_does_not_double_prefix() {
+    // If caller passes an already-dotted path, the kde fallback prefixes
+    // regardless — second attempt is just a miss, not a special case.
+    let paths = attr_paths_to_try("kdePackages.firefox");
+    assert_eq!(paths.len(), 2);
+    assert_eq!(paths[1], "kdePackages.kdePackages.firefox");
 }
 
 #[test]
