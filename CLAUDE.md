@@ -16,11 +16,12 @@ projets existants.
 - Le porteur de **deux états que nh ignore** : pins (per-package
   routing vers nixpkgs-latest) et freezes (per-package lock à un
   rev nixpkgs).
-- Un client **Repology** pour répondre à "est-ce que upstream a
-  publié plus neuf que nixpkgs ?".
+- Un comparateur **multi-input nixpkgs** pour répondre à "est-ce
+  que `nixpkgs-latest` sait faire plus neuf que ce que tu as ?"
+  via `nix eval --raw`, avec cache local indexé par rev d'input.
 - Un **layer cross-context** : history annotation, rollback drift
   warning, search badges, diff policy header, build pre-flight,
-  check --pending — tous croisent l'état pins/freezes/Repology
+  check --pending — tous croisent l'état pins/freezes/version-cache
   avec les flows de nh.
 
 **Ce que cheni n'est PAS** (et ne doit pas devenir) :
@@ -73,8 +74,9 @@ Entre deux releases :
 src/
 ├── main.rs            # clap dispatch, configure_runtime/resolve/dispatch
 ├── cmd/*.rs           # une commande par fichier ; run() = orchestrator + helpers
-├── nix/               # interactions NixOS (store, config, flake, pins)
-├── api/               # Repology client + cache
+├── nix/               # interactions NixOS (store, config, flake, pins,
+│                      # eval, version_cache)
+├── http.rs            # shared HTTP helpers (self-update only since v0.6)
 ├── version/           # parsing/comparaison versions (calver-aware)
 ├── util.rs            # atomic_write (tmp + rename, PID suffix)
 └── **/tests/*.rs      # tests via #[cfg(test)] #[path] mod tests
@@ -108,14 +110,14 @@ src/
 - `nvd` (optionnel, utilisé par `diff` et `history --diff`)
 
 ## Erreurs externes connues
-- Repology API : 429 fréquents, retry 1× (honore `Retry-After` header,
-  capé à 30s sinon fallback 3s), log debug only
-- GitHub API : rate limit anonymous = 60 req/h
-- GitLab API : 600 req/min anonymous
+- Version cache : `~/.cache/cheni/version-cache.json`, atomic writes
+  via `util::atomic_write`, invalidé automatiquement par changement
+  de rev d'input flake (clé `(input-name, input-rev, attr)`)
+- GitHub API : rate limit anonymous = 60 req/h (utilisé par self-update)
+- GitLab API : 600 req/min anonymous (utilisé par self-update)
 - HTTP timeout : default 30s, override via `CHENI_HTTP_TIMEOUT=<secs>`
-  (min 5s)
-- HTTP body : capé à 5 MiB (via `api::net::check_content_length` +
-  `verify_body_size`), refuse les réponses anormalement grosses
+  (min 5s) — appliqué dans `src/http.rs`
+- HTTP body : capé à 5 MiB, refuse les réponses anormalement grosses
 
 ## Tests / qualité
 

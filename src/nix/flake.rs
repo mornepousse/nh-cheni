@@ -557,6 +557,58 @@ fn extract_root_input_rev(lock: &serde_json::Value, input_name: &str) -> Option<
     Some(locked.get("rev")?.as_str()?.to_string())
 }
 
+/// Read both the full git rev and the `narHash` of any named root-level
+/// input from `flake.lock`.
+///
+/// Both fields are needed for content-addressed `fetchTree`-based nix eval
+/// (see `eval::eval_version` and `query_pkg_version_at_rev`). The rev is also
+/// used alone as a stable cache key in `version_cache::VersionCache`.
+///
+/// Returns `None` when the lock file can't be read, the named input doesn't
+/// exist in `root.inputs`, or either `locked.rev` / `locked.narHash` is
+/// absent or malformed.
+pub fn read_input_locked(flake_dir: &Path, name: &str) -> Option<(String, String)> {
+    let lock_path = flake_dir.join("flake.lock");
+    let content = std::fs::read_to_string(&lock_path).ok()?;
+    let lock: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let nodes = lock.get("nodes")?.as_object()?;
+    let root_inputs = nodes.get("root")?.get("inputs")?.as_object()?;
+    let node_name = root_inputs
+        .get(name)?
+        .as_str()
+        .unwrap_or(name);
+    let locked = nodes.get(node_name)?.get("locked")?;
+    let rev = locked.get("rev")?.as_str()?.to_string();
+    let nar_hash = locked.get("narHash")?.as_str()?.to_string();
+    debug!(
+        "read_input_locked: {} → rev {}, narHash {}…",
+        name,
+        &rev[..rev.len().min(12)],
+        &nar_hash[..nar_hash.len().min(20)],
+    );
+    Some((rev, nar_hash))
+}
+
+/// Read the full git rev of any named root-level input from `flake.lock`.
+///
+/// Unlike `FlakeInput::rev` (which is truncated to 12 chars for display),
+/// this returns the full 40-char rev, suitable for use as a stable cache
+/// key in `version_cache::VersionCache`.
+///
+/// Convenience wrapper around [`read_input_locked`] for callers that only
+/// need the rev (not the narHash). Returns `None` when the lock file can't
+/// be read, the named input doesn't exist in `root.inputs`, the `locked.rev`
+/// field is absent/malformed, or `locked.narHash` is absent (which would be
+/// an unusual flake.lock shape produced by e.g. a path-type input).
+///
+/// Currently used in tests only; kept as a public API for future callers.
+#[allow(dead_code)]
+pub fn read_input_rev(flake_dir: &Path, name: &str) -> Option<String> {
+    let (rev, _nar_hash) = read_input_locked(flake_dir, name)?;
+    debug!("read_input_rev: {} → {}", name, &rev[..rev.len().min(12)]);
+    Some(rev)
+}
+
 /// Prefetch a github:NixOS/nixpkgs/<rev> tarball and return its
 /// narHash (SRI form — `sha256-...`).
 ///
@@ -607,7 +659,7 @@ pub fn prefetch_nixpkgs_rev(rev: &str) -> Result<String> {
 /// `x86_64-linux` for architectures Nix doesn't officially target;
 /// the caller will then see an eval error naming the missing package
 /// for the wrong arch and can move on.
-fn target_system() -> &'static str {
+pub fn target_system() -> &'static str {
     match (std::env::consts::ARCH, std::env::consts::OS) {
         ("x86_64", "linux") => "x86_64-linux",
         ("aarch64", "linux") => "aarch64-linux",

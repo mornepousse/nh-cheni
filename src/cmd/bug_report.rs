@@ -123,15 +123,24 @@ fn print_doctor_section() {
 }
 
 fn print_cache_section() {
-    let cache = crate::api::cache::stats();
-    println!("## Repology cache");
+    let path = crate::nix::version_cache::cache_path();
+    println!("## Version cache");
     println!();
-    if !cache.exists {
+    if !path.exists() {
         println!("- _No cache file_");
-    } else {
-        println!("- **Entries**: {}", cache.total_entries);
-        println!("- **Null entries**: {}", cache.null_entries);
-        println!("- **Age**: {}s ({}m)", cache.age_secs, cache.age_secs / 60);
+        println!();
+        return;
+    }
+    let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+    match crate::nix::version_cache::VersionCache::load(&path) {
+        Ok(cache) => {
+            println!("- **Path**: `{}`", path.display());
+            println!("- **Entries**: {}", cache.entry_count());
+            println!("- **Size**: {} B ({:.2} KiB)", bytes, bytes as f64 / 1024.0);
+        }
+        Err(e) => {
+            println!("- _Load failed: {}_", e);
+        }
     }
     println!();
 }

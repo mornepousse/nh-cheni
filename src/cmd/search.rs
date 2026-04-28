@@ -4,8 +4,8 @@
 //! displayed hit with cross-context information that `nix search`
 //! alone cannot surface:
 //!
-//! - **Repology delta** — when Repology's known upstream version
-//!   differs from the nixpkgs version, the row gets a `→ <version>
+//! - **Upstream delta** — when the nixpkgs-latest input carries a newer
+//!   version than the regular nixpkgs one, the row gets a `→ <version>
 //!   upstream` annotation. Helps decide "is this a stale package or
 //!   the latest?".
 //! - **Local state** — when the package is already in the user's
@@ -13,7 +13,7 @@
 //!   (`installed`, `pinned`, `frozen@<v>`).
 //!
 //! This is the primary cheni vs. nh differentiator: nh has no notion
-//! of pins/freezes nor a Repology client.
+//! of pins/freezes nor upstream version deltas.
 
 use std::collections::HashSet;
 use std::process::Command;
@@ -22,8 +22,12 @@ use anyhow::{Context, Result};
 use colored::Colorize;
 use tracing::debug;
 
-use crate::api::repology;
-use crate::nix::{config, freezes, pins};
+use std::path::Path;
+
+use crate::nix::{config, freezes, pins, version_cache};
+use crate::nix::eval::lookup_or_eval;
+use crate::nix::flake::read_input_locked;
+use crate::nix::version_cache::VersionCache;
 
 /// One result row from `nix search`: (short attr name, version, description).
 type SearchRow = (String, String, String);
@@ -33,20 +37,20 @@ type SearchRow = (String, String, String);
 /// look at.
 const MAX_DISPLAY: usize = 30;
 
-/// Maximum number of hits we look up on Repology.
+/// Maximum number of hits we look up against nixpkgs-latest.
 ///
-/// Capped well below `MAX_DISPLAY` because each lookup pays the
-/// repology rate-limit dance (see `repology::MAX_CONCURRENT`). The
-/// top-relevance hits are what users actually inspect; deeper hits
-/// stay un-annotated and that's fine.
-const MAX_REPOLOGY_LOOKUPS: usize = 10;
+/// Capped well below `MAX_DISPLAY`: the top-relevance hits are what
+/// users actually inspect; deeper hits stay un-annotated and that's
+/// fine. Eval calls are cheap (cache-first) but not instantaneous.
+const MAX_UPSTREAM_LOOKUPS: usize = 10;
 
 /// Run `cheni search <query>`.
 ///
 /// Uses `nix search nixpkgs <query>` to find matching packages, then
-/// concurrently asks Repology for the top hits' upstream versions and
-/// looks up local pin/freeze/installed state. Both enrichments degrade
-/// silently on failure — the base `nix search` output always renders.
+/// evaluates the top hits against nixpkgs-latest for upstream version
+/// deltas, and looks up local pin/freeze/installed state. Both
+/// enrichments degrade silently on failure — the base `nix search`
+/// output always renders.
 pub async fn run(query: &str) -> Result<()> {
     println!("{} {}\n", "Searching nixpkgs for".dimmed(), query.bold());
 
@@ -66,7 +70,16 @@ pub async fn run(query: &str) -> Result<()> {
     let displayed: Vec<SearchRow> = results.iter().take(MAX_DISPLAY).cloned().collect();
 
     let local = gather_local_state();
-    let upstream = lookup_upstream(&displayed).await;
+    // Detect flake dir so lookup_upstream can read flake.lock and the
+    // version cache. Silently skip upstream annotations when absent.
+    let flake_dir_opt = config::detect().ok().map(|c| c.flake_dir);
+    let upstream = match &flake_dir_opt {
+        Some(dir) => lookup_upstream(dir, &displayed).await,
+        None => {
+            debug!("no flake detected — upstream-delta annotation skipped");
+            std::collections::HashMap::new()
+        }
+    };
 
     print_results(&displayed, &q, &local, &upstream);
     print_footer(results.len());
@@ -161,37 +174,49 @@ fn collect_installed_names(cfg: &config::NixConfig) -> HashSet<String> {
     config::extract_package_names(&modules).into_iter().collect()
 }
 
-/// Look up Repology versions for the top hits. Returns a map keyed by
-/// short package name. Empty on any failure mode (offline, rate-limit,
-/// Repology outage) — search must keep working.
+/// Look up upstream versions for the top hits via nix eval against
+/// nixpkgs-latest. Returns a map keyed by short package name.
+///
+/// Empty on any failure mode (nixpkgs-latest absent, eval error,
+/// version cache I/O) — search must keep working without annotations.
 async fn lookup_upstream(
+    flake_dir: &Path,
     rows: &[SearchRow],
 ) -> std::collections::HashMap<String, String> {
-    let to_query: Vec<(String, Option<String>)> = rows
-        .iter()
-        .take(MAX_REPOLOGY_LOOKUPS)
-        .map(|(name, version, _)| (name.clone(), Some(version.clone())))
-        .collect();
-
-    if to_query.is_empty() {
-        return std::collections::HashMap::new();
-    }
-
-    let lookups = match repology::lookup_versions(&to_query).await {
-        Ok(v) => v,
+    let cache_path = version_cache::cache_path();
+    let mut cache = match VersionCache::load(&cache_path) {
+        Ok(c) => c,
         Err(e) => {
-            debug!("Repology lookup failed for search: {}", e);
+            debug!("version_cache load failed: {e}");
             return std::collections::HashMap::new();
         }
     };
+    let Some((rev, nar_hash)) = read_input_locked(flake_dir, "nixpkgs-latest") else {
+        // No nixpkgs-latest input — silently return empty so search keeps
+        // working without an upstream-delta annotation.
+        return std::collections::HashMap::new();
+    };
 
-    lookups
-        .into_iter()
-        .filter_map(|l| l.version.map(|v| (l.name, v)))
-        .collect()
+    let mut out = std::collections::HashMap::new();
+    for (name, _version, _desc) in rows.iter().take(MAX_UPSTREAM_LOOKUPS) {
+        match lookup_or_eval(&mut cache, "nixpkgs-latest", &rev, &nar_hash, name) {
+            Ok(Some(v)) => {
+                out.insert(name.clone(), v);
+            }
+            Ok(None) => {} // attr missing or eval gave None
+            Err(e) => {
+                debug!("lookup_or_eval failed for {name}: {e}");
+            }
+        }
+    }
+
+    if let Err(e) = cache.save(&cache_path) {
+        debug!("version_cache save failed: {e}");
+    }
+    out
 }
 
-/// Compose the optional second-line annotation: Repology delta and
+/// Compose the optional second-line annotation: upstream delta and
 /// local-state badges joined by ` · `. Returns `None` when there's
 /// nothing worth printing (up-to-date package not in user state).
 fn build_annotation(
@@ -202,7 +227,7 @@ fn build_annotation(
 ) -> Option<String> {
     let upstream_marker = upstream
         .get(name)
-        .filter(|u| repology_differs(nixpkgs_version, u))
+        .filter(|u| versions_differ(nixpkgs_version, u))
         .map(|u| format!("→ {} upstream", u));
     let badge = local.badges(name);
 
@@ -214,8 +239,9 @@ fn build_annotation(
     }
 }
 
-/// Decide whether `upstream` is meaningfully different from the
-/// nixpkgs `version` for display purposes.
+/// Decide whether the upstream version (from the version source) is
+/// meaningfully different from the nixpkgs `version` for display
+/// purposes.
 ///
 /// Returns false when:
 /// - either string is empty / "?" placeholder (nothing reliable to compare),
@@ -226,7 +252,7 @@ fn build_annotation(
 /// so we don't have to commit to a "newer/older" judgement we'd often
 /// get wrong on edge cases (e.g. nixpkgs unstable shipping a hash-only
 /// version string).
-fn repology_differs(version: &str, upstream: &str) -> bool {
+fn versions_differ(version: &str, upstream: &str) -> bool {
     if version.is_empty() || upstream.is_empty() || version == "?" || upstream == "?" {
         return false;
     }

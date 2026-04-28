@@ -276,3 +276,152 @@ fn sanitize_username_rejects_empty_and_oversized() {
     let boundary = "a".repeat(32);
     assert_eq!(sanitize_username(&boundary).as_deref(), Some(boundary.as_str()));
 }
+
+// --- read_input_locked ---
+
+#[test]
+fn read_input_locked_returns_rev_and_nar_hash() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": { "nixpkgs-latest": "nixpkgs-latest" } },
+            "nixpkgs-latest": {
+                "locked": {
+                    "rev": "abc123def456abc123def456abc123def456abc1",
+                    "narHash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    "type": "github"
+                },
+                "original": {}
+            }
+        },
+        "root": "root"
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string_pretty(&lock).expect("serialize"),
+    )
+    .expect("write");
+
+    let result = read_input_locked(dir.path(), "nixpkgs-latest");
+    assert!(result.is_some(), "should return Some for a valid entry");
+    let (rev, nar_hash) = result.unwrap();
+    assert_eq!(rev, "abc123def456abc123def456abc123def456abc1");
+    assert_eq!(nar_hash, "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+}
+
+#[test]
+fn read_input_locked_missing_nar_hash_returns_none() {
+    // An entry with rev but no narHash must not panic — returns None.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": { "nixpkgs-latest": "nixpkgs-latest" } },
+            "nixpkgs-latest": {
+                "locked": {
+                    "rev": "abc123def456abc123def456abc123def456abc1"
+                    // narHash deliberately absent
+                }
+            }
+        },
+        "root": "root"
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string_pretty(&lock).expect("serialize"),
+    )
+    .expect("write");
+
+    assert_eq!(read_input_locked(dir.path(), "nixpkgs-latest"), None);
+}
+
+#[test]
+fn read_input_locked_missing_input_returns_none() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": { "root": { "inputs": {} } },
+        "root": "root"
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string(&lock).expect("serialize"),
+    )
+    .expect("write");
+    assert_eq!(read_input_locked(dir.path(), "nixpkgs-latest"), None);
+}
+
+#[test]
+fn read_input_locked_follows_indirection() {
+    // root.inputs["nixpkgs-latest"] = "nixpkgs-latest_2" (indirection)
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": { "nixpkgs-latest": "nixpkgs-latest_2" } },
+            "nixpkgs-latest_2": {
+                "locked": {
+                    "rev": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                    "narHash": "sha256-deadbeef"
+                }
+            }
+        },
+        "root": "root"
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string_pretty(&lock).expect("serialize"),
+    )
+    .expect("write");
+
+    let result = read_input_locked(dir.path(), "nixpkgs-latest");
+    assert!(result.is_some());
+    let (rev, nar_hash) = result.unwrap();
+    assert_eq!(rev, "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+    assert_eq!(nar_hash, "sha256-deadbeef");
+}
+
+// --- read_input_rev ---
+
+#[test]
+fn read_input_rev_returns_locked_rev() {
+    // Full end-to-end path through read_input_rev: writes a fixture
+    // flake.lock with an indirection node (root.inputs[name] → node_name)
+    // and verifies the full 40-char rev is returned.
+    // narHash is required (read_input_rev delegates to read_input_locked).
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": { "nixpkgs-latest": "nixpkgs-latest" } },
+            "nixpkgs-latest": {
+                "locked": {
+                    "rev": "abc123def456abc123def456abc123def456abc1",
+                    "narHash": "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    "type": "github"
+                },
+                "original": {}
+            }
+        },
+        "root": "root"
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string_pretty(&lock).expect("serialize"),
+    )
+    .expect("write");
+
+    let rev = read_input_rev(dir.path(), "nixpkgs-latest");
+    assert_eq!(rev, Some("abc123def456abc123def456abc123def456abc1".to_string()));
+}
+
+#[test]
+fn read_input_rev_missing_input_returns_none() {
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": { "root": { "inputs": {} } },
+        "root": "root"
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string(&lock).expect("serialize"),
+    )
+    .expect("write");
+    assert_eq!(read_input_rev(dir.path(), "nixpkgs-latest"), None);
+}
