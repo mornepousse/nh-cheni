@@ -86,3 +86,34 @@ fn summary_no_follow_up_when_inputs_moved() {
 }
 
 // format_elapsed is fully covered in src/tests/util.rs — no duplication here.
+
+// --- UpgradeOptions::brief field ---
+
+#[test]
+fn upgrade_options_brief_field_default_is_false() {
+    // Verifies that the `brief` field exists and its zero-value is false.
+    // This test fails at compile time if the field is removed, acting as
+    // a structural regression guard for the --brief flag.
+    let opts = super::super::UpgradeOptions {
+        gc: false,
+        no_clean_pins: false,
+        yes: false,
+        pins_only: false,
+        boot: false,
+        brief: false,
+    };
+    assert!(!opts.brief);
+}
+
+#[test]
+fn upgrade_options_brief_field_can_be_set() {
+    let opts = super::super::UpgradeOptions {
+        gc: false,
+        no_clean_pins: false,
+        yes: false,
+        pins_only: false,
+        boot: false,
+        brief: true,
+    };
+    assert!(opts.brief);
+}

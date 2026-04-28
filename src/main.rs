@@ -114,6 +114,11 @@ enum Commands {
         /// not just module-named packages). Adds 30–60s of evaluation.
         #[arg(long)]
         pending: bool,
+
+        /// Print only the summary verdict line (no spinner, no details).
+        /// Useful for scripts. --json overrides --brief.
+        #[arg(long)]
+        brief: bool,
     },
 
     /// Pin a package (or list active pins when called with no arguments)
@@ -135,7 +140,18 @@ enum Commands {
     },
 
     /// Remove a package pin (or all pins with --all)
-    #[command(after_help = "Example: cheni unpin firefox")]
+    #[command(
+        long_about = "Remove a package pin (or all pins with --all).\n\
+            \n\
+            Reverts the package to its plain `nixpkgs` source — undoes a `cheni pin`.\n\
+            The pin entry is removed from the pins file and the next rebuild no longer\n\
+            routes the package through `nixpkgs-latest`.\n\
+            \n\
+            Pass a package name to unpin a single package, or use --all to release\n\
+            every active pin in one go. Use `cheni pin` (no arguments) to list\n\
+            current pins before deciding.",
+        after_help = "Example: cheni unpin firefox"
+    )]
     Unpin {
         /// Package name to unpin
         package: Option<String>,
@@ -164,7 +180,18 @@ enum Commands {
     },
 
     /// Release a frozen package (or all freezes with --all)
-    #[command(after_help = "Example: cheni unfreeze kicad")]
+    #[command(
+        long_about = "Release a frozen package (or all freezes with --all).\n\
+            \n\
+            Reverts the package to its normal upgrade path — undoes a `cheni freeze`.\n\
+            The freeze entry is removed from the pins file and the next rebuild will\n\
+            pick up whatever version nixpkgs currently carries for that package.\n\
+            \n\
+            Pass a package name to unfreeze a single package, or use --all to release\n\
+            every active freeze in one go. Use `cheni freeze` (no arguments) to list\n\
+            current freezes before deciding.",
+        after_help = "Example: cheni unfreeze kicad"
+    )]
     Unfreeze {
         /// Package name to unfreeze
         package: Option<String>,
@@ -204,6 +231,11 @@ enum Commands {
         /// case and offers to flip to boot mode interactively.
         #[arg(long)]
         boot: bool,
+
+        /// Print only the final outcome line. Underlying tools (nh/nix)
+        /// still produce their own output.
+        #[arg(long)]
+        brief: bool,
     },
 
     /// Rebuild the current flake state, no input refresh
@@ -285,6 +317,11 @@ enum Commands {
         /// Skip the deletion confirmation prompt
         #[arg(short, long)]
         yes: bool,
+
+        /// Print a one-line summary instead of the per-generation list.
+        /// --diff overrides --brief (specific request wins).
+        #[arg(long)]
+        brief: bool,
     },
 
     /// Roll back to the previous generation (or a specific one)
@@ -460,8 +497,8 @@ async fn resolve_command(cmd: Option<Commands>) -> Result<Option<Commands>> {
 /// for everything cheni can do.
 async fn dispatch(command: Commands) -> Result<()> {
     match command {
-        Commands::Check { category, details, json, refresh, pending } => {
-            cmd::check::run(category.as_deref(), details, json, refresh, pending).await
+        Commands::Check { category, details, json, refresh, pending, brief } => {
+            cmd::check::run(category.as_deref(), details, json, refresh, pending, brief).await
         }
         Commands::Pin { package, category, flakes, force } => {
             dispatch_pin(package, category, flakes, force).await
@@ -469,13 +506,14 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Unpin { package, all, yes } => dispatch_unpin(package, all, yes),
         Commands::Freeze { package, major } => dispatch_freeze(package, major),
         Commands::Unfreeze { package, all, yes } => dispatch_unfreeze(package, all, yes),
-        Commands::Upgrade { gc, no_clean_pins, yes, pins_only, boot } => {
+        Commands::Upgrade { gc, no_clean_pins, yes, pins_only, boot, brief } => {
             cmd::upgrade::run(cmd::upgrade::UpgradeOptions {
                 gc,
                 no_clean_pins,
                 yes,
                 pins_only,
                 boot,
+                brief,
             })
         }
         Commands::Build => cmd::build::run(),
@@ -483,9 +521,9 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned).await,
         Commands::Verify { tag } => cmd::verify::run(cmd::verify::VerifyOptions { tag }).await,
         Commands::Diagnose { path } => cmd::diagnose::run(cmd::diagnose::DiagnoseOptions { path }),
-        Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes } => {
+        Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes, brief } => {
             cmd::history::run(cmd::history::HistoryOptions {
-                diff, full, limit, delete, prune, keep, older_than, gc, yes,
+                diff, full, limit, delete, prune, keep, older_than, gc, yes, brief,
             })
         }
         Commands::Rollback { target, yes } => cmd::rollback::run(target, yes),

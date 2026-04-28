@@ -23,12 +23,16 @@ pub fn list_freezes() -> Result<()> {
     println!("{}\n", "=== cheni freeze (list) ===".bold());
 
     if current.is_empty() {
-        println!("  {}", "no packages frozen.".dimmed());
-        println!();
-        println!(
-            "  Freeze a package at its current version with '{}'.",
-            "cheni freeze <name>".bold()
-        );
+        if !config::is_initialized(&nix_config.flake_dir) {
+            super::check::print_first_run_hint();
+        } else {
+            println!("  {}", "no packages frozen.".dimmed());
+            println!();
+            println!(
+                "  Freeze a package at its current version with '{}'.",
+                "cheni freeze <name>".bold()
+            );
+        }
         return Ok(());
     }
 

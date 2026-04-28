@@ -31,9 +31,13 @@ pub fn list_pins() -> Result<()> {
     println!("{}\n", "=== cheni pin (list) ===".bold());
 
     if current_pins.is_empty() {
-        println!("  {}", "no active pins.".dimmed());
-        println!();
-        println!("  Pin a package with '{}'.", "cheni pin <name>".bold());
+        if !config::is_initialized(&nix_config.flake_dir) {
+            super::check::print_first_run_hint();
+        } else {
+            println!("  {}", "no active pins.".dimmed());
+            println!();
+            println!("  Pin a package with '{}'.", "cheni pin <name>".bold());
+        }
         return Ok(());
     }
 
