@@ -85,7 +85,15 @@ pub async fn run(
     warn_about_obsolete_pins(&nix_config.flake_dir)?;
 
     let Some(mut scan) = gather_packages_to_check(&nix_config, category)? else {
-        println!("{}", "No packages found to check.".dimmed());
+        if !config::is_initialized(&nix_config.flake_dir) {
+            print_first_run_hint();
+        } else {
+            println!("{}", "No packages found to check.".dimmed());
+            println!(
+                "{}",
+                "  (no modules declare packages, or all are excluded by category filter)".dimmed()
+            );
+        }
         return Ok(());
     };
 
