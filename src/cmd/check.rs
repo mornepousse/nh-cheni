@@ -272,7 +272,7 @@ fn apply_early_flags(json: bool, refresh: bool) {
     if refresh {
         // Useful after updating flake inputs or when a package's
         // nixpkgs-latest entry changed.
-        let _ = crate::api::cache::clear();
+        let _ = crate::nix::version_cache::clear();
         if !json {
             println!("{}", "(cache cleared — re-evaluating every lookup)".dimmed());
         }

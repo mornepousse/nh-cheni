@@ -34,6 +34,17 @@ pub struct VersionCache {
     entries: HashMap<String, HashMap<String, HashMap<String, String>>>,
 }
 
+/// Delete the on-disk version cache (best effort — silently ignores
+/// `NotFound`). Used by `cheni check --refresh`.
+pub fn clear() -> std::io::Result<()> {
+    let path = cache_path();
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Return the canonical path to the on-disk version cache.
 ///
 /// Follows the same convention as `src/api/cache.rs`:

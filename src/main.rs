@@ -3,7 +3,6 @@
 //! A CLI tool that lets you check, select, and apply updates
 //! per-package on NixOS, integrated with your flake configuration.
 
-mod api;
 mod cmd;
 mod http;
 mod nix;

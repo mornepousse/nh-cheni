@@ -1,13 +1,12 @@
 //! Shared HTTP helpers — timeouts, body caps, Retry-After parsing.
 //!
-//! Used by every code path that shells out to HTTP: the Repology
-//! client (`api::repology`), the flake-input probe against
-//! GitHub/GitLab (`nix::flake`), and the release-tarball fetcher
-//! for `cheni verify` / `cheni self-update` (`release`).
+//! Used by every code path that shells out to HTTP: the flake-input
+//! probe against GitHub/GitLab (`nix::flake`) and the release-tarball
+//! fetcher for `cheni verify` / `cheni self-update` (`release`).
 //!
-//! Living at the crate root (rather than under `api/`) keeps the
-//! layering clean: `nix/` and `release` both need these helpers
-//! and shouldn't cross-import `api/` to get them.
+//! Living at the crate root keeps the layering clean: `nix/` and
+//! `release` both need these helpers without crossing through other
+//! modules.
 //!
 //! ```text
 //! CHENI_HTTP_TIMEOUT=60 cheni check     # wait up to 60s per request
