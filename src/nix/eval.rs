@@ -14,6 +14,7 @@ use anyhow::Result;
 use tracing::debug;
 
 use crate::nix::tools::tool_error;
+use crate::nix::version_cache::VersionCache;
 
 /// Query the `.version` attribute of a package in a flake input.
 ///
@@ -27,7 +28,6 @@ use crate::nix::tools::tool_error;
 ///   error expression. This is normal and logged at `debug` level only.
 /// - `Err(_)` — `nix` itself is not installed/in PATH (surfaces an install
 ///   hint via `tool_error`), or a genuine I/O failure.
-#[allow(dead_code)]
 pub fn eval_version(input: &str, attr: &str) -> Result<Option<String>> {
     let flake_attr = format!("{}#{}.version", input, attr);
 
@@ -95,6 +95,31 @@ pub(crate) fn parse_eval_output(raw: &str) -> Option<String> {
     }
 
     Some(unquoted.to_string())
+}
+
+/// Returns the version for `(input, rev, attr)`, consulting the cache first.
+///
+/// Cache hit → returns immediately without any subprocess.
+/// Cache miss → calls [`eval_version`], stores the result on success, and
+/// returns it.
+///
+/// The caller is responsible for calling `cache.save(path)` once the batch
+/// of lookups is complete. We don't save per-call to avoid disk thrash.
+#[allow(dead_code)]
+pub fn lookup_or_eval(
+    cache: &mut VersionCache,
+    input: &str,
+    rev: &str,
+    attr: &str,
+) -> Result<Option<String>> {
+    if let Some(v) = cache.lookup(input, rev, attr) {
+        return Ok(Some(v));
+    }
+    let evaluated = eval_version(input, attr)?;
+    if let Some(ref v) = evaluated {
+        cache.store(input, rev, attr, v);
+    }
+    Ok(evaluated)
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use super::parse_eval_output;
+use super::{lookup_or_eval, parse_eval_output};
 
 #[test]
 fn parse_version_strips_trailing_newline() {
@@ -25,4 +25,16 @@ fn parse_version_rejects_empty() {
 fn parse_version_rejects_error_marker() {
     let result = parse_eval_output("error: attribute 'version' missing");
     assert_eq!(result, None);
+}
+
+#[test]
+fn lookup_or_eval_cache_hit_returns_without_subprocess() {
+    use crate::nix::version_cache::VersionCache;
+
+    let mut cache = VersionCache::default();
+    cache.store("fake-input-that-doesnt-exist", "rev1", "firefox", "128.5.0");
+
+    let v = lookup_or_eval(&mut cache, "fake-input-that-doesnt-exist", "rev1", "firefox")
+        .expect("cache hit should not error");
+    assert_eq!(v, Some("128.5.0".to_string()));
 }
