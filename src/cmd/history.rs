@@ -659,7 +659,7 @@ fn print_policy_loss_warning(
 }
 
 /// Shell out to `sudo nix-env --delete-generations N M …`.
-fn apply_deletion(to_delete: &[u32]) -> Result<()> {
+pub(crate) fn apply_deletion(to_delete: &[u32]) -> Result<()> {
     let mut args: Vec<String> = vec![
         "/run/current-system/sw/bin/nix-env".to_string(),
         "-p".to_string(),
@@ -774,11 +774,40 @@ fn parse_target_spec(spec: &str, all: &[u32]) -> Result<Vec<u32>> {
 }
 
 /// Return all generations except the `keep` most recent.
-fn pick_oldest_beyond(all: &[u32], keep: usize) -> Vec<u32> {
+pub(crate) fn pick_oldest_beyond(all: &[u32], keep: usize) -> Vec<u32> {
     if all.len() <= keep {
         return Vec::new();
     }
     all[..all.len() - keep].to_vec()
+}
+
+/// Structured plan for "delete oldest N generations", with both
+/// kept and deleted IDs surfaced so callers can render an audit.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct PrunePlan {
+    /// Generation IDs that would be deleted (oldest beyond `keep`).
+    pub deleted_ids: Vec<u32>,
+    /// Generation IDs kept (the most recent `keep`, in ascending order).
+    pub kept_ids: Vec<u32>,
+}
+
+impl PrunePlan {
+    #[allow(dead_code)]
+    pub fn kept_count(&self) -> usize {
+        self.kept_ids.len()
+    }
+}
+
+/// Build a prune plan that keeps the `keep` most recent generations and
+/// schedules the rest for deletion. Pure function — no I/O.
+#[allow(dead_code)]
+pub(crate) fn plan_prune_keep_n(generations: &[Generation], keep: usize) -> PrunePlan {
+    let all_ids: Vec<u32> = generations.iter().map(|g| g.number).collect();
+    let deleted_ids = pick_oldest_beyond(&all_ids, keep);
+    let deleted_set: std::collections::HashSet<u32> = deleted_ids.iter().copied().collect();
+    let kept_ids: Vec<u32> = all_ids.iter().copied().filter(|id| !deleted_set.contains(id)).collect();
+    PrunePlan { deleted_ids, kept_ids }
 }
 
 /// Parse a duration like "30d", "2w", "1m" into days.
