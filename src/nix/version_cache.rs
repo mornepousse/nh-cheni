@@ -34,8 +34,18 @@ pub struct VersionCache {
     entries: HashMap<String, HashMap<String, HashMap<String, String>>>,
 }
 
-// Methods are `#[allow(dead_code)]` until Tasks 6-10 wire callers in.
-#[allow(dead_code)]
+/// Return the canonical path to the on-disk version cache.
+///
+/// Follows the same convention as `src/api/cache.rs`:
+/// `$XDG_CACHE_HOME/cheni/version-cache.json`
+/// (falls back to `/tmp` when `dirs::cache_dir()` returns `None`).
+pub fn cache_path() -> std::path::PathBuf {
+    dirs::cache_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+        .join("cheni")
+        .join("version-cache.json")
+}
+
 impl VersionCache {
     /// Load the cache from `path`.
     ///

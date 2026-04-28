@@ -6,10 +6,14 @@
 
 use std::collections::HashMap;
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use colored::Colorize;
-use crate::api::repology;
-use crate::nix::{config, flake, freezes, pins, store};
+use crate::nix::{config, flake, freezes, pins, store, version_cache};
+use crate::nix::eval::lookup_or_eval;
+use crate::nix::flake::{read_input_rev, target_system};
+use crate::nix::version_cache::VersionCache;
 use crate::version::compare::{compare_versions, VersionDiff};
 use crate::version::parse::parse_version;
 
@@ -114,7 +118,7 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
 
     let store_pkg = store::find_by_name(name)?;
     let installed_version = store_pkg.version.clone();
-    let available = lookup_available_version(name, &installed_version).await?;
+    let available = lookup_available_version(&nix_config.flake_dir, name, &installed_version).await?;
 
     if !announce_pin_decision(name, &installed_version, available.as_deref(), force) {
         return Ok(());
@@ -179,15 +183,25 @@ fn print_pin_contract(name: &str, installed: &str) {
 // `find_in_store` was removed — call `crate::nix::store::find_by_name`
 // directly (shared with `cmd::freeze`).
 
-/// Look up the latest version of a single package on Repology, passing
-/// the installed version as a disambiguation hint.
-async fn lookup_available_version(name: &str, installed: &str) -> Result<Option<String>> {
-    let lookups =
-        repology::lookup_versions(&[(name.to_string(), Some(installed.to_string()))]).await?;
-    Ok(lookups
-        .into_iter()
-        .next()
-        .and_then(|l| l.version))
+/// Look up the available version of a single package by evaluating
+/// nixpkgs-latest at its current locked rev.
+///
+/// `_installed` is kept in the signature for future disambiguation
+/// (e.g. kdePackages / libsForQt5 namespace collisions) but is
+/// unused in the nix-eval path.
+async fn lookup_available_version(
+    flake_dir: &Path,
+    name: &str,
+    _installed: &str,
+) -> Result<Option<String>> {
+    let Some(rev) = read_input_rev(flake_dir, "nixpkgs-latest") else {
+        return Ok(None);
+    };
+    let attr = format!("legacyPackages.{}.{}", target_system(), name);
+    let mut cache = VersionCache::load(&version_cache::cache_path())?;
+    let result = lookup_or_eval(&mut cache, "nixpkgs-latest", &rev, &attr)?;
+    cache.save(&version_cache::cache_path())?;
+    Ok(result)
 }
 
 /// Print the version transition + decide whether to proceed with the pin.
@@ -287,7 +301,7 @@ pub async fn pin_category(category: &str, force: bool) -> Result<()> {
         .dimmed()
     );
 
-    let (minor_updates, major_updates) = classify_pin_targets(&to_check).await?;
+    let (minor_updates, major_updates) = classify_pin_targets(&nix_config.flake_dir, &to_check).await?;
     if minor_updates.is_empty() && major_updates.is_empty() {
         println!("{} Everything is up to date.", "✓".green());
         return Ok(());
@@ -361,34 +375,36 @@ fn installed_packages_in_category(
 /// One `(name, installed, available)` row, grouped by update kind.
 type PinRow = (String, String, String);
 
-/// Run Repology lookups with installed-version hints (disambiguates
-/// kdePackages / libsForQt5 / xfce4-* namespace collisions) and bucket
-/// each package into Minor or Major.
+/// Evaluate nixpkgs-latest for each package in `to_check` and bucket
+/// each result into Minor or Major.
+///
+/// Packages with no version in nixpkgs-latest (eval returns None) or
+/// whose installed version is already ≥ available are silently skipped.
 async fn classify_pin_targets(
+    flake_dir: &Path,
     to_check: &[(String, String)],
 ) -> Result<(Vec<PinRow>, Vec<PinRow>)> {
-    let packages: Vec<(String, Option<String>)> = to_check
-        .iter()
-        .map(|(n, v)| (n.clone(), Some(v.clone())))
-        .collect();
-    let lookups = repology::lookup_versions(&packages).await?;
-    let lookup_map: HashMap<String, _> = lookups
-        .into_iter()
-        .map(|l| (l.name.clone(), l))
-        .collect();
+    let cache_path = version_cache::cache_path();
+    let mut cache = VersionCache::load(&cache_path)?;
+    let rev = read_input_rev(flake_dir, "nixpkgs-latest");
 
     let mut minor = Vec::new();
     let mut major = Vec::new();
+
     for (name, installed) in to_check {
-        let Some(available) = lookup_map.get(name).and_then(|l| l.version.as_ref()) else {
+        let Some(ref rev) = rev else { continue; };
+        let attr = format!("legacyPackages.{}.{}", target_system(), name);
+        let Some(available) = lookup_or_eval(&mut cache, "nixpkgs-latest", rev, &attr)? else {
             continue;
         };
-        match compare_versions(&parse_version(installed), &parse_version(available)) {
-            VersionDiff::Minor => minor.push((name.clone(), installed.clone(), available.clone())),
-            VersionDiff::Major => major.push((name.clone(), installed.clone(), available.clone())),
+        match compare_versions(&parse_version(installed), &parse_version(&available)) {
+            VersionDiff::Minor => minor.push((name.clone(), installed.clone(), available)),
+            VersionDiff::Major => major.push((name.clone(), installed.clone(), available)),
             _ => {}
         }
     }
+
+    cache.save(&cache_path)?;
     Ok((minor, major))
 }
 

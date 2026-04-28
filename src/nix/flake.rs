@@ -565,9 +565,6 @@ fn extract_root_input_rev(lock: &serde_json::Value, input_name: &str) -> Option<
 ///
 /// Returns `None` when the lock file can't be read, the named input doesn't
 /// exist in `root.inputs`, or the `locked.rev` field is absent/malformed.
-// Wired in by Tasks 6-8 (pin/search/check migration). Until then,
-// suppress dead_code so `cargo clippy -D warnings` stays green.
-#[allow(dead_code)]
 pub fn read_input_rev(flake_dir: &Path, name: &str) -> Option<String> {
     let lock_path = flake_dir.join("flake.lock");
     let content = std::fs::read_to_string(&lock_path).ok()?;
@@ -627,7 +624,7 @@ pub fn prefetch_nixpkgs_rev(rev: &str) -> Result<String> {
 /// `x86_64-linux` for architectures Nix doesn't officially target;
 /// the caller will then see an eval error naming the missing package
 /// for the wrong arch and can move on.
-fn target_system() -> &'static str {
+pub fn target_system() -> &'static str {
     match (std::env::consts::ARCH, std::env::consts::OS) {
         ("x86_64", "linux") => "x86_64-linux",
         ("aarch64", "linux") => "aarch64-linux",

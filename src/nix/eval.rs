@@ -105,7 +105,6 @@ pub(crate) fn parse_eval_output(raw: &str) -> Option<String> {
 ///
 /// The caller is responsible for calling `cache.save(path)` once the batch
 /// of lookups is complete. We don't save per-call to avoid disk thrash.
-#[allow(dead_code)]
 pub fn lookup_or_eval(
     cache: &mut VersionCache,
     input: &str,
