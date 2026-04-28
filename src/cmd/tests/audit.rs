@@ -91,3 +91,39 @@ fn next_action_none_on_clear() {
     let report = empty_report();
     assert!(compute_next_action(&report).is_none());
 }
+
+#[test]
+fn brief_signals_empty_when_clear() {
+    let report = empty_report();
+    assert!(brief_signals(&report).is_empty());
+}
+
+#[test]
+fn brief_signals_lists_health_warnings() {
+    let mut report = empty_report();
+    report.health.warnings.push(HealthIssue {
+        name: "stale".into(),
+        message: "stale".into(),
+        hint: None,
+    });
+    let signals = brief_signals(&report);
+    assert_eq!(signals.len(), 1);
+    assert!(signals[0].contains("warning"));
+}
+
+#[test]
+fn brief_signals_lists_pending_updates() {
+    let mut report = empty_report();
+    report.updates.minor = 2;
+    report.updates.flake_inputs_with_update.push(FlakeInputUpdate {
+        name: "claude-code".into(),
+        current: Some("1".into()),
+        latest_remote_date: Some("2".into()),
+    });
+    let signals = brief_signals(&report);
+    let updates_line = signals
+        .iter()
+        .find(|s| s.contains("updates"))
+        .expect("la ligne 'updates' doit être présente dans les signaux");
+    assert!(updates_line.contains("3 pending")); // 2 minor + 1 flake-input
+}
