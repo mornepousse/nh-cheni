@@ -943,12 +943,12 @@ fn start_spinner(
         let mut i = 0;
         let mut last_line_len = 0;
         while !done_clone.load(Ordering::Relaxed) {
-            let repology = resolved.load(Ordering::Relaxed);
+            let evaluated = resolved.load(Ordering::Relaxed);
             let flake = if flake_done.load(Ordering::Relaxed) { "✓" } else { "…" };
             let line = format!(
-                "  {} Repology {}/{}  ·  flake inputs {}",
+                "  {} packages {}/{}  ·  flake inputs {}",
                 frames[i % frames.len()],
-                repology.min(total),
+                evaluated.min(total),
                 total,
                 flake,
             );
