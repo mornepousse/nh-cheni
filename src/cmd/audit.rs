@@ -77,7 +77,20 @@ pub struct AuditReport {
     pub state: StateReport,
     pub verdict: AuditVerdict,
     pub next_action: Option<String>,
+    /// Days since nixpkgs was last updated. None if not detectable.
+    /// Used to print the stale-floor warning above the verdict.
+    #[serde(default)]
+    pub nixpkgs_days_old: Option<u64>,
+    /// True when --refresh-floor was used and the eval is against
+    /// fresh remote data. Suppresses the stale-floor warning (verdict is real).
+    #[serde(default)]
+    pub floor_was_refreshed: bool,
 }
+
+/// Nombre de jours à partir duquel le floor nixpkgs est considéré stale.
+/// En dessous, les chiffres d'audit reflètent la réalité ; au-delà, ils ne
+/// montrent que le rev verrouillé et peuvent induire l'utilisateur en erreur.
+const FLOOR_STALE_DAYS: u64 = 3;
 
 /// Dérive le verdict global à partir de la santé et des mises à jour.
 pub(crate) fn compute_verdict(health: &HealthReport, updates: &UpdatesReport) -> AuditVerdict {
@@ -119,6 +132,10 @@ pub(crate) fn compute_next_action(report: &AuditReport) -> Option<String> {
 pub struct AuditOptions {
     pub brief: bool,
     pub json: bool,
+    /// When true, resolve the HEAD rev+narHash of nixpkgs-latest from the
+    /// remote before evaluating. Suppresses the stale-floor warning because
+    /// the verdict is already against real remote data. Hits the network.
+    pub refresh_floor: bool,
 }
 
 /// Run `cheni audit`.
@@ -143,16 +160,49 @@ pub async fn run(opts: AuditOptions) -> Result<()> {
             },
             verdict: AuditVerdict::Errors,
             next_action: Some("Run `cheni init` to initialise the flake.".to_string()),
+            nixpkgs_days_old: None,
+            floor_was_refreshed: false,
         };
         return render(&report, &opts);
     }
+
+    // Résoudre le floor override quand --refresh-floor est demandé.
+    // En cas d'échec réseau on tombe silencieusement sur le rev verrouillé.
+    let override_floor: Option<(String, String)> = if opts.refresh_floor {
+        if !opts.json && !opts.brief {
+            println!("{} Refreshing floor to remote HEAD…", "→".cyan());
+        }
+        match crate::nix::flake::resolve_remote_head(&nix_config.flake_dir, "nixpkgs-latest") {
+            Ok(Some(pair)) => Some(pair),
+            Ok(None) => {
+                tracing::warn!(
+                    "--refresh-floor: couldn't resolve remote head; falling back to locked rev"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "--refresh-floor: error resolving remote head ({}); falling back to locked rev",
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let floor_was_refreshed = override_floor.is_some();
 
     // Trois collectes — updates est async, les autres sync. On n'a pas besoin
     // de parallélisme : le batch eval domine et tourne dans spawn_blocking.
     // Orchestration séquentielle pour la lisibilité.
     let health = crate::cmd::doctor::collect_health(&nix_config.flake_dir)?;
-    let updates = crate::cmd::check::collect_updates(&nix_config).await?;
+    let updates = crate::cmd::check::collect_updates(&nix_config, override_floor).await?;
     let state = crate::cmd::status::collect_state(&nix_config)?;
+
+    // Lire l'âge nixpkgs pour l'avertissement stale-floor.
+    let nixpkgs_days_old = crate::nix::flake::read_input_by_name(&nix_config.flake_dir, "nixpkgs")
+        .map(|i| i.days_old);
 
     let verdict = compute_verdict(&health, &updates);
     let mut report = AuditReport {
@@ -161,6 +211,8 @@ pub async fn run(opts: AuditOptions) -> Result<()> {
         state,
         verdict,
         next_action: None,
+        nixpkgs_days_old,
+        floor_was_refreshed,
     };
     report.next_action = compute_next_action(&report);
 
@@ -181,7 +233,30 @@ fn render(report: &AuditReport, opts: &AuditOptions) -> Result<()> {
     Ok(())
 }
 
+/// Predicate logique pour la décision d'affichage du warning stale-floor.
+/// Extrait comme fonction pure pour être testable sans accès à stdout.
+pub(crate) fn should_warn_stale_floor(days_old: Option<u64>, refreshed: bool) -> bool {
+    if refreshed {
+        return false;
+    }
+    matches!(days_old, Some(d) if d >= FLOOR_STALE_DAYS)
+}
+
+fn maybe_print_stale_floor_warning(report: &AuditReport) {
+    if !should_warn_stale_floor(report.nixpkgs_days_old, report.floor_was_refreshed) {
+        return;
+    }
+    let days = report.nixpkgs_days_old.unwrap_or(0);
+    println!(
+        "{} nixpkgs floor is {} day(s) behind — verdict reflects the locked rev, \
+         not what an `upgrade` would actually pull. Use `cheni audit --refresh-floor` to peek.",
+        "⚠".yellow().bold(),
+        days.to_string().yellow()
+    );
+}
+
 fn render_brief(report: &AuditReport) {
+    maybe_print_stale_floor_warning(report);
     print_verdict_line(report);
     let signals = brief_signals(report);
     for line in signals {
@@ -208,6 +283,7 @@ pub(crate) fn brief_signals(report: &AuditReport) -> Vec<String> {
 
 fn render_human(report: &AuditReport) {
     println!("{}\n", "=== cheni audit ===".bold());
+    maybe_print_stale_floor_warning(report);
     print_verdict_line(report);
     println!();
 
