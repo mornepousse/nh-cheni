@@ -5,6 +5,19 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## v0.7.2 — 2026-04-29
+
+### Added
+
+- `cheni doctor --fix` — interactive walkthrough of warnings with one-keypress fixes. Hardcoded registry covers four common cases (flake.lock dirty, dead upgrade, store size > threshold, stale flake inputs); other warnings show "(no automated fix)" and the user follows the hint manually.
+- `cheni doctor` "Active rebuild" check — walks `/proc` for nh / nixos-rebuild / nix-build / nix-store --realise. Shows pid + duration when one is running. Warns when **no rebuild is running but flake.lock is git-dirty** (signals a previous `cheni upgrade` that didn't finish).
+- `cheni upgrade` preview flags heavy builds with `⚠ slow build` (rusty-v8, chromium-unwrapped, electron-unwrapped, webkitgtk, llvm-from-source, qtwebengine). Substring match — catches versioned forms like `rusty-v8-147.2.1`.
+- `cheni history` annotates each generation with its timeline events (pin / freeze / promote / demote / build / upgrade / rollback / restore) — answers "what did I do at this gen?" directly under each header.
+
+### Internal
+
+- `nix::timeline::parse_rfc3339_to_unix` is now `pub` so both `cmd::history` and `cmd::timeline` reuse it.
+
 ## v0.7.1 — 2026-04-29
 
 ### Added
