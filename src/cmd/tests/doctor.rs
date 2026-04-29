@@ -311,3 +311,131 @@ fn pin_freeze_conflict_flags_overlap_as_error() {
     assert!(result.message.contains("firefox"));
     assert!(result.hint.is_some(), "must point at the manual edit needed");
 }
+
+// ─── is_rebuild_comm ──────────────────────────────────────────────────────────
+
+#[test]
+fn is_rebuild_comm_accepts_known_names() {
+    assert!(is_rebuild_comm("nh"), "nh should match");
+    assert!(is_rebuild_comm("nixos-rebuild"), "nixos-rebuild should match");
+    assert!(is_rebuild_comm("nix-build"), "nix-build should match");
+}
+
+#[test]
+fn is_rebuild_comm_rejects_unrelated_names() {
+    assert!(!is_rebuild_comm("nix-store"), "nix-store alone should not match");
+    assert!(!is_rebuild_comm("bash"), "bash should not match");
+    assert!(!is_rebuild_comm(""), "empty string should not match");
+    assert!(!is_rebuild_comm("nix"), "plain nix should not match");
+    assert!(!is_rebuild_comm("nh-prefix"), "prefix-extended name should not match");
+}
+
+#[test]
+fn is_rebuild_comm_case_sensitive() {
+    // Linux /proc/<pid>/comm is always lowercase for these tools.
+    assert!(!is_rebuild_comm("NH"), "uppercase should not match");
+    assert!(!is_rebuild_comm("Nh"), "mixed case should not match");
+}
+
+// ─── classify_rebuild_state ───────────────────────────────────────────────────
+
+#[test]
+fn classify_rebuild_state_active_rebuild_returns_ok_with_pid() {
+    let detail = "pid 12345 — nh os switch (running for 23m 4s)".to_string();
+    let result = classify_rebuild_state(Some(detail.clone()), false);
+    assert_eq!(result.severity, Severity::Ok, "active rebuild is Ok-level info");
+    assert_eq!(result.name, "Active rebuild");
+    assert!(result.message.contains("pid 12345"), "message must contain pid");
+    assert!(result.hint.is_none(), "active rebuild carries no hint");
+}
+
+#[test]
+fn classify_rebuild_state_active_rebuild_ignores_lock_flag() {
+    // When a rebuild is active, the stale-lock flag is irrelevant.
+    let detail = "pid 42 — nix-build (running for 5s)".to_string();
+    let result = classify_rebuild_state(Some(detail), true);
+    assert_eq!(result.severity, Severity::Ok);
+}
+
+#[test]
+fn classify_rebuild_state_no_rebuild_stale_lock_warns() {
+    let result = classify_rebuild_state(None, true);
+    assert_eq!(result.severity, Severity::Warning, "stale lock without rebuild → Warning");
+    assert_eq!(result.name, "Active rebuild");
+    assert!(
+        result.message.contains("Recent flake.lock change"),
+        "message must mention the stale lock, got: {}",
+        result.message
+    );
+    let hint = result.hint.as_deref().unwrap_or("");
+    assert!(
+        hint.contains("cheni build"),
+        "hint must suggest cheni build, got: {hint}"
+    );
+}
+
+#[test]
+fn classify_rebuild_state_no_rebuild_no_stale_lock_is_ok() {
+    let result = classify_rebuild_state(None, false);
+    assert_eq!(result.severity, Severity::Ok, "idle + fresh lock → Ok");
+    assert_eq!(result.name, "Active rebuild");
+    assert!(
+        result.message.contains("no rebuild in progress"),
+        "message must say no rebuild, got: {}",
+        result.message
+    );
+    assert!(result.hint.is_none());
+}
+
+// ─── check_active_rebuild (integration, uses real flake.lock mtime) ───────────
+
+#[test]
+fn check_active_rebuild_warns_on_stale_lock_when_no_proc_match() {
+    // Create a temp dir with a flake.lock touched "just now".
+    // There is no rebuild process for our fixture, so the warn branch fires
+    // only if recent_lock_change=true. We artificially satisfy that by writing
+    // the file with the current time, which is < 3600s ago.
+    //
+    // Note: we cannot mock find_active_rebuild, but in a typical test
+    // environment no nh/nixos-rebuild/nix-build process is running, so
+    // find_active_rebuild() returns None — the stale-lock branch fires.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("flake.lock"), "{}").unwrap();
+
+    let result = check_active_rebuild(dir.path());
+    // Either: Warning (no rebuild + recent lock) OR Ok (no rebuild + recent lock
+    // but a rebuild process happens to be running in CI). Both are valid.
+    // The important invariant: the name is always "Active rebuild".
+    assert_eq!(result.name, "Active rebuild");
+    // Severity must be Ok or Warning, never Error.
+    assert!(
+        result.severity == Severity::Ok || result.severity == Severity::Warning,
+        "unexpected severity: {:?}",
+        result.severity
+    );
+    // When it IS a warning, the message must mention flake.lock.
+    if result.severity == Severity::Warning {
+        assert!(
+            result.message.contains("flake.lock") || result.message.contains("Recent"),
+            "Warning message must mention the stale lock, got: {}",
+            result.message
+        );
+    }
+}
+
+#[test]
+fn check_active_rebuild_no_lock_file_is_not_warning() {
+    // No flake.lock → recent_lock_change = false → idle Ok (unless a rebuild
+    // happens to be running, in which case it's an active-Ok).
+    let dir = tempfile::tempdir().unwrap();
+    // Deliberately don't write flake.lock.
+    let result = check_active_rebuild(dir.path());
+    assert_eq!(result.name, "Active rebuild");
+    // Must not be a Warning (no lock file means no stale-lock signal).
+    assert_ne!(
+        result.severity,
+        Severity::Warning,
+        "missing flake.lock must not trigger the stale-lock warning; got: {}",
+        result.message
+    );
+}
