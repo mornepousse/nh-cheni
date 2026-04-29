@@ -13,7 +13,7 @@ use crate::nix::{config, flake, freezes, pins, store};
 
 /// Severity of a check result.
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum Severity {
+pub(crate) enum Severity {
     /// Something works correctly.
     Ok,
     /// Minor issue, not critical.
@@ -23,11 +23,11 @@ enum Severity {
 }
 
 /// Result of a single health check.
-struct CheckResult {
-    severity: Severity,
-    name: String,
-    message: String,
-    hint: Option<String>,
+pub(crate) struct CheckResult {
+    pub(crate) severity: Severity,
+    pub(crate) name: String,
+    pub(crate) message: String,
+    pub(crate) hint: Option<String>,
 }
 
 /// Run `cheni doctor`.
@@ -36,11 +36,21 @@ struct CheckResult {
 /// Output is severity-sorted: errors first, then warnings, then a single
 /// collapsed line for the OK checks. The user reads what needs attention
 /// without scanning through the green-checks list to find it.
+///
+/// The active-rebuild check is handled separately: when a rebuild is running
+/// (Ok with a pid message), it is printed inline before the summary so the
+/// user sees it regardless of the `--brief` flag. The idle case collapses
+/// into the Ok summary like all other Ok checks.
 pub fn run(brief: bool) -> Result<()> {
     let nix_config = config::detect()?;
     if !brief {
         print_doctor_header(&nix_config);
     }
+
+    // Run the active-rebuild check first — it may carry an info-level message
+    // that must not be swallowed by the Ok-summary collapse.
+    let rebuild_check = check_active_rebuild(&nix_config.flake_dir);
+    let rebuild_is_active = rebuild_check.message.contains("pid ");
 
     let checks = run_all_checks(&nix_config.flake_dir)?;
     let (ok, warn, err) = tally_severities(&checks);
@@ -55,6 +65,14 @@ pub fn run(brief: bool) -> Result<()> {
             Severity::Ok => ok_checks.push(c),
         }
     }
+
+    // Print the active-rebuild result inline when it carries a real signal
+    // (rebuild running or stale lock warning). The idle-Ok case falls through
+    // to the collapsed summary instead.
+    if rebuild_is_active || rebuild_check.severity == Severity::Warning {
+        print_check(&rebuild_check, brief);
+    }
+
     for c in &errors {
         print_check(c, brief);
     }
@@ -108,6 +126,11 @@ fn print_doctor_header(nix_config: &config::NixConfig) {
 /// Run every health check in declared order. Most return one result;
 /// a couple (`check_pins_valid`, `check_flake_input_freshness`) fan out
 /// to multiple results and use `extend` instead of `push`.
+///
+/// Note: `check_active_rebuild` is NOT listed here. It is called separately
+/// in `run()` because its Ok/info variant needs to bypass the collapsed Ok
+/// summary. It IS included in `collect_health` via a direct call so that
+/// `cheni audit` also sees it.
 fn run_all_checks(flake_dir: &std::path::Path) -> Result<Vec<CheckResult>> {
     let mut checks = vec![
         check_nixpkgs_latest_input(flake_dir),
@@ -907,11 +930,13 @@ fn check_nh_installed() -> CheckResult {
 /// `cheni audit` composition.
 ///
 /// Mirrors what `run()` does internally, minus printing. Errors / warnings
-/// are converted into `audit::HealthIssue` shape.
+/// are converted into `audit::HealthIssue` shape. Includes the active-rebuild
+/// check (called directly here since it is not in `run_all_checks`).
 pub(crate) fn collect_health(
     flake_dir: &std::path::Path,
 ) -> anyhow::Result<crate::cmd::audit::HealthReport> {
-    let checks = run_all_checks(flake_dir)?;
+    let mut checks = run_all_checks(flake_dir)?;
+    checks.push(check_active_rebuild(flake_dir));
     let mut report = crate::cmd::audit::HealthReport::default();
     for c in &checks {
         let issue = crate::cmd::audit::HealthIssue {
@@ -926,6 +951,218 @@ pub(crate) fn collect_health(
         }
     }
     Ok(report)
+}
+
+// ─── Active rebuild detection ──────────────────────────────────────────────────
+
+/// Process names that indicate a NixOS rebuild is in progress.
+const REBUILD_COMMS: &[&str] = &["nh", "nixos-rebuild", "nix-build"];
+
+/// Return true if `comm` (content of `/proc/<pid>/comm`) matches a known
+/// rebuild driver. Case-sensitive — Linux comm values are exact.
+pub(crate) fn is_rebuild_comm(comm: &str) -> bool {
+    REBUILD_COMMS.contains(&comm)
+}
+
+/// Cmdline arguments that identify a `nix-store` invocation as a build step.
+const NIX_STORE_BUILD_ARGS: &[&str] = &["--realise", "--realize"];
+
+/// Walk `/proc` and return a description string for the first rebuild process
+/// found, or `None` if no rebuild is running.
+///
+/// Description format: `"pid 12345 — nh os switch (running for 23m)"`.
+///
+/// Races with process creation/destruction are handled gracefully: any
+/// `read_dir` or `read_to_string` failure for a specific PID is silently
+/// skipped (`.ok()` + `continue`). The walk only fails if `/proc` itself is
+/// unreadable, which on Linux means something is fundamentally wrong.
+fn find_active_rebuild() -> Option<String> {
+    let proc_dir = std::fs::read_dir("/proc").ok()?;
+    // Read uptime once for all duration calculations.
+    let uptime_secs = read_uptime_secs();
+
+    for entry in proc_dir.flatten() {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        // Only numeric entries are PIDs.
+        let pid: u64 = match name_str.parse() {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+
+        let proc_path = entry.path();
+
+        // Read the comm file (process name, max 15 chars on Linux).
+        let comm_path = proc_path.join("comm");
+        let comm = match std::fs::read_to_string(&comm_path) {
+            Ok(c) => c.trim().to_string(),
+            Err(_) => continue, // process may have exited
+        };
+
+        let matched = if is_rebuild_comm(&comm) {
+            true
+        } else if comm == "nix-store" {
+            // Only flag nix-store when it is doing a realisation, not a query.
+            let cmdline_path = proc_path.join("cmdline");
+            let cmdline = std::fs::read_to_string(&cmdline_path).unwrap_or_default();
+            // cmdline is NUL-separated; treat as space for the purpose of
+            // substring matching.
+            let cmdline_display = cmdline.replace('\0', " ");
+            NIX_STORE_BUILD_ARGS
+                .iter()
+                .any(|arg| cmdline_display.contains(arg))
+        } else {
+            false
+        };
+
+        if !matched {
+            continue;
+        }
+
+        // Read the full cmdline for display.
+        let cmdline_path = proc_path.join("cmdline");
+        let cmdline_raw = std::fs::read_to_string(&cmdline_path).unwrap_or_default();
+        let cmdline_display = cmdline_raw
+            .replace('\0', " ")
+            .trim()
+            .to_string();
+        // Trim to a reasonable length to avoid huge terminal lines.
+        let cmdline_short = if cmdline_display.len() > 80 {
+            format!("{}…", &cmdline_display[..80])
+        } else {
+            cmdline_display
+        };
+
+        // Compute running duration from /proc/<pid>/stat field 22 (starttime).
+        let duration_str = uptime_secs
+            .and_then(|up| read_process_start_ticks(&proc_path).map(|t| (up, t)))
+            .map(|(up, start_ticks)| {
+                let clock_ticks = clock_ticks_per_sec();
+                let start_secs = start_ticks as f64 / clock_ticks as f64;
+                let running_secs = (up - start_secs).max(0.0) as u64;
+                format_duration(running_secs)
+            })
+            .unwrap_or_else(|| "?".to_string());
+
+        return Some(format!(
+            "pid {} — {} (running for {})",
+            pid, cmdline_short, duration_str
+        ));
+    }
+    None
+}
+
+/// Read `/proc/uptime` and return the system uptime in seconds.
+fn read_uptime_secs() -> Option<f64> {
+    let content = std::fs::read_to_string("/proc/uptime").ok()?;
+    content
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<f64>().ok())
+}
+
+/// Read field 22 (starttime, 0-indexed as field index 21) from
+/// `/proc/<pid>/stat`. Returns clock ticks since boot.
+fn read_process_start_ticks(proc_path: &std::path::Path) -> Option<u64> {
+    let stat = std::fs::read_to_string(proc_path.join("stat")).ok()?;
+    // Field 2 is the comm surrounded by parentheses and may contain spaces.
+    // Find the last ')' to skip past it, then count remaining fields.
+    let after_comm = stat.rfind(')')?;
+    let rest = &stat[after_comm + 1..];
+    // Fields after comm: state(1) ppid(2) pgrp(3) session(4) tty_nr(5)
+    // tpgid(6) flags(7) minflt(8) cminflt(9) majflt(10) cmajflt(11)
+    // utime(12) stime(13) cutime(14) cstime(15) priority(16) nice(17)
+    // num_threads(18) itrealvalue(19) starttime(20 — 0-indexed field 19)
+    rest.split_whitespace()
+        .nth(19) // starttime is the 20th field after ')' (0-indexed: 19)
+        .and_then(|s| s.parse::<u64>().ok())
+}
+
+/// Return the number of clock ticks per second.
+///
+/// Reads `/proc/self/status` first (not useful for this). Instead, we try
+/// to parse the kernel config via `getconf CLK_TCK`. If that fails we fall
+/// back to 100, which is the default on all mainstream Linux kernels and
+/// correct for the vast majority of NixOS systems. A wrong value here only
+/// affects the "running for Xm Ys" display string, not correctness of the
+/// check itself.
+fn clock_ticks_per_sec() -> u64 {
+    // Try `getconf CLK_TCK` — available on all POSIX systems without libc FFI.
+    let output = std::process::Command::new("getconf")
+        .arg("CLK_TCK")
+        .output()
+        .ok();
+    if let Some(out) = output {
+        if out.status.success() {
+            if let Ok(s) = std::str::from_utf8(&out.stdout) {
+                if let Ok(n) = s.trim().parse::<u64>() {
+                    if n > 0 {
+                        return n;
+                    }
+                }
+            }
+        }
+    }
+    100 // near-universal Linux default
+}
+
+/// Format a duration in seconds as "Xm Ys" or "Xs" for display.
+fn format_duration(secs: u64) -> String {
+    if secs >= 60 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
+/// Pure classification logic — given what the I/O layer found, return
+/// the appropriate `CheckResult`. Separated for unit-testability.
+///
+/// `lock_dirty` = `flake.lock` has uncommitted changes per `git status`.
+/// Combined with "no active rebuild", this means a previous `cheni upgrade`
+/// updated the lock but didn't reach the rebuild step (likely killed mid-flight).
+pub(crate) fn classify_rebuild_state(
+    active: Option<String>,
+    lock_dirty: bool,
+) -> CheckResult {
+    match (active, lock_dirty) {
+        (Some(detail), _) => CheckResult {
+            severity: Severity::Ok,
+            name: "Active rebuild".to_string(),
+            message: detail,
+            hint: None,
+        },
+        (None, true) => CheckResult {
+            severity: Severity::Warning,
+            name: "Active rebuild".to_string(),
+            message: "flake.lock has uncommitted changes but no rebuild is running".to_string(),
+            hint: Some(
+                "Previous `cheni upgrade` likely died. \
+                 Run `cheni build` to apply the current flake.lock + config, \
+                 or `git checkout flake.lock` to discard."
+                    .to_string(),
+            ),
+        },
+        (None, false) => CheckResult {
+            severity: Severity::Ok,
+            name: "Active rebuild".to_string(),
+            message: "no rebuild in progress".to_string(),
+            hint: None,
+        },
+    }
+}
+
+/// I/O wrapper: walk `/proc` and check `flake.lock` git state, then
+/// delegate to `classify_rebuild_state` for the pure logic.
+///
+/// We use `git diff` rather than mtime because mtime gives false
+/// negatives for upgrades that started > 1h ago (the user may run
+/// `cheni doctor` 2h after killing a stuck upgrade — mtime says "old"
+/// but the lock IS still uncommitted, which is the real signal).
+fn check_active_rebuild(flake_dir: &std::path::Path) -> CheckResult {
+    let active = find_active_rebuild();
+    let lock_dirty = crate::nix::git::is_flake_lock_dirty(flake_dir);
+    classify_rebuild_state(active, lock_dirty)
 }
 
 #[cfg(test)]
