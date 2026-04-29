@@ -27,7 +27,7 @@ use tracing_subscriber::EnvFilter;
         Packages are pinned to nixpkgs-latest for safe, incremental updates.",
     after_help = "\
 Daily flow:\n  \
-  cheni                          Interactive menu (state snapshot + action picker)\n  \
+  cheni                          Interactive menu (current state + action picker)\n  \
   cheni check                    See what's outdated (nixpkgs-latest + flake input ages)\n  \
   cheni check --pending          Add closure dry-run (kernel + base packages too)\n  \
   cheni upgrade                  Full upgrade: refresh, preview, rebuild\n  \
@@ -40,14 +40,9 @@ Per-package policy:\n  \
   cheni pin -c <category>        Pin all minor updates in modules/<category>/\n  \
   cheni pin --flakes             Update flake inputs (zen-browser, claude-code, …)\n  \
   cheni freeze <pkg>             Hold at current version (inverse of pin)\n  \
-  cheni promote <pkg>            Switch a freeze to a pin (resume updates)\n  \
-  cheni demote <pkg>             Switch a pin to a freeze (hold current)\n  \
   cheni unpin <pkg>              Release a pin (or --all)\n  \
   cheni unfreeze <pkg>           Release a freeze (or --all)\n  \
-  cheni clean                    Remove obsolete pins (nixpkgs caught up)\n  \
-  cheni gc                       Reclaim disk: prune generations + nix-collect-garbage\n  \
-  cheni snapshot                 Dump pins+freezes state to JSON\n  \
-  cheni restore <file>           Replace state from a snapshot file\n\
+  cheni clean                    Remove obsolete pins (nixpkgs caught up)\n\
 \n\
 Build vs upgrade (cheat sheet):\n  \
   build                  =  rebuild with whatever's already in flake.lock\n  \
@@ -67,7 +62,7 @@ History & rollback:\n  \
 Discovery:\n  \
   cheni search <query>           nixpkgs search + nixpkgs-latest delta + pin/freeze badges\n  \
   cheni why <pkg>                Which .nix file declares this?\n  \
-  cheni timeline                 Persistent op log (pin/freeze/promote/...)\n\
+  cheni timeline                 Persistent op log (pin/freeze/build/upgrade/...)\n\
 \n\
 Maintenance:\n  \
   cheni doctor                   Health check (paths, lock, pins, freezes, age)\n  \
@@ -198,16 +193,6 @@ enum Commands {
         all: bool,
     },
 
-    /// Promote a package from freeze to pin (resume nixpkgs-latest tracking).
-    #[command(after_help = "Example: cheni promote firefox")]
-    Promote {
-        /// Package name to promote.
-        name: String,
-        /// Skip confirmation prompt.
-        #[arg(long)]
-        yes: bool,
-    },
-
     /// Hold a package at its current version (inverse of `pin`: freezes ≠ pins)
     #[command(after_help = "Example: cheni freeze kicad")]
     Freeze {
@@ -246,33 +231,6 @@ enum Commands {
         /// Remove every freeze at once
         #[arg(short = 'a', long)]
         all: bool,
-    },
-
-    /// Reclaim disk space — prune old generations and run nix-collect-garbage.
-    ///
-    /// Refuses to leave fewer than 3 generations without --force. Pass
-    /// --dry-run to see what would happen without committing.
-    #[command(after_help = "Example: cheni gc --keep 5 --dry-run")]
-    Gc {
-        /// Number of recent generations to keep (default 10).
-        #[arg(long, default_value_t = 10usize)]
-        keep: usize,
-
-        /// Audit + preview only, do not delete anything.
-        #[arg(long)]
-        dry_run: bool,
-
-        /// Skip confirmation prompt.
-        #[arg(long)]
-        yes: bool,
-
-        /// One-line summary instead of the full report.
-        #[arg(long)]
-        brief: bool,
-
-        /// Override the safety floor (allow keep below the minimum).
-        #[arg(long)]
-        force: bool,
     },
 
     /// Full system upgrade: refresh flake inputs, preview, rebuild, clean pins
@@ -414,16 +372,11 @@ enum Commands {
         /// --diff overrides --brief (specific request wins).
         #[arg(long)]
         brief: bool,
-    },
 
-    /// Restore pins+freezes state from a snapshot file (replaces local state).
-    #[command(after_help = "Example: cheni restore my-laptop.json")]
-    Restore {
-        /// Path to the snapshot JSON file.
-        file: std::path::PathBuf,
-        /// Skip confirmation prompt.
+        /// Override the safety floor (allow keep < 3 generations).
+        /// Zero is always refused even with --force.
         #[arg(long)]
-        yes: bool,
+        force: bool,
     },
 
     /// Roll back to the previous generation (or a specific one)
@@ -445,29 +398,11 @@ enum Commands {
         to: u32,
     },
 
-    /// Demote a package from pin to freeze (lock at current version).
-    #[command(after_help = "Example: cheni demote firefox")]
-    Demote {
-        /// Package name to demote.
-        name: String,
-        /// Skip confirmation prompt.
-        #[arg(long)]
-        yes: bool,
-    },
-
     /// Search nixpkgs for a package
     #[command(alias = "s")]
     Search {
         /// Search query (e.g. "firefox", "rust analyzer")
         query: String,
-    },
-
-    /// Snapshot pins+freezes state to JSON (stdout or --out FILE).
-    #[command(after_help = "Example: cheni snapshot --out my-laptop.json")]
-    Snapshot {
-        /// Write the snapshot to FILE instead of stdout.
-        #[arg(long)]
-        out: Option<std::path::PathBuf>,
     },
 
     /// Read the persistent operation log (pin/unpin/freeze/upgrade/...).
@@ -650,16 +585,6 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Unpin { package, all, yes } => dispatch_unpin(package, all, yes),
         Commands::Freeze { package, major } => dispatch_freeze(package, major),
         Commands::Unfreeze { package, all, yes } => dispatch_unfreeze(package, all, yes),
-        Commands::Gc { keep, dry_run, yes, brief, force } => {
-            cmd::gc::run(cmd::gc::GcOptions {
-                keep,
-                dry_run,
-                yes,
-                brief,
-                force,
-            })?;
-            Ok(())
-        }
         Commands::Upgrade { gc, no_clean_pins, yes, pins_only, boot, brief } => {
             cmd::upgrade::run(cmd::upgrade::UpgradeOptions {
                 gc,
@@ -675,18 +600,14 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned).await,
         Commands::Verify { tag } => cmd::verify::run(cmd::verify::VerifyOptions { tag }).await,
         Commands::Diagnose { path } => cmd::diagnose::run(cmd::diagnose::DiagnoseOptions { path }),
-        Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes, brief } => {
+        Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes, brief, force } => {
             cmd::history::run(cmd::history::HistoryOptions {
-                diff, full, limit, delete, prune, keep, older_than, gc, yes, brief,
+                diff, full, limit, delete, prune, keep, older_than, gc, yes, brief, force,
             })
         }
-        Commands::Restore { file, yes } => cmd::snapshot::restore(&file, yes),
         Commands::Rollback { target, yes } => cmd::rollback::run(target, yes),
         Commands::Diff { from, to } => cmd::diff::run(from, to),
-        Commands::Demote { name, yes } => cmd::lifecycle::demote(&name, yes),
-        Commands::Promote { name, yes } => cmd::lifecycle::promote(&name, yes),
         Commands::Search { query } => cmd::search::run(&query).await,
-        Commands::Snapshot { out } => cmd::snapshot::snapshot(out),
         Commands::Timeline { last, package, kind, since, json } => {
             cmd::timeline::run(cmd::timeline::TimelineOptions {
                 last,

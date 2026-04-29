@@ -195,8 +195,23 @@ fn fix_dead_upgrade() -> Result<()> {
 
 fn fix_store_size() -> Result<()> {
     use colored::Colorize;
-    println!("  {} Running `cheni gc` to reclaim disk space…", "→".cyan());
-    crate::cmd::gc::run(crate::cmd::gc::GcOptions::default())
+    println!(
+        "  {} Running `cheni history --keep 20 --gc`…",
+        "→".cyan()
+    );
+    let exe = std::env::current_exe()
+        .map_err(|e| anyhow::anyhow!("locating own binary: {e}"))?;
+    let status = std::process::Command::new(&exe)
+        .args(["history", "--keep", "20", "--gc"])
+        .status()
+        .map_err(|e| anyhow::anyhow!("running cheni history --keep 20 --gc: {e}"))?;
+    if !status.success() {
+        anyhow::bail!(
+            "cheni history --keep 20 --gc exited with status {:?}",
+            status.code()
+        );
+    }
+    Ok(())
 }
 
 fn fix_stale_inputs() -> Result<()> {

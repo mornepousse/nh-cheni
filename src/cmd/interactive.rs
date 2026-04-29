@@ -359,6 +359,7 @@ fn default_history_options(prune: bool) -> super::history::HistoryOptions {
         gc: false,
         yes: false,
         brief: false,
+        force: false,
     }
 }
 

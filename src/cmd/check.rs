@@ -767,8 +767,7 @@ fn print_summary_line(c: &Classification, frozen_count: usize, floor_days_old: O
     if let Some(days) = floor_days_old {
         if days >= FLOOR_STALE_DAYS {
             println!(
-                "{} nixpkgs floor is {} day(s) behind — these counts reflect the locked rev, \
-                 not what an `upgrade` would actually pull.",
+                "{} floor is {} day(s) behind — counts reflect locked rev, not real updates.",
                 "⚠".yellow().bold(),
                 days.to_string().yellow()
             );
@@ -789,9 +788,9 @@ fn print_summary_line(c: &Classification, frozen_count: usize, floor_days_old: O
         c.minor.len().to_string().yellow(),
         "Major:".dimmed(),
         c.major.len().to_string().red(),
-        "Newer:".dimmed(),
+        "Ahead:".dimmed(),
         c.newer.len().to_string().cyan(),
-        "Unknown:".dimmed(),
+        "Missing:".dimmed(),
         c.unknown.len().to_string().dimmed(),
         frozen_tail,
     );
@@ -850,7 +849,7 @@ fn print_human(
     if !details && (c.newer.len() + c.unknown.len()) > 0 {
         println!(
             "{}",
-            "Tip: pass --details to list 'Newer' and 'Unknown' packages.".dimmed()
+            "Tip: pass --details to list 'Ahead' and 'Missing' packages.".dimmed()
         );
     }
     if let Some(message) = suspicious_eval_silence(c) {
@@ -874,7 +873,7 @@ fn suspicious_eval_silence(c: &Classification) -> Option<String> {
         return None;
     }
     Some(format!(
-        "All {} package lookups returned Unknown — likely missing \
+        "All {} package lookups returned Missing — likely missing \
          `nixpkgs-latest` input in flake.lock, or systemic nix eval \
          failure. Run with `-v` to see debug-level eval errors.",
         c.unknown.len()
@@ -913,13 +912,10 @@ fn print_nixpkgs_age_block(nixpkgs: Option<&flake::FlakeInput>) {
         age.dimmed(),
         format!("(rev {})", input.rev).dimmed(),
     );
-    if input.days_old >= 3 {
-        println!(
-            "  {} run `{}` to advance the floor before re-checking",
-            "→".cyan(),
-            "cheni upgrade".bold()
-        );
-    }
+    // The upgrade tip is dropped here: when the floor is stale enough
+    // to matter (>= FLOOR_STALE_DAYS days), the stale-floor warning
+    // in print_summary_line already fired and mentioned this. Repeating
+    // it here would be redundant.
     println!();
 }
 
@@ -996,7 +992,7 @@ fn print_update_block(header: &str, updates: &[CheckResult], tag: &str, minor: b
 fn print_newer_block(newer: &[CheckResult]) {
     println!(
         "{} {}",
-        "Newer than nixpkgs".cyan().bold(),
+        "Ahead of nixpkgs-latest".cyan().bold(),
         "(installed > available — usually fine, often a pinned package):".dimmed()
     );
     for r in newer {
@@ -1015,7 +1011,7 @@ fn print_newer_block(newer: &[CheckResult]) {
 fn print_unknown_block(unknown: &[String]) {
     println!(
         "{} {}",
-        "Unknown to nixpkgs-latest".dimmed().bold(),
+        "Not in nixpkgs-latest".dimmed().bold(),
         "(no version data — package may not exist in nixpkgs):".dimmed()
     );
     for name in unknown {

@@ -5,6 +5,33 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## v0.8.0 — 2026-04-29
+
+### Breaking
+
+- **5 commandes supprimées** suite à un audit honnête de l'usage réel post-Phase 3 :
+  - `cheni snapshot` + `cheni restore` — multi-machine, l'utilisateur runne sur une machine seule
+  - `cheni promote` + `cheni demote` — flip pins ↔ freezes, 0 usage en pratique
+  - `cheni gc` — doublon avec `cheni history --keep N --gc` qui a maintenant les mêmes safety guards
+- ~600 LOC retirées + 4 design docs et 1 plan archivés.
+
+### Added
+
+- `cheni history --force` — opt-out du safety floor (`MIN_SAFETY_FLOOR=3`). Backporté de l'ex-`cheni gc`. `cheni history --keep 0` est désormais bloqué unconditionnement (refus de laisser 0 générations) ; `--keep N` avec `N < 3` exige `--force`.
+
+### Changed
+
+- `cheni check` UI labels : `Newer` → `Ahead`, `Unknown` → `Missing`. Sémantique self-explanatory : Ahead = tu es plus en avance que le floor (pin antérieur ou downgrade), Missing = pas dans nixpkgs-latest. JSON keys (`newer`, `unknown`) inchangées pour stabilité scripts.
+- `cheni check` stale-floor warning : raccourcie à une ligne. Tip "→ run cheni upgrade" dans le bloc nixpkgs floor supprimé quand la warning a déjà fired (doublon).
+- `cheni upgrade` : per-step success markers (`✓ done in Xs`) entre chaque phase pour distinguer "step 1 fini, step 2 démarre". Sur rebuild failure (step 3), affiche désormais où on est dans le flow et comment reprendre (`cheni build` rebuild-only, ou `cheni upgrade --yes` retry plein).
+- `cheni doctor` : `--fix` sur "Nix store size" route maintenant vers `cheni history --keep 20 --gc` (subprocess) au lieu de l'ex-`cheni gc`.
+
+### Internal
+
+- Safety guards (`MIN_SAFETY_FLOOR`, refus zero-gen) déplacés de gc vers history.
+- `today_iso()` dans `src/cmd/freeze.rs` repassée en privée (lifecycle était son seul autre consommateur).
+- Cheatsheet `--help` nettoyée : références à snapshot/promote retirées.
+
 ## v0.7.2 — 2026-04-29
 
 ### Added
