@@ -1,5 +1,72 @@
 use super::*;
 
+// --- resolve_remote_head (pure parsing path — no network) ---
+
+#[test]
+fn resolve_remote_head_returns_none_for_missing_input() {
+    // A flake.lock with no root inputs: the function must return Ok(None)
+    // rather than panic or error.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": { "inputs": {} }
+        },
+        "root": "root",
+        "version": 7
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string_pretty(&lock).expect("serialize"),
+    )
+    .expect("write");
+
+    let result = resolve_remote_head(dir.path(), "nixpkgs-latest");
+    // Must not error — the input simply isn't there.
+    assert!(result.is_ok(), "should return Ok even when input is absent");
+    assert!(result.unwrap().is_none(), "should return None for missing input");
+}
+
+#[test]
+fn resolve_remote_head_returns_none_for_unsupported_type() {
+    // A `tarball`-type input has no `owner`/`repo`/`ref` fields that can
+    // be reconstructed into a flakeref. resolve_remote_head must return
+    // Ok(None) without shelling out.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let lock = serde_json::json!({
+        "nodes": {
+            "root": {
+                "inputs": { "some-tarball": "some-tarball" }
+            },
+            "some-tarball": {
+                "locked": {
+                    "rev": "abcdef1234567890abcdef1234567890abcdef12",
+                    "narHash": "sha256-AAAA=",
+                    "type": "tarball",
+                    "url": "https://example.com/pkg.tar.gz"
+                },
+                "original": {
+                    "type": "tarball",
+                    "url": "https://example.com/pkg.tar.gz"
+                }
+            }
+        },
+        "root": "root",
+        "version": 7
+    });
+    std::fs::write(
+        dir.path().join("flake.lock"),
+        serde_json::to_string_pretty(&lock).expect("serialize"),
+    )
+    .expect("write");
+
+    let result = resolve_remote_head(dir.path(), "some-tarball");
+    assert!(result.is_ok(), "should return Ok for unsupported type");
+    assert!(
+        result.unwrap().is_none(),
+        "should return None for tarball-type input (unsupported)"
+    );
+}
+
 #[test]
 fn infrastructure_inputs_excluded() {
     // Core infrastructure (always excluded)
