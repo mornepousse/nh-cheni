@@ -57,7 +57,6 @@ pub(crate) struct Generation {
     /// Whether this is the currently active generation.
     pub(crate) is_current: bool,
     /// Path to the generation in the store.
-    #[allow(dead_code)] // read by cmd::history only today; kept on the shared struct.
     pub(crate) store_path: String,
     /// NixOS version label (e.g. "26.05.20260414.4bd9165").
     pub(crate) nixos_label: Option<String>,
@@ -784,7 +783,6 @@ pub(crate) fn pick_oldest_beyond(all: &[u32], keep: usize) -> Vec<u32> {
 /// Structured plan for "delete oldest N generations", with both
 /// kept and deleted IDs surfaced so callers can render an audit.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct PrunePlan {
     /// Generation IDs that would be deleted (oldest beyond `keep`).
     pub deleted_ids: Vec<u32>,
@@ -793,7 +791,6 @@ pub(crate) struct PrunePlan {
 }
 
 impl PrunePlan {
-    #[allow(dead_code)]
     pub fn kept_count(&self) -> usize {
         self.kept_ids.len()
     }
@@ -801,7 +798,6 @@ impl PrunePlan {
 
 /// Build a prune plan that keeps the `keep` most recent generations and
 /// schedules the rest for deletion. Pure function — no I/O.
-#[allow(dead_code)]
 pub(crate) fn plan_prune_keep_n(generations: &[Generation], keep: usize) -> PrunePlan {
     let all_ids: Vec<u32> = generations.iter().map(|g| g.number).collect();
     let deleted_ids = pick_oldest_beyond(&all_ids, keep);

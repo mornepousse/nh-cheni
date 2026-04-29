@@ -77,7 +77,7 @@ pub(crate) enum Phase {
 /// one-line edit, and we want every legitimate scope already
 /// reachable.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
+#[allow(dead_code)] // Variant set reserved for future patterns; adding one should be a one-liner.
 pub(crate) enum Scope {
     /// Any line, anywhere. Legacy behaviour (and the safe default
     /// when phase attribution is unreliable, e.g. disk-full).
