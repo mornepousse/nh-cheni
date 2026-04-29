@@ -5,30 +5,20 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
-## v0.6.0 — 2026-04-28
-
-### Breaking
-
-- **Sémantique de "newer"** — `cheni check` et `cheni search` comparent désormais à `nixpkgs-latest` (un input flake local), pas à Repology. Le delta affiché correspond exactement à ce qu'un `cheni pin` ou `cheni upgrade` peut effectivement faire. Voir
-  `docs/superpowers/specs/2026-04-28-quitter-repology-design.md` pour le rationale.
-
-### Removed
-
-- `src/api/` au complet (~1200 LOC) — client Repology + cache HTTP.
-- Toutes les références User-Agent Repology compliance.
+## v0.7.0 — 2026-04-28
 
 ### Added
 
 - `cheni audit` — health overview combiné (doctor + check + status) avec verdict-line, next-action tip, `--brief`, `--json`.
 - `cheni gc` — orchestrateur disk space avec safety guards (MIN_SAFETY_FLOOR=3, refuse 0 unconditionally), `--keep N`, `--dry-run`, `--yes`, `--brief`, `--force`.
 - `cheni clean --orphans` — supprime pins/freezes qu'aucun module ne déclare.
-- `cheni clean --cruft` — supprime `result*` symlinks dans flake_dir + truncate version-cache > 10 MiB.
+- `cheni clean --cruft` — supprime `result*` symlinks dans flake_dir + truncate version-cache > 10 MiB + truncate timeline > 10 MiB.
 - `cheni clean --all` — combine `--orphans` et `--cruft`.
 - `cheni promote <pkg>` — flip freeze → pin (libère pour reprendre les updates via nixpkgs-latest).
 - `cheni demote <pkg>` — flip pin → freeze (lock à la version installée).
 - `cheni snapshot [--out FILE]` — dump pins+freezes en JSON pour portabilité.
 - `cheni restore <FILE>` — applique un snapshot, replace state local.
-- `cheni timeline [--last/--package/--kind/--since/--json]` — operation log JSONL persistant dans `~/.cache/cheni/timeline.jsonl`. Records best-effort sur pin/unpin/freeze/unfreeze/promote/demote/restore.
+- `cheni timeline [--last/--package/--kind/--since/--json]` — operation log JSONL persistant dans `~/.cache/cheni/timeline.jsonl`. Records best-effort sur pin/unpin/freeze/unfreeze/promote/demote/restore/build/upgrade/rollback.
 - `--brief` flag sur `cheni check`, `cheni upgrade`, `cheni history` (mirror du pattern `doctor --brief` / `status --brief`).
 - `Example:` line dans le `--help` de toutes les sous-commandes (16 mises à jour).
 - KDE6 fallback : `nix::eval::eval_version` retry sous `kdePackages.<name>` si attr top-level absent.
@@ -42,9 +32,26 @@ semver.
 
 ### Internal
 
+- Nouveaux modules : `src/nix/timeline.rs`, `src/cmd/audit.rs`, `src/cmd/gc.rs`, `src/cmd/lifecycle.rs`, `src/cmd/snapshot.rs`, `src/cmd/timeline.rs`.
+- DRY : `nix::timeline::now_rfc3339` est l'helper RFC3339 crate-wide (snapshot reuse).
+- Audit `#[allow(dead_code)]` : 4 annotations stale retirées, 3 conservées avec commentaires précis.
+
+## v0.6.0 — 2026-04-28
+
+### Breaking
+
+- **Sémantique de "newer"** — `cheni check` et `cheni search` comparent désormais à `nixpkgs-latest` (un input flake local), pas à Repology. Le delta affiché correspond exactement à ce qu'un `cheni pin` ou `cheni upgrade` peut effectivement faire. Voir
+  `docs/superpowers/specs/2026-04-28-quitter-repology-design.md` pour le rationale.
+
+### Removed
+
+- `src/api/` au complet (~1200 LOC) — client Repology + cache HTTP.
+- Toutes les références User-Agent Repology compliance.
+
+### Internal
+
 - Nouveau cache local `~/.cache/cheni/version-cache.json` invalidé par changement de rev d'input flake (clé `(input-name, input-rev, attr)`).
-- Nouveaux modules : `src/nix/eval.rs`, `src/nix/version_cache.rs`, `src/nix/timeline.rs`, `src/cmd/audit.rs`, `src/cmd/gc.rs`, `src/cmd/lifecycle.rs`, `src/cmd/snapshot.rs`, `src/cmd/timeline.rs`.
-- ~30 commits, ~3500 LOC ajoutées nettes.
+- Nouveaux modules : `src/nix/eval.rs`, `src/nix/version_cache.rs`.
 
 ## Unreleased
 
