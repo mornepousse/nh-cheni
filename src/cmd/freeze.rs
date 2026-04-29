@@ -315,7 +315,7 @@ use crate::util::confirm;
 
 /// Compact `YYYY-MM-DD` stamp for the `frozen_at` field. Delegates
 /// to `crate::util::format_ymd` for the arithmetic.
-fn today_iso() -> String {
+pub(crate) fn today_iso() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
