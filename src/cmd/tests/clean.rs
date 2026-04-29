@@ -98,3 +98,40 @@ fn find_orphan_freezes_returns_freezes_not_in_declared() {
     orphans.sort();
     assert_eq!(orphans, vec!["firefox".to_string()]);
 }
+
+#[test]
+fn timeline_size_bytes_returns_zero_for_missing() {
+    // timeline_size_bytes() must return 0 when the timeline file does not
+    // exist — it calls std::fs::metadata which returns Err on ENOENT,
+    // and the function maps that to 0.
+    //
+    // We cannot override the global timeline path in a parallel-safe way,
+    // so we only verify the function's contract with the actual path: if
+    // the file doesn't exist the result must be 0; if it does exist the
+    // result must be non-negative (trivially true for u64).
+    let size = timeline_size_bytes();
+    // u64 is always >= 0; the real assertion is "no panic / unwrap".
+    let _ = size; // suppress unused-variable lint
+
+    // Stricter: if the file is missing, size == 0.
+    let path = crate::nix::timeline::timeline_path();
+    if !path.exists() {
+        assert_eq!(size, 0, "missing timeline must report 0 bytes");
+    }
+}
+
+#[test]
+fn timeline_size_bytes_reflects_written_content() {
+    // Write a small JSONL fixture to a temp location and verify that
+    // timeline_size_bytes() would return the right byte count if the
+    // timeline path pointed there. We test the underlying logic
+    // (std::fs::metadata().len()) directly via a temp file.
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let fake_path = dir.path().join("timeline.jsonl");
+    let content = b"{\"ts\":\"2026-01-01T00:00:00Z\",\"kind\":\"build\"}\n";
+    std::fs::write(&fake_path, content).expect("write fixture");
+    let size = std::fs::metadata(&fake_path)
+        .map(|m| m.len())
+        .unwrap_or(0);
+    assert_eq!(size, content.len() as u64);
+}

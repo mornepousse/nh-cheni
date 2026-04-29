@@ -602,7 +602,7 @@ pub fn read_input_locked(flake_dir: &Path, name: &str) -> Option<(String, String
 /// an unusual flake.lock shape produced by e.g. a path-type input).
 ///
 /// Currently used in tests only; kept as a public API for future callers.
-#[allow(dead_code)]
+#[allow(dead_code)] // Consumed by the test suite; the bin crate doesn't yet call it directly.
 pub fn read_input_rev(flake_dir: &Path, name: &str) -> Option<String> {
     let (rev, _nar_hash) = read_input_locked(flake_dir, name)?;
     debug!("read_input_rev: {} → {}", name, &rev[..rev.len().min(12)]);

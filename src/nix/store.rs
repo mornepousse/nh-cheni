@@ -193,10 +193,7 @@ fn extract_store_name(path: &str) -> Option<&str> {
 /// name against the currently-installed set. Returns a helpful
 /// "package not installed" error rather than a raw `None` so the
 /// caller can propagate it as-is.
-#[allow(dead_code)] // Consumed from the bin crate (cmd::*) only; the
-                    // lib crate doesn't see it but we keep the fn
-                    // here so tests exercising store parsing can
-                    // find the resolver next to its data.
+#[allow(dead_code)] // Consumed from the bin crate (cmd::*) only; the lib target doesn't see it.
 pub(crate) fn find_by_name(name: &str) -> anyhow::Result<StorePackage> {
     let store_packages = read_installed_packages()?;
     store_packages

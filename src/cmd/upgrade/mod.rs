@@ -191,6 +191,14 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
             elapsed.dimmed(),
         );
     }
+    crate::nix::timeline::record(
+        "upgrade",
+        None,
+        serde_json::json!({
+            "outcome": "success",
+            "duration_secs": started.elapsed().as_secs(),
+        }),
+    );
     Ok(())
 }
 
