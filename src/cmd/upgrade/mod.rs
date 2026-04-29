@@ -108,7 +108,15 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
     if !opts.brief {
         print_step(1, total_steps, step1_title);
     }
+    let step1_start = Instant::now();
     let context = flake_update::update_flake_inputs(&nix_config.flake_dir, opts.pins_only)?;
+    if !opts.brief {
+        println!(
+            "  {} done in {}s",
+            "✓".green().dimmed(),
+            step1_start.elapsed().as_secs().to_string().dimmed()
+        );
+    }
 
     // Anti-downgrade guard for the targeted refresh: if nixpkgs has
     // since caught up with (or moved past) nixpkgs-latest, applying
@@ -143,26 +151,65 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
     if !opts.brief {
         print_step(3, total_steps, step3_title);
     }
+    let step3_start = Instant::now();
     let rebuild_result = rebuild::rebuild_system(config_path, opts.boot);
     if !opts.brief {
         print_separator();
     }
     // In brief mode: surface the rebuild error with the one-liner verdict.
-    if let Err(e) = rebuild_result {
+    if let Err(ref e) = rebuild_result {
         let elapsed = crate::util::format_elapsed(started.elapsed());
+        if opts.brief {
+            println!(
+                "{} Upgrade failed: {} ({})",
+                "✗".red().bold(),
+                e,
+                elapsed.dimmed(),
+            );
+        } else {
+            println!(
+                "{} Upgrade failed at step 3 (rebuild): {} ({}s)",
+                "✗".red().bold(),
+                e,
+                step3_start.elapsed().as_secs()
+            );
+            println!(
+                "  {} Steps 1-2 completed (flake.lock is updated, preview confirmed).",
+                "→".dimmed()
+            );
+            println!(
+                "  {} Fix the build error and run `{}` to re-attempt the rebuild only.",
+                "→".dimmed(),
+                "cheni build".bold()
+            );
+            println!(
+                "  {} Or `{}` to retry the full flow.",
+                "→".dimmed(),
+                "cheni upgrade --yes".bold()
+            );
+        }
+        return Err(rebuild_result.unwrap_err());
+    }
+    if !opts.brief {
         println!(
-            "{} Upgrade failed: {} ({})",
-            "✗".red().bold(),
-            e,
-            elapsed.dimmed(),
+            "  {} rebuild succeeded in {}s",
+            "✓".green().dimmed(),
+            step3_start.elapsed().as_secs().to_string().dimmed()
         );
-        return Err(e);
     }
 
     if !opts.brief {
         print_step(4, total_steps, "Checking obsolete pins");
     }
+    let step4_start = Instant::now();
     cleanup::run_pin_cleanup_step(&nix_config.flake_dir, opts.no_clean_pins)?;
+    if !opts.brief {
+        println!(
+            "  {} done in {}s",
+            "✓".green().dimmed(),
+            step4_start.elapsed().as_secs().to_string().dimmed()
+        );
+    }
 
     if opts.gc {
         if !opts.brief {
