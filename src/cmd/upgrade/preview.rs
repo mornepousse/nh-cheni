@@ -264,8 +264,15 @@ fn print_section_from_changes(
     } else {
         println!("{} ({}):", head, header.dimmed());
     }
+    let is_build_section = matches!(glyph_color, Color::Yellow);
     for change in packages.iter().take(display_limit) {
-        println!("    {}", format_change(change));
+        let line = format_change(change);
+        let warn = if is_build_section && is_heavy_build(&change.name) {
+            format!("  {} {}", "⚠".yellow(), "slow build".yellow().dimmed())
+        } else {
+            String::new()
+        };
+        println!("    {}{}", line, warn);
     }
     if packages.len() > display_limit {
         let remaining = packages.len() - display_limit;
@@ -522,6 +529,28 @@ pub(super) fn build_changes(
             }
         })
         .collect()
+}
+
+/// Names known to take 30-60+ minutes to build from source. When one
+/// of these shows up in the "to build locally" section of an upgrade
+/// preview, the user benefits from seeing it flagged BEFORE confirming
+/// — they may want to abort and pin/freeze the puller instead.
+///
+/// Substring match: `rusty-v8` matches `rusty-v8-147.2.1`. Add new
+/// entries here as the user encounters them in the wild.
+pub(crate) const HEAVY_BUILD_NAMES: &[&str] = &[
+    "rusty-v8",
+    "chromium-unwrapped",
+    "electron-unwrapped",
+    "webkitgtk",
+    "llvm-from-source",
+    "qtwebengine",
+];
+
+/// Whether `name` matches a known heavy-build pattern. Pure helper for
+/// testability.
+pub(crate) fn is_heavy_build(name: &str) -> bool {
+    HEAVY_BUILD_NAMES.iter().any(|p| name.contains(p))
 }
 
 /// Render a single change as a one-liner. `major` bumps get a yellow
