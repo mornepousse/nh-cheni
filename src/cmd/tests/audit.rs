@@ -14,6 +14,8 @@ fn empty_report() -> AuditReport {
         },
         verdict: AuditVerdict::Clear,
         next_action: None,
+        nixpkgs_days_old: None,
+        floor_was_refreshed: false,
     }
 }
 
@@ -126,4 +128,33 @@ fn brief_signals_lists_pending_updates() {
         .find(|s| s.contains("updates"))
         .expect("la ligne 'updates' doit être présente dans les signaux");
     assert!(updates_line.contains("3 pending")); // 2 minor + 1 flake-input
+}
+
+// --- Tests pour should_warn_stale_floor ---
+
+#[test]
+fn should_warn_stale_floor_none_days_is_false() {
+    assert!(!should_warn_stale_floor(None, false));
+}
+
+#[test]
+fn should_warn_stale_floor_below_threshold_is_false() {
+    assert!(!should_warn_stale_floor(Some(0), false));
+    assert!(!should_warn_stale_floor(Some(1), false));
+    assert!(!should_warn_stale_floor(Some(2), false));
+}
+
+#[test]
+fn should_warn_stale_floor_at_and_above_threshold_is_true() {
+    assert!(should_warn_stale_floor(Some(3), false));
+    assert!(should_warn_stale_floor(Some(10), false));
+    assert!(should_warn_stale_floor(Some(30), false));
+}
+
+#[test]
+fn should_warn_stale_floor_suppressed_when_refreshed() {
+    // Même avec un floor très vieux, le flag refreshed doit inhiber le warning.
+    assert!(!should_warn_stale_floor(Some(99), true));
+    assert!(!should_warn_stale_floor(Some(3), true));
+    assert!(!should_warn_stale_floor(None, true));
 }

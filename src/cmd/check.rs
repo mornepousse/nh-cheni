@@ -345,9 +345,13 @@ pub(crate) fn resolve_brief_mode(json: bool, brief: bool) -> bool {
 /// Runs the same eval batch + flake-input probe as `run()`, but returns
 /// a structured [`crate::cmd::audit::UpdatesReport`] instead of printing.
 /// The spinner is suppressed via `brief=true` so the function is silent.
-/// The existing `run()` surface is unchanged.
+///
+/// When `override_floor` is `Some((rev, narHash))`, the eval batch uses
+/// those values instead of the locked ones — this is the mechanism behind
+/// `cheni audit --refresh-floor`. Pass `None` to use the locked rev.
 pub(crate) async fn collect_updates(
     nix_config: &config::NixConfig,
+    override_floor: Option<(String, String)>,
 ) -> anyhow::Result<crate::cmd::audit::UpdatesReport> {
     let Some(mut scan) = gather_packages_to_check(nix_config, None)? else {
         return Ok(crate::cmd::audit::UpdatesReport::default());
@@ -356,9 +360,8 @@ pub(crate) async fn collect_updates(
     let frozen_rows = split_out_frozen(&mut scan.packages, &current_freezes);
 
     // json=false, brief=true — silences the spinner without altering eval.
-    // override_floor=None — collect_updates always uses the locked rev.
     let (lookup_map, flake_inputs) =
-        fetch_updates_concurrently(nix_config, &scan, false, true, None).await?;
+        fetch_updates_concurrently(nix_config, &scan, false, true, override_floor).await?;
 
     let classification = classify_lookups(
         &scan.packages,

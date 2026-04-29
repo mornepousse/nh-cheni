@@ -106,6 +106,12 @@ enum Commands {
         /// Output structured JSON for scripts.
         #[arg(long)]
         json: bool,
+
+        /// Peek at what HEAD remote would yield without updating flake.lock.
+        /// Hits the network. Suppresses the stale-floor warning since the
+        /// verdict is already against real remote data.
+        #[arg(long)]
+        refresh_floor: bool,
     },
 
     /// Show available package updates (nixpkgs + flake inputs)
@@ -625,8 +631,8 @@ async fn resolve_command(cmd: Option<Commands>) -> Result<Option<Commands>> {
 /// for everything cheni can do.
 async fn dispatch(command: Commands) -> Result<()> {
     match command {
-        Commands::Audit { brief, json } => {
-            cmd::audit::run(cmd::audit::AuditOptions { brief, json }).await?;
+        Commands::Audit { brief, json, refresh_floor } => {
+            cmd::audit::run(cmd::audit::AuditOptions { brief, json, refresh_floor }).await?;
             Ok(())
         }
         Commands::Check { category, details, json, refresh, pending, brief, refresh_floor } => {
