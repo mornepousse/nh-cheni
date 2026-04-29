@@ -46,6 +46,7 @@ pub fn unfreeze_one(name: &str, yes: bool) -> Result<()> {
         // Race window: someone else removed the freeze between read and write.
         println!("'{}' was not frozen.", name);
     } else {
+        crate::nix::timeline::record("unfreeze", Some(name), serde_json::json!({}));
         println!("{} Unfroze {}.", "✓".green(), name.bold());
         println!("Run '{}' to apply.", "cheni build".bold());
     }
@@ -93,6 +94,9 @@ pub fn unfreeze_all(yes: bool) -> Result<()> {
     }
 
     let count = freezes::clear(&nix_config.flake_dir)?;
+    for name in current.keys() {
+        crate::nix::timeline::record("unfreeze", Some(name), serde_json::json!({}));
+    }
     println!(
         "{} Removed {} {}.",
         "✓".green(),

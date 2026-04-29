@@ -145,6 +145,7 @@ pub async fn pin_one(name: &str, force: bool) -> Result<()> {
     if added.is_empty() {
         println!("{} was already pinned.", name);
     } else {
+        crate::nix::timeline::record("pin", Some(name), serde_json::json!({}));
         println!("\n{} Pinned {}.", "✓".green(), name.bold());
     }
     println!("Run '{}' to apply.", "cheni build".bold());
@@ -524,6 +525,7 @@ pub fn unpin_one(name: &str, yes: bool) -> Result<()> {
         // Race condition: pin disappeared between the read and the remove.
         println!("'{}' was not pinned.", name);
     } else {
+        crate::nix::timeline::record("unpin", Some(name), serde_json::json!({}));
         println!("{} Unpinned {}.", "✓".green(), name.bold());
         println!("Run '{}' to apply.", "cheni build".bold());
     }
@@ -581,6 +583,9 @@ pub fn unpin_all(yes: bool) -> Result<()> {
     }
 
     let count = pins::clear(&nix_config.flake_dir)?;
+    for name in &current_pins {
+        crate::nix::timeline::record("unpin", Some(name), serde_json::json!({}));
+    }
     println!("{} Removed {} {}.", "✓".green(), count.to_string().bold(), crate::util::pluralize(count, "pin"));
     println!("Run '{}' to apply.", "cheni build".bold());
     Ok(())
