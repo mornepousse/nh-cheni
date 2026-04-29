@@ -196,6 +196,27 @@ fn run_orphans_phase(nix_config: &config::NixConfig, yes: bool) -> Result<()> {
 /// and `cheni clean --cruft` proposes truncation.
 pub(crate) const VERSION_CACHE_TRUNCATE_THRESHOLD: u64 = 10 * 1024 * 1024;
 
+/// Threshold above which the timeline file is considered oversized
+/// and `cheni clean --cruft` proposes truncation.
+/// Kept separate from `VERSION_CACHE_TRUNCATE_THRESHOLD` so each can
+/// drift independently as usage patterns differ.
+pub(crate) const TIMELINE_TRUNCATE_THRESHOLD: u64 = 10 * 1024 * 1024;
+
+/// Returns the size in bytes of the timeline file, or 0 if missing.
+pub(crate) fn timeline_size_bytes() -> u64 {
+    let path = crate::nix::timeline::timeline_path();
+    std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// Truncates the timeline by removing the file.
+fn apply_truncate_timeline() -> Result<()> {
+    let path = crate::nix::timeline::timeline_path();
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
 /// Returns the paths of `result*` symlinks in `flake_dir`.
 pub(crate) fn find_result_symlinks(flake_dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(flake_dir) else {
@@ -249,8 +270,10 @@ fn run_cruft_phase(nix_config: &config::NixConfig, yes: bool) -> Result<()> {
     let symlinks = find_result_symlinks(&nix_config.flake_dir);
     let cache_size = version_cache_size_bytes();
     let cache_oversized = cache_size > VERSION_CACHE_TRUNCATE_THRESHOLD;
+    let timeline_size = timeline_size_bytes();
+    let timeline_oversized = timeline_size > TIMELINE_TRUNCATE_THRESHOLD;
 
-    if symlinks.is_empty() && !cache_oversized {
+    if symlinks.is_empty() && !cache_oversized && !timeline_oversized {
         println!("{} No cruft to clean.", "✓".green());
         return Ok(());
     }
@@ -274,6 +297,17 @@ fn run_cruft_phase(nix_config: &config::NixConfig, yes: bool) -> Result<()> {
     } else if cache_size > 0 {
         let mib = cache_size as f64 / (1024.0 * 1024.0);
         println!("  Version cache: {:.1} MiB (below threshold, kept).", mib);
+    }
+    if timeline_oversized {
+        let mib = timeline_size as f64 / (1024.0 * 1024.0);
+        println!(
+            "  Timeline: {:.1} MiB (over the {} MiB threshold).",
+            mib,
+            TIMELINE_TRUNCATE_THRESHOLD / (1024 * 1024)
+        );
+    } else if timeline_size > 0 {
+        let mib = timeline_size as f64 / (1024.0 * 1024.0);
+        println!("  Timeline: {:.1} MiB (below threshold, kept).", mib);
     }
 
     let proceed = if yes {
@@ -302,6 +336,10 @@ fn run_cruft_phase(nix_config: &config::NixConfig, yes: bool) -> Result<()> {
     if cache_oversized {
         apply_truncate_version_cache()?;
         println!("{} Truncated version cache.", "✓".green());
+    }
+    if timeline_oversized {
+        apply_truncate_timeline()?;
+        println!("{} Truncated timeline.", "✓".green());
     }
     Ok(())
 }
