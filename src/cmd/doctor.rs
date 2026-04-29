@@ -118,10 +118,6 @@ pub(crate) fn fix_fn_for(name: &str) -> Option<fn() -> Result<()>> {
 /// Prompt the user to apply the fix for `check`, then run it if confirmed.
 /// Unknown check names print "(no automated fix — apply the hint manually)".
 ///
-/// `s for skip-all` is documented in the prompt but is NOT implemented as a
-/// session-wide skip state — accepting `s` just skips the current prompt,
-/// which is the same as pressing N. Keeping the prompt string consistent
-/// with the spec while staying simple.
 fn apply_fix_interactively(check: &CheckResult) {
     use colored::Colorize;
     use dialoguer::{theme::ColorfulTheme, Confirm};
@@ -131,12 +127,9 @@ fn apply_fix_interactively(check: &CheckResult) {
         return;
     };
 
-    if let Some(hint) = &check.hint {
-        println!("  {} {}", "?".cyan(), hint);
-    }
-
+    // The hint was already printed by `print_check` above; don't repeat it.
     let go = Confirm::with_theme(&ColorfulTheme::default())
-        .with_prompt("Apply fix? [y/N/s for skip-all]")
+        .with_prompt("  Apply fix?")
         .default(false)
         .interact();
 
