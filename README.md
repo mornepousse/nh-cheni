@@ -254,12 +254,7 @@ session boundaries:
 | Command                        | What it does                                              |
 |--------------------------------|-----------------------------------------------------------|
 | `cheni audit`                  | Combined health overview (doctor + check + status) with verdict-line and next-action tip; `--brief`, `--json` |
-| `cheni gc`                     | Disk-space orchestrator with safety guards; `--keep N`, `--dry-run`, `--yes`, `--force` |
-| `cheni promote <pkg>`          | Flip a freeze → pin (release the lock, take updates from `nixpkgs-latest`) |
-| `cheni demote <pkg>`           | Flip a pin → freeze (lock at the currently-installed version) |
-| `cheni snapshot [--out FILE]`  | Dump pins+freezes to JSON for portability across machines |
-| `cheni restore <FILE>`         | Apply a snapshot, replacing the local pin/freeze state    |
-| `cheni timeline`               | Append-only operation log (pin/unpin/freeze/.../restore); `--last`, `--package`, `--kind`, `--since`, `--json` |
+| `cheni timeline`               | Append-only operation log (pin/unpin/freeze/build/upgrade/...); `--last`, `--package`, `--kind`, `--since`, `--json` |
 
 `audit` is the recommended single entry-point for "what's the state of
 this machine". `timeline` answers "what changed and when" across
