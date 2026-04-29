@@ -139,6 +139,13 @@ enum Commands {
         /// Useful for scripts. --json overrides --brief.
         #[arg(long)]
         brief: bool,
+
+        /// Peek at what HEAD remote would yield without updating flake.lock.
+        /// Hits the network — slow on cold cache. Use to see what `cheni upgrade`
+        /// would actually pull before committing. Suppresses the stale-floor
+        /// warning (the verdict is already against real remote data).
+        #[arg(long)]
+        refresh_floor: bool,
     },
 
     /// Pin a package (or list active pins when called with no arguments)
@@ -622,8 +629,8 @@ async fn dispatch(command: Commands) -> Result<()> {
             cmd::audit::run(cmd::audit::AuditOptions { brief, json }).await?;
             Ok(())
         }
-        Commands::Check { category, details, json, refresh, pending, brief } => {
-            cmd::check::run(category.as_deref(), details, json, refresh, pending, brief).await
+        Commands::Check { category, details, json, refresh, pending, brief, refresh_floor } => {
+            cmd::check::run(category.as_deref(), details, json, refresh, pending, brief, refresh_floor).await
         }
         Commands::Pin { package, category, flakes, force } => {
             dispatch_pin(package, category, flakes, force).await

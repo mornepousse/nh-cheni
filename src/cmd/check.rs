@@ -71,6 +71,9 @@ struct JsonSummary {
 /// If `category` is Some, only show packages from that module directory.
 /// If `brief` is true, only the verdict line is printed (no spinner, no
 /// details). `json` overrides `brief` — machine output is unambiguous.
+/// If `refresh_floor` is true, resolve the HEAD rev+narHash of
+/// `nixpkgs-latest` from the remote before evaluating, suppressing the
+/// stale-floor warning (the verdict is already real).
 pub async fn run(
     category: Option<&str>,
     details: bool,
@@ -78,6 +81,7 @@ pub async fn run(
     refresh: bool,
     pending: bool,
     brief: bool,
+    refresh_floor: bool,
 ) -> Result<()> {
     // --json always wins over --brief (machine output is unambiguous).
     let brief = resolve_brief_mode(json, brief);
@@ -109,8 +113,46 @@ pub async fn run(
     let current_freezes = freezes::read(&nix_config.flake_dir)?;
     let frozen_rows = split_out_frozen(&mut scan.packages, &current_freezes);
 
+    // When --refresh-floor is requested, probe the remote HEAD of
+    // nixpkgs-latest before starting the eval batch so the eval uses
+    // the fresh rev+narHash instead of the locked one. On failure we
+    // fall back silently and use the locked rev (same as without the flag).
+    let override_floor: Option<(String, String)> = if refresh_floor {
+        if !json && !brief {
+            println!("{}", "(refreshing nixpkgs-latest floor from remote…)".dimmed());
+        }
+        match flake::resolve_remote_head(&nix_config.flake_dir, "nixpkgs-latest") {
+            Ok(Some(pair)) => Some(pair),
+            Ok(None) => {
+                if !json {
+                    println!(
+                        "{}",
+                        "warning: couldn't refresh floor — using locked rev instead.".yellow()
+                    );
+                }
+                None
+            }
+            Err(e) => {
+                debug!("resolve_remote_head error: {:#}", e);
+                if !json {
+                    println!(
+                        "{}",
+                        "warning: couldn't refresh floor — using locked rev instead.".yellow()
+                    );
+                }
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Whether the floor was actually refreshed from remote (vs locked).
+    let floor_was_refreshed = refresh_floor && override_floor.is_some();
+
     print_check_header(&scan, category, json, brief);
-    let (lookup_map, flake_inputs) = fetch_updates_concurrently(&nix_config, &scan, json, brief).await?;
+    let (lookup_map, flake_inputs) =
+        fetch_updates_concurrently(&nix_config, &scan, json, brief, override_floor).await?;
 
     let classification = classify_lookups(
         &scan.packages,
@@ -128,7 +170,13 @@ pub async fn run(
     // "no updates available" from "behind reality by 12 days".
     let nixpkgs_age = flake::read_input_by_name(&nix_config.flake_dir, "nixpkgs");
 
-    let floor_days_old = nixpkgs_age.as_ref().map(|i| i.days_old);
+    // When the floor was refreshed, suppress the stale-floor warning:
+    // the verdict already reflects reality, so the warning is misleading.
+    let floor_days_old = if floor_was_refreshed {
+        None
+    } else {
+        nixpkgs_age.as_ref().map(|i| i.days_old)
+    };
 
     if json {
         print_json(&classification, &visible_flake_inputs, &frozen_rows)?;
@@ -144,6 +192,7 @@ pub async fn run(
             category,
             details,
             nixpkgs_age.as_ref(),
+            floor_was_refreshed,
         );
     }
 
@@ -307,8 +356,9 @@ pub(crate) async fn collect_updates(
     let frozen_rows = split_out_frozen(&mut scan.packages, &current_freezes);
 
     // json=false, brief=true — silences the spinner without altering eval.
+    // override_floor=None — collect_updates always uses the locked rev.
     let (lookup_map, flake_inputs) =
-        fetch_updates_concurrently(nix_config, &scan, false, true).await?;
+        fetch_updates_concurrently(nix_config, &scan, false, true, None).await?;
 
     let classification = classify_lookups(
         &scan.packages,
@@ -482,11 +532,16 @@ fn print_check_header(scan: &PackagesToCheck, category: Option<&str>, json: bool
 /// starts cleanly.
 ///
 /// In `brief` mode the spinner is not started (no progress output).
+///
+/// When `override_floor` is `Some((rev, narHash))`, the eval batch uses
+/// those values instead of the locked ones from `read_input_locked`.
+/// This is the mechanism behind `--refresh-floor`.
 async fn fetch_updates_concurrently(
     nix_config: &config::NixConfig,
     scan: &PackagesToCheck,
     json: bool,
     brief: bool,
+    override_floor: Option<(String, String)>,
 ) -> Result<(HashMap<String, Option<String>>, Vec<flake::FlakeInput>)> {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -527,7 +582,10 @@ async fn fetch_updates_concurrently(
 
             let cache_path = cache_path();
             let mut cache = VersionCache::load(&cache_path).unwrap_or_default();
-            let locked = read_input_locked(&flake_dir_for_eval, "nixpkgs-latest");
+            // Use the override (remote HEAD) when provided, otherwise fall
+            // back to the locked rev from flake.lock.
+            let locked = override_floor
+                .or_else(|| read_input_locked(&flake_dir_for_eval, "nixpkgs-latest"));
 
             let mut out: HashMap<String, Option<String>> = HashMap::with_capacity(names.len());
             for name in names {
@@ -744,9 +802,16 @@ fn print_human(
     category: Option<&str>,
     details: bool,
     nixpkgs: Option<&flake::FlakeInput>,
+    floor_was_refreshed: bool,
 ) {
     // Verdict first — skim-readers see the outcome before the detail blocks.
-    let floor_days_old = nixpkgs.map(|i| i.days_old);
+    // Suppress the stale-floor warning when --refresh-floor was used: the
+    // eval is already against remote HEAD, so the verdict is real.
+    let floor_days_old = if floor_was_refreshed {
+        None
+    } else {
+        nixpkgs.map(|i| i.days_old)
+    };
     print_summary_line(c, frozen_rows.len(), floor_days_old);
     println!();
 

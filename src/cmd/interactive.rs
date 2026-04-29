@@ -307,7 +307,7 @@ fn build_menu() -> Vec<MenuEntry> {
 async fn dispatch(action: Action) -> Result<()> {
     let theme = ColorfulTheme::default();
     match action {
-        Action::Check => super::check::run(None, false, false, false, false, false).await?,
+        Action::Check => super::check::run(None, false, false, false, false, false, false).await?,
         Action::Upgrade => super::upgrade::run(default_upgrade_options(false))?,
         Action::UpgradePinsOnly => super::upgrade::run(default_upgrade_options(true))?,
         Action::PinPackage => dispatch_pin_package(&theme).await?,

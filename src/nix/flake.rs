@@ -669,6 +669,161 @@ pub fn target_system() -> &'static str {
     }
 }
 
+/// Resolve the HEAD rev + narHash of a flake input's tracked ref from
+/// the remote, WITHOUT updating flake.lock. Reads the input's `original`
+/// reference from the lock, reconstructs a flakeref, and runs
+/// `nix flake metadata --refresh --json` against it.
+///
+/// Hits the network. Returns None if the input isn't in flake.lock,
+/// the flakeref can't be reconstructed, or the metadata call fails.
+///
+/// Used by `cheni check --refresh-floor` to peek at what an `upgrade`
+/// would bring without committing to it.
+pub fn resolve_remote_head(
+    flake_dir: &Path,
+    input_name: &str,
+) -> Result<Option<(String, String)>> {
+    let lock_path = flake_dir.join("flake.lock");
+    let content = std::fs::read_to_string(&lock_path)
+        .with_context(|| format!("Failed to read {}", lock_path.display()))?;
+    let lock: serde_json::Value =
+        serde_json::from_str(&content).context("Failed to parse flake.lock")?;
+
+    let nodes = lock
+        .get("nodes")
+        .and_then(|n| n.as_object())
+        .context("No 'nodes' in flake.lock")?;
+    let root_inputs = nodes
+        .get("root")
+        .and_then(|r| r.get("inputs"))
+        .and_then(|i| i.as_object())
+        .context("No root inputs in flake.lock")?;
+
+    // Resolve indirection: root.inputs[name] may be a string pointing to
+    // the actual node name.
+    let node_name = root_inputs
+        .get(input_name)
+        .and_then(|v| v.as_str())
+        .unwrap_or(input_name);
+
+    let Some(node) = nodes.get(node_name) else {
+        debug!("resolve_remote_head: input '{}' not found in nodes", input_name);
+        return Ok(None);
+    };
+
+    let Some(original) = node.get("original") else {
+        debug!("resolve_remote_head: input '{}' has no 'original' field", input_name);
+        return Ok(None);
+    };
+
+    let repo_type = original.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    let flakeref = match repo_type {
+        "github" => {
+            let owner = original.get("owner").and_then(|v| v.as_str()).unwrap_or("");
+            let repo = original.get("repo").and_then(|v| v.as_str()).unwrap_or("");
+            if owner.is_empty() || repo.is_empty() {
+                debug!("resolve_remote_head: missing owner/repo for github input '{}'", input_name);
+                return Ok(None);
+            }
+            match original.get("ref").and_then(|v| v.as_str()) {
+                Some(r) if !r.is_empty() => format!("github:{}/{}/{}", owner, repo, r),
+                _ => format!("github:{}/{}", owner, repo),
+            }
+        }
+        "gitlab" => {
+            let owner = original.get("owner").and_then(|v| v.as_str()).unwrap_or("");
+            let repo = original.get("repo").and_then(|v| v.as_str()).unwrap_or("");
+            if owner.is_empty() || repo.is_empty() {
+                debug!("resolve_remote_head: missing owner/repo for gitlab input '{}'", input_name);
+                return Ok(None);
+            }
+            match original.get("ref").and_then(|v| v.as_str()) {
+                Some(r) if !r.is_empty() => format!("gitlab:{}/{}/{}", owner, repo, r),
+                _ => format!("gitlab:{}/{}", owner, repo),
+            }
+        }
+        "git" => {
+            let url = original.get("url").and_then(|v| v.as_str()).unwrap_or("");
+            if url.is_empty() {
+                debug!("resolve_remote_head: missing url for git input '{}'", input_name);
+                return Ok(None);
+            }
+            match original.get("ref").and_then(|v| v.as_str()) {
+                Some(r) if !r.is_empty() => format!("git+{}?ref={}", url, r),
+                _ => format!("git+{}", url),
+            }
+        }
+        other => {
+            debug!(
+                "resolve_remote_head: unsupported input type '{}' for '{}' — skipping",
+                other, input_name
+            );
+            return Ok(None);
+        }
+    };
+
+    debug!("resolve_remote_head: querying remote for '{}' via '{}'", input_name, flakeref);
+
+    let output = std::process::Command::new("nix")
+        .args([
+            "flake",
+            "metadata",
+            "--refresh",
+            "--json",
+            &flakeref,
+        ])
+        .output()
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
+
+    if !output.status.success() {
+        debug!(
+            "resolve_remote_head: `nix flake metadata --refresh --json {}` failed: {}",
+            flakeref,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8(output.stdout)
+        .context("`nix flake metadata` produced non-UTF-8 output")?;
+    let parsed: serde_json::Value = match serde_json::from_str(&stdout) {
+        Ok(v) => v,
+        Err(e) => {
+            debug!("resolve_remote_head: failed to parse metadata JSON: {}", e);
+            return Ok(None);
+        }
+    };
+
+    let locked = parsed.get("locked");
+    let rev = locked
+        .and_then(|l| l.get("rev"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let nar_hash = locked
+        .and_then(|l| l.get("narHash"))
+        .and_then(|v| v.as_str())
+        .map(String::from);
+
+    match (rev, nar_hash) {
+        (Some(rev), Some(nar_hash)) => {
+            debug!(
+                "resolve_remote_head: '{}' remote HEAD → rev {}…, narHash {}…",
+                input_name,
+                &rev[..rev.len().min(12)],
+                &nar_hash[..nar_hash.len().min(20)],
+            );
+            Ok(Some((rev, nar_hash)))
+        }
+        _ => {
+            debug!(
+                "resolve_remote_head: metadata for '{}' missing rev or narHash",
+                input_name
+            );
+            Ok(None)
+        }
+    }
+}
+
 /// Eval `nixpkgs` pinned at `rev` + `nar_hash` and return the `.version`
 /// attribute of a named package. Used by the freeze-refresh pass to
 /// learn "what version of kicad does today's nixpkgs actually ship?"
