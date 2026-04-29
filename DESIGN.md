@@ -17,7 +17,10 @@ with any flake-based NixOS configuration.
 1. **CLI-first** — every feature is a command, scriptable, composable. TUI later as a visual layer on top
 2. **Config-integrated** — works WITH the user's flake, modifies it intelligently. The config is the source of truth
 3. **Non-destructive** — always preview before applying, easy rollback, auto-cleanup
-4. **Lightweight** — no nixpkgs evaluation for simple operations (Repology API + cache)
+4. **Lightweight** — version comparisons go through `nix eval --raw`
+   against a second flake input (`nixpkgs-latest`), with a
+   content-addressed local cache keyed on input rev. No third-party
+   API, no name-mapping table, no rate limit to negotiate.
 5. **Community-ready** — clean code, no hardcoded paths, works on any flake-based NixOS setup
 
 ## How it works
@@ -249,32 +252,34 @@ cheni finds the NixOS config in this order:
 Hostname is detected via `hostname` command and matched against
 `nixosConfigurations` in the flake. If no match, cheni asks the user.
 
-## Package Name Resolution
+## Version Resolution
 
-Store names don't always map cleanly to Repology projects, and Repology
-projects can contain many entries for the same nixpkgs channel. Two
-related problems, two distinct passes:
+Version comparison is "what does `nixpkgs-latest` say this attr
+evaluates to right now?". Implementation in `src/nix/eval.rs`:
 
-**Project lookup** — picking the right Repology project URL:
-1. Apply the small `NAME_MAPPINGS` table for known oddballs (Qt 6
-   sub-packages → `qt`, terminal emulator name conflicts, etc.)
-2. Otherwise try the store name directly. ~80% of packages just work.
-3. On 404 → classified as "Unknown" (visible with `--details`).
+```
+nix eval --raw 'nixpkgs-latest#<attr>.version'
+```
 
-**Entry selection** — once we've fetched the project page, picking the
-right nix entry from it. The page can contain firefox + firefox-esr +
-firefox-bin + firefox-mobile (all `visiblename: "firefox"`), or
-`kdePackages.breeze-icons` + `libsForQt5.breeze-icons`. Cascade:
-1. If the caller passed an installed-version hint, prefer the entry
-   whose version matches exactly, then by major.
-2. Otherwise, name-match by `srcname` → `binname` → `visiblename`.
-3. Filter pre-release versions (`3.15.0a7`, `2.0-beta1`, ...) when
-   the installed version is stable — Repology often returns the
-   alpha/rc as "latest" otherwise.
+The flake input `nixpkgs-latest` is added by `cheni init` and lives
+alongside the user's regular `nixpkgs` input. Eval is content-addressed
+through `builtins.fetchTree` once the input is locked, so a cold cache
+hit is one fetch, then pure compute.
 
-Results are cached on disk (`~/.cache/cheni/versions.json`, 1h TTL,
-written atomically). `cheni check --refresh` wipes the cache to force
-re-fetch.
+**Attr resolution** — store names usually match top-level attrs
+directly. When they don't:
+1. Try the package name as a top-level attr.
+2. On miss, retry under `kdePackages.<name>` (KDE 6 packages live
+   under that scope as of nixpkgs 24.11).
+3. Anything still unresolved is classified as "Unknown" and surfaced
+   under `cheni check --details`.
+
+**Local cache** — `~/.cache/cheni/version-cache.json`, atomic writes
+via `util::atomic_write`. Keyed on `(input-name, input-rev, attr)`,
+so a `nix flake update` of `nixpkgs-latest` automatically invalidates
+every entry tied to the old rev — no TTL, no manual refresh.
+`cheni check --refresh` clears the cache. `cheni clean --cruft`
+truncates the cache when it crosses 10 MiB.
 
 ## Pin Auto-Cleanup
 
@@ -302,14 +307,19 @@ cheni/
 │   │   ├── pin.rs           # cheni pin / unpin
 │   │   ├── freeze.rs        # cheni freeze (hold at current version)
 │   │   ├── unfreeze.rs      # cheni unfreeze (release a freeze)
-│   │   ├── upgrade.rs       # cheni upgrade (full system + --pins-only mode)
+│   │   ├── upgrade/         # cheni upgrade (full system + --pins-only mode)
 │   │   ├── build.rs         # cheni build (rebuild + error parsing)
 │   │   ├── init.rs          # cheni init
 │   │   ├── status.rs        # cheni status
 │   │   ├── doctor.rs        # cheni doctor (health checks)
+│   │   ├── audit.rs         # cheni audit (combined doctor+check+status)
+│   │   ├── gc.rs            # cheni gc (disk-space orchestrator)
 │   │   ├── search.rs        # cheni search (nix search wrapper)
 │   │   ├── why.rs           # cheni why (find declaring .nix file)
-│   │   ├── clean.rs         # cheni clean (obsolete pins)
+│   │   ├── clean.rs         # cheni clean (obsolete pins / orphans / cruft)
+│   │   ├── lifecycle.rs     # cheni promote / demote (flip pin↔freeze)
+│   │   ├── snapshot.rs      # cheni snapshot / restore (export/import state)
+│   │   ├── timeline.rs      # cheni timeline (operation log reader)
 │   │   ├── self_update.rs   # cheni self-update (verifies signature)
 │   │   ├── verify.rs        # cheni verify (read-only signature check)
 │   │   ├── diagnose.rs      # cheni diagnose (clarify rebuild logs)
@@ -326,16 +336,15 @@ cheni/
 │   │   ├── flake.rs         # Parse flake.lock, check remote inputs
 │   │   ├── pins.rs          # Read/write package-pins.json
 │   │   ├── freezes.rs       # Read/write package-freezes.json
+│   │   ├── eval.rs          # nix eval --raw against nixpkgs-latest
+│   │   ├── version_cache.rs # ~/.cache/cheni/version-cache.json
+│   │   ├── timeline.rs      # ~/.cache/cheni/timeline.jsonl writer
+│   │   ├── git.rs           # is_flake_lock_dirty, repo helpers
 │   │   ├── gc.rs            # nix-collect-garbage --dry-run preview
 │   │   ├── tools.rs         # Friendly ENOENT → install-hint mapper
 │   │   └── tests/           # unit tests per nix module
-│   ├── api/                 # External data sources
-│   │   ├── mod.rs
-│   │   ├── repology.rs      # Repology API client (rate-limited)
-│   │   ├── cache.rs         # On-disk cache (~/.cache/cheni)
-│   │   └── tests/           # unit tests per api module
-│   ├── http.rs              # Shared HTTP helpers (timeout, body cap,
-│   │                        #   Retry-After) used by api/, nix/, release
+│   ├── http.rs              # Shared HTTP helpers (timeout, body cap)
+│   │                        #   used by self-update only since v0.6
 │   ├── output/              # Live output prettification
 │   │   ├── mod.rs
 │   │   ├── prettify.rs      # Strip /nix/store/<hash>- from a line
@@ -407,7 +416,7 @@ Three verbosity levels via `tracing` crate:
 
 Every decision point logs why it chose a path:
 ```rust
-tracing::debug!("Package '{}': store={}  repology={} → minor update", name, installed, latest);
+tracing::debug!("Package '{}': store={}  nixpkgs-latest={} → minor update", name, installed, latest);
 ```
 
 ### Error Handling
@@ -471,10 +480,12 @@ config for talk") that surfaces in `cheni history`. Useful when keeping
 many generations around for testing.
 
 ### Faster check
-The Repology lookup is the dominant cost. Possible wins:
-- Parallel batches with smarter rate-limiting
-- Fall back to `nix-env -qa --json` for packages Repology doesn't know
+`nix eval` is the dominant cost on a cold cache; once the
+version-cache is warm, subsequent calls are a JSON read.
+Possible wins:
+- Parallel `nix eval` calls (currently sequential)
 - Persistent shared cache across machines
+- Pre-warm the cache as a background task after `cheni upgrade`
 
 ### TUI
 The interactive menu already covers the "I don't remember the flag"
