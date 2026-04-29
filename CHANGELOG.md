@@ -5,6 +5,20 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## v0.7.1 — 2026-04-29
+
+### Added
+
+- `cheni check --refresh-floor` — peek at what HEAD remote would yield (resolves rev+narHash via `nix flake metadata --refresh`) without touching `flake.lock`. Hits the network. Suppresses the stale-floor warning since the verdict is already against fresh data.
+- `cheni audit --refresh-floor` — same flag on audit (mirrors check).
+- Stale-floor warning on `cheni check` and `cheni audit` when nixpkgs is >= 3 days behind: prepends a yellow `⚠ nixpkgs floor is N day(s) behind — these counts reflect the locked rev, not what an `upgrade` would actually pull` line above the verdict. Closes the gap where `cheni check` said "Up to date: 116" while `cheni upgrade` would pull dozens of updates.
+
+### Internal
+
+- `cmd::check::collect_updates` gains `override_floor: Option<(rev, narHash)>` parameter; both `check` and `audit` thread it through.
+- `nix::flake::resolve_remote_head(flake_dir, input_name)` — new helper that resolves a flake input's HEAD remote rev+narHash via `nix flake metadata --refresh --json`.
+- `AuditReport` gains `nixpkgs_days_old` and `floor_was_refreshed` fields (visible in `--json`).
+
 ## v0.7.0 — 2026-04-28
 
 ### Added
