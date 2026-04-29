@@ -45,9 +45,7 @@ Per-package policy:\n  \
   cheni unpin <pkg>              Release a pin (or --all)\n  \
   cheni unfreeze <pkg>           Release a freeze (or --all)\n  \
   cheni clean                    Remove obsolete pins (nixpkgs caught up)\n  \
-  cheni gc                       Reclaim disk: prune generations + nix-collect-garbage\n  \
-  cheni snapshot                 Dump pins+freezes state to JSON\n  \
-  cheni restore <file>           Replace state from a snapshot file\n\
+  cheni gc                       Reclaim disk: prune generations + nix-collect-garbage\n\
 \n\
 Build vs upgrade (cheat sheet):\n  \
   build                  =  rebuild with whatever's already in flake.lock\n  \
@@ -421,16 +419,6 @@ enum Commands {
         force: bool,
     },
 
-    /// Restore pins+freezes state from a snapshot file (replaces local state).
-    #[command(after_help = "Example: cheni restore my-laptop.json")]
-    Restore {
-        /// Path to the snapshot JSON file.
-        file: std::path::PathBuf,
-        /// Skip confirmation prompt.
-        #[arg(long)]
-        yes: bool,
-    },
-
     /// Roll back to the previous generation (or a specific one)
     #[command(alias = "rb", after_help = "Example: cheni rollback 405")]
     Rollback {
@@ -465,14 +453,6 @@ enum Commands {
     Search {
         /// Search query (e.g. "firefox", "rust analyzer")
         query: String,
-    },
-
-    /// Snapshot pins+freezes state to JSON (stdout or --out FILE).
-    #[command(after_help = "Example: cheni snapshot --out my-laptop.json")]
-    Snapshot {
-        /// Write the snapshot to FILE instead of stdout.
-        #[arg(long)]
-        out: Option<std::path::PathBuf>,
     },
 
     /// Read the persistent operation log (pin/unpin/freeze/upgrade/...).
@@ -685,13 +665,11 @@ async fn dispatch(command: Commands) -> Result<()> {
                 diff, full, limit, delete, prune, keep, older_than, gc, yes, brief, force,
             })
         }
-        Commands::Restore { file, yes } => cmd::snapshot::restore(&file, yes),
         Commands::Rollback { target, yes } => cmd::rollback::run(target, yes),
         Commands::Diff { from, to } => cmd::diff::run(from, to),
         Commands::Demote { name, yes } => cmd::lifecycle::demote(&name, yes),
         Commands::Promote { name, yes } => cmd::lifecycle::promote(&name, yes),
         Commands::Search { query } => cmd::search::run(&query).await,
-        Commands::Snapshot { out } => cmd::snapshot::snapshot(out),
         Commands::Timeline { last, package, kind, since, json } => {
             cmd::timeline::run(cmd::timeline::TimelineOptions {
                 last,
