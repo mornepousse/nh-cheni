@@ -128,12 +128,14 @@ pub async fn run(
     // "no updates available" from "behind reality by 12 days".
     let nixpkgs_age = flake::read_input_by_name(&nix_config.flake_dir, "nixpkgs");
 
+    let floor_days_old = nixpkgs_age.as_ref().map(|i| i.days_old);
+
     if json {
         print_json(&classification, &visible_flake_inputs, &frozen_rows)?;
     } else if brief {
         // --brief: verdict line only — no spinner was started, no
         // details blocks, no tip, no self-update hint.
-        print_summary_line(&classification, frozen_rows.len());
+        print_summary_line(&classification, frozen_rows.len(), floor_days_old);
     } else {
         print_human(
             &classification,
@@ -694,7 +696,23 @@ fn print_json(
 ///
 /// Called at the TOP of `print_human` so skim-readers see the verdict
 /// before the details blocks.
-fn print_summary_line(c: &Classification, frozen_count: usize) {
+/// Days beyond which the nixpkgs floor is considered stale. Below this
+/// the summary numbers represent reality; above it they only reflect
+/// the locked rev and can mislead the user into thinking nothing's
+/// available when an `upgrade` would actually pull a wave of updates.
+const FLOOR_STALE_DAYS: u64 = 3;
+
+fn print_summary_line(c: &Classification, frozen_count: usize, floor_days_old: Option<u64>) {
+    if let Some(days) = floor_days_old {
+        if days >= FLOOR_STALE_DAYS {
+            println!(
+                "{} nixpkgs floor is {} day(s) behind — these counts reflect the locked rev, \
+                 not what an `upgrade` would actually pull.",
+                "⚠".yellow().bold(),
+                days.to_string().yellow()
+            );
+        }
+    }
     let frozen_tail = if frozen_count == 0 {
         String::new()
     } else {
@@ -728,7 +746,8 @@ fn print_human(
     nixpkgs: Option<&flake::FlakeInput>,
 ) {
     // Verdict first — skim-readers see the outcome before the detail blocks.
-    print_summary_line(c, frozen_rows.len());
+    let floor_days_old = nixpkgs.map(|i| i.days_old);
+    print_summary_line(c, frozen_rows.len(), floor_days_old);
     println!();
 
     if category.is_none() {
