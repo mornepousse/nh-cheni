@@ -436,3 +436,33 @@ fn parse_dry_run_summary_section_ends_at_non_store_line() {
     // Only the first entry, before the reset line, is captured.
     assert_eq!(build, vec!["openssl-3.5.0"]);
 }
+
+#[test]
+fn is_heavy_build_matches_rusty_v8_versioned() {
+    assert!(is_heavy_build("rusty-v8-147.2.1"));
+    assert!(is_heavy_build("rusty-v8"));
+}
+
+#[test]
+fn is_heavy_build_matches_substrings() {
+    assert!(is_heavy_build("chromium-unwrapped-147.0.7727.101"));
+    assert!(is_heavy_build("electron-unwrapped-41.2.0"));
+    assert!(is_heavy_build("webkitgtk-2.52.3"));
+    assert!(is_heavy_build("qtwebengine-6.11.0"));
+}
+
+#[test]
+fn is_heavy_build_rejects_unrelated_names() {
+    assert!(!is_heavy_build("firefox-150.0"));
+    assert!(!is_heavy_build("yt-dlp-2026.03.17"));
+    assert!(!is_heavy_build("nodejs-24.14.1"));
+    assert!(!is_heavy_build(""));
+}
+
+#[test]
+fn is_heavy_build_unwrapped_substring_does_not_overmatch() {
+    // "chromium" alone shouldn't match because the pattern includes
+    // "-unwrapped" — we only flag the slow source-rebuild variants.
+    assert!(!is_heavy_build("chromium"));
+    assert!(!is_heavy_build("electron"));
+}
