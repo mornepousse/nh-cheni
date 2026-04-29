@@ -15,6 +15,7 @@ pub mod gc;
 pub mod history;
 pub mod init;
 pub mod interactive;
+pub mod lifecycle;
 pub mod obsolete;
 pub mod pin;
 pub mod unfreeze;

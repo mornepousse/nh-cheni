@@ -40,6 +40,8 @@ Per-package policy:\n  \
   cheni pin -c <category>        Pin all minor updates in modules/<category>/\n  \
   cheni pin --flakes             Update flake inputs (zen-browser, claude-code, …)\n  \
   cheni freeze <pkg>             Hold at current version (inverse of pin)\n  \
+  cheni promote <pkg>            Switch a freeze to a pin (resume updates)\n  \
+  cheni demote <pkg>             Switch a pin to a freeze (hold current)\n  \
   cheni unpin <pkg>              Release a pin (or --all)\n  \
   cheni unfreeze <pkg>           Release a freeze (or --all)\n  \
   cheni clean                    Remove obsolete pins (nixpkgs caught up)\n  \
@@ -178,6 +180,16 @@ enum Commands {
         /// Remove all pins at once
         #[arg(short = 'a', long)]
         all: bool,
+    },
+
+    /// Promote a package from freeze to pin (resume nixpkgs-latest tracking).
+    #[command(after_help = "Example: cheni promote firefox")]
+    Promote {
+        /// Package name to promote.
+        name: String,
+        /// Skip confirmation prompt.
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Hold a package at its current version (inverse of `pin`: freezes ≠ pins)
@@ -401,6 +413,16 @@ enum Commands {
         to: u32,
     },
 
+    /// Demote a package from pin to freeze (lock at current version).
+    #[command(after_help = "Example: cheni demote firefox")]
+    Demote {
+        /// Package name to demote.
+        name: String,
+        /// Skip confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
+
     /// Search nixpkgs for a package
     #[command(alias = "s")]
     Search {
@@ -600,6 +622,8 @@ async fn dispatch(command: Commands) -> Result<()> {
         }
         Commands::Rollback { target, yes } => cmd::rollback::run(target, yes),
         Commands::Diff { from, to } => cmd::diff::run(from, to),
+        Commands::Demote { name, yes } => cmd::lifecycle::demote(&name, yes),
+        Commands::Promote { name, yes } => cmd::lifecycle::promote(&name, yes),
         Commands::Search { query } => cmd::search::run(&query).await,
         Commands::Why { package } => cmd::why::run(&package),
         Commands::Clean { orphans, cruft, all, yes } => {
