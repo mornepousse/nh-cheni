@@ -27,7 +27,7 @@ use tracing_subscriber::EnvFilter;
         Packages are pinned to nixpkgs-latest for safe, incremental updates.",
     after_help = "\
 Daily flow:\n  \
-  cheni                          Interactive menu (state snapshot + action picker)\n  \
+  cheni                          Interactive menu (current state + action picker)\n  \
   cheni check                    See what's outdated (nixpkgs-latest + flake input ages)\n  \
   cheni check --pending          Add closure dry-run (kernel + base packages too)\n  \
   cheni upgrade                  Full upgrade: refresh, preview, rebuild\n  \
@@ -62,7 +62,7 @@ History & rollback:\n  \
 Discovery:\n  \
   cheni search <query>           nixpkgs search + nixpkgs-latest delta + pin/freeze badges\n  \
   cheni why <pkg>                Which .nix file declares this?\n  \
-  cheni timeline                 Persistent op log (pin/freeze/promote/...)\n\
+  cheni timeline                 Persistent op log (pin/freeze/build/upgrade/...)\n\
 \n\
 Maintenance:\n  \
   cheni doctor                   Health check (paths, lock, pins, freezes, age)\n  \
