@@ -263,6 +263,15 @@ pub fn restore(file: &Path, yes: bool) -> Result<()> {
     }
 
     apply_restore(&nix_config.flake_dir, &snap)?;
+    crate::nix::timeline::record(
+        "restore",
+        None,
+        serde_json::json!({
+            "from": snap.hostname,
+            "n_pins": snap.pins.len(),
+            "n_freezes": snap.freezes.len(),
+        }),
+    );
     println!(
         "{} Restored {} pin(s) + {} freeze(s) from snapshot.",
         "✓".green(),

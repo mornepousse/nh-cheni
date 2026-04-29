@@ -190,6 +190,11 @@ fn apply_freeze(
         major_constraint,
     };
     let newly_frozen = freezes::add(flake_dir, name, entry)?;
+    crate::nix::timeline::record(
+        "freeze",
+        Some(name),
+        serde_json::json!({"version": installed_version}),
+    );
 
     let tail = match major_constraint {
         Some(n) => format!(" (tracking major {})", n),

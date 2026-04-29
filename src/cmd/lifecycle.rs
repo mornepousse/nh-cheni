@@ -94,6 +94,11 @@ pub fn promote(name: &str, yes: bool) -> Result<()> {
 
     freezes::remove(&nix_config.flake_dir, &[name.to_string()])?;
     pins::add(&nix_config.flake_dir, &[name.to_string()])?;
+    crate::nix::timeline::record(
+        "promote",
+        Some(name),
+        serde_json::json!({"from": "freeze", "to": "pin"}),
+    );
 
     println!(
         "{} Promoted {} from freeze to pin.",
@@ -160,6 +165,11 @@ pub fn demote(name: &str, yes: bool) -> Result<()> {
 
     pins::remove(&nix_config.flake_dir, &[name.to_string()])?;
     freezes::add(&nix_config.flake_dir, name, entry)?;
+    crate::nix::timeline::record(
+        "demote",
+        Some(name),
+        serde_json::json!({"from": "pin", "to": "freeze", "version": store_pkg.version}),
+    );
 
     println!(
         "{} Demoted {} from pin to freeze at {}.",

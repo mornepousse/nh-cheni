@@ -66,7 +66,8 @@ History & rollback:\n  \
 \n\
 Discovery:\n  \
   cheni search <query>           nixpkgs search + nixpkgs-latest delta + pin/freeze badges\n  \
-  cheni why <pkg>                Which .nix file declares this?\n\
+  cheni why <pkg>                Which .nix file declares this?\n  \
+  cheni timeline                 Persistent op log (pin/freeze/promote/...)\n\
 \n\
 Maintenance:\n  \
   cheni doctor                   Health check (paths, lock, pins, freezes, age)\n  \
@@ -450,6 +451,26 @@ enum Commands {
         out: Option<std::path::PathBuf>,
     },
 
+    /// Read the persistent operation log (pin/unpin/freeze/upgrade/...).
+    #[command(after_help = "Example: cheni timeline --last 50 --package firefox")]
+    Timeline {
+        /// Show only the last N events (default 20).
+        #[arg(long)]
+        last: Option<usize>,
+        /// Filter by package name.
+        #[arg(long)]
+        package: Option<String>,
+        /// Filter by event kind (pin, unpin, freeze, ...).
+        #[arg(long)]
+        kind: Option<String>,
+        /// Filter by age (e.g. 7d, 1h, 30m).
+        #[arg(long)]
+        since: Option<String>,
+        /// Raw JSONL output.
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Find which .nix file in the config declares a given package
     #[command(after_help = "Example: cheni why firefox")]
     Why {
@@ -647,6 +668,16 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::Promote { name, yes } => cmd::lifecycle::promote(&name, yes),
         Commands::Search { query } => cmd::search::run(&query).await,
         Commands::Snapshot { out } => cmd::snapshot::snapshot(out),
+        Commands::Timeline { last, package, kind, since, json } => {
+            cmd::timeline::run(cmd::timeline::TimelineOptions {
+                last,
+                package,
+                kind,
+                since,
+                json,
+            })?;
+            Ok(())
+        }
         Commands::Why { package } => cmd::why::run(&package),
         Commands::Clean { orphans, cruft, all, yes } => {
             cmd::clean::run(cmd::clean::CleanOptions {
