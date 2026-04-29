@@ -145,6 +145,69 @@ fn make_gen(number: u32, date: &str, is_current: bool) -> Generation {
     }
 }
 
+// --- events_for_gen ---------------------------------------------------------
+
+fn make_event(ts: &str, kind: &str, package: Option<&str>) -> crate::nix::timeline::Event {
+    crate::nix::timeline::Event {
+        ts: ts.to_string(),
+        kind: kind.to_string(),
+        package: package.map(|s| s.to_string()),
+        details: serde_json::json!({}),
+    }
+}
+
+#[test]
+fn events_for_gen_picks_events_in_window() {
+    // Gen at 1_777_374_000 (2026-04-28T11:00:00Z), prev at 1_777_372_800 (10:40:00Z).
+    // Event at 10:50 (1_777_373_400) should be included;
+    // event at 11:30 (1_777_375_800) is after the window.
+    let events = vec![
+        make_event("2026-04-28T10:50:00Z", "pin", Some("firefox")),
+        make_event("2026-04-28T11:30:00Z", "pin", Some("kicad")),
+    ];
+    let picked = events_for_gen(&events, 1_777_374_000, Some(1_777_372_800));
+    assert_eq!(picked.len(), 1);
+    assert_eq!(picked[0].kind, "pin");
+    assert_eq!(picked[0].package.as_deref(), Some("firefox"));
+}
+
+#[test]
+fn events_for_gen_handles_no_prev_with_one_hour_window() {
+    // No prev gen → window = [this_mtime - 3600, this_mtime + 60].
+    // 11:00:00 (1_777_374_000) - 3600s = 10:00:00 (1_777_370_400);
+    // event at 10:30 (1_777_372_200) is inside, 09:30 (1_777_368_600) is outside.
+    let this_mtime = 1_777_374_000u64; // 2026-04-28T11:00:00Z
+    let events = vec![
+        make_event("2026-04-28T10:30:00Z", "pin", Some("firefox")),
+        make_event("2026-04-28T09:30:00Z", "pin", Some("kicad")),
+    ];
+    let picked = events_for_gen(&events, this_mtime, None);
+    assert_eq!(picked.len(), 1);
+    assert_eq!(picked[0].package.as_deref(), Some("firefox"));
+}
+
+#[test]
+fn events_for_gen_includes_60s_slop_after_gen_mtime() {
+    // An event 30s AFTER gen mtime (clock skew or post-switch record)
+    // must still be included; one 2 min after must not.
+    // this_mtime = 1_777_374_000 (2026-04-28T11:00:00Z), window_end = +60s.
+    let this_mtime = 1_777_374_000u64; // 2026-04-28T11:00:00Z
+    let events = vec![
+        make_event("2026-04-28T11:00:30Z", "build", None), // 30s after → included
+        make_event("2026-04-28T11:02:00Z", "build", None), // 2min after → excluded
+    ];
+    let picked = events_for_gen(&events, this_mtime, Some(1_777_372_800));
+    assert_eq!(picked.len(), 1);
+    assert_eq!(picked[0].kind, "build");
+}
+
+#[test]
+fn events_for_gen_skips_unparseable_timestamps() {
+    let events = vec![make_event("garbage", "pin", Some("firefox"))];
+    let picked = events_for_gen(&events, 1_777_374_000, Some(1_777_372_800));
+    assert!(picked.is_empty());
+}
+
 #[test]
 fn run_brief_returns_ok_for_single_gen() {
     // run_brief writes to stdout but must not panic and must return Ok.

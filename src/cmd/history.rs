@@ -106,8 +106,19 @@ pub fn run(opts: HistoryOptions) -> Result<()> {
     // optional layer, the rest of `cheni history` works regardless.
     let pin_freeze_ctx = pin_freeze_annotation_dir();
 
+    // Read timeline events once — used to annotate each gen with the
+    // operations that happened in its window. Empty vec on any error.
+    let timeline_events = crate::nix::timeline::read_events().unwrap_or_default();
+
     for (i, gen) in displayed.iter().enumerate() {
         print_generation_header(gen);
+        // Print timeline events that fall in this gen's window.
+        if let Some(this_mtime) = gen.mtime_secs {
+            // "previous" in chronological terms = displayed[i + 1] (older)
+            let prev_mtime = displayed.get(i + 1).and_then(|g| g.mtime_secs);
+            let events = events_for_gen(&timeline_events, this_mtime, prev_mtime);
+            print_gen_events(&events);
+        }
         if i + 1 < displayed.len() {
             let previous = displayed[i + 1];
             print_generation_diff(previous, gen, opts.diff, opts.full);
@@ -1184,6 +1195,115 @@ fn format_size_delta(kib: f64) -> String {
         format!("{}{:.1} MiB", sign, abs / 1024.0)
     } else {
         format!("{}{:.1} GiB", sign, abs / (1024.0 * 1024.0))
+    }
+}
+
+/// Return events that fall within the time window `[prev_mtime, this_mtime + 60s]`.
+///
+/// The 60-second slop on the upper bound catches events that arrive slightly
+/// after the gen activation (e.g. timeline::record called right after `nh os
+/// switch` returns, which in turn finished just after the symlink was updated).
+///
+/// For the very first gen (no `prev_mtime`), the window opens 1 hour before
+/// `this_mtime`.
+pub(crate) fn events_for_gen(
+    events: &[crate::nix::timeline::Event],
+    this_mtime: u64,
+    prev_mtime: Option<u64>,
+) -> Vec<&crate::nix::timeline::Event> {
+    let window_start = prev_mtime.unwrap_or_else(|| this_mtime.saturating_sub(3600));
+    let window_end = this_mtime + 60;
+    events
+        .iter()
+        .filter(|e| {
+            let Some(t) = crate::nix::timeline::parse_rfc3339_to_unix(&e.ts) else {
+                return false;
+            };
+            t >= window_start && t <= window_end
+        })
+        .collect()
+}
+
+/// Render the timeline events that belong to a generation as indented
+/// sub-lines under the generation header.
+fn print_gen_events(events: &[&crate::nix::timeline::Event]) {
+    if events.is_empty() {
+        return;
+    }
+    for e in events {
+        let time = format_event_time(&e.ts);
+        let pkg = e.package.as_deref().unwrap_or("");
+        let summary = summarise_event_details(&e.kind, &e.details);
+        let line = if summary.is_empty() {
+            format!(
+                "    {} {} {} {}",
+                "·".dimmed(),
+                time.dimmed(),
+                e.kind.cyan(),
+                pkg
+            )
+        } else {
+            format!(
+                "    {} {} {} {} {}",
+                "·".dimmed(),
+                time.dimmed(),
+                e.kind.cyan(),
+                pkg,
+                summary.dimmed()
+            )
+        };
+        println!("{}", line);
+    }
+}
+
+/// Extract the HH:MM part from an RFC3339 timestamp.
+/// "2026-04-28T11:30:00Z" → "11:30"
+fn format_event_time(ts: &str) -> String {
+    ts.split_once('T')
+        .and_then(|(_, t)| t.split_once(':'))
+        .map(|(h, rest)| {
+            let m = rest.split(':').next().unwrap_or("00");
+            format!("{h}:{m}")
+        })
+        .unwrap_or_else(|| ts.to_string())
+}
+
+/// Produce a short contextual suffix for an event's details field.
+fn summarise_event_details(kind: &str, details: &serde_json::Value) -> String {
+    if details.is_null() || details == &serde_json::json!({}) {
+        return String::new();
+    }
+    match kind {
+        "promote" | "demote" => {
+            let from = details.get("from").and_then(|v| v.as_str()).unwrap_or("?");
+            let to = details.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("({from} \u{2192} {to})")
+        }
+        "freeze" => details
+            .get("version")
+            .and_then(|v| v.as_str())
+            .map(|v| format!("at {v}"))
+            .unwrap_or_default(),
+        "upgrade" | "build" => {
+            let outcome = details.get("outcome").and_then(|v| v.as_str()).unwrap_or("?");
+            let dur = details.get("duration_secs").and_then(|v| v.as_u64());
+            match dur {
+                Some(d) => format!("({outcome}, {d}s)"),
+                None => format!("({outcome})"),
+            }
+        }
+        "rollback" => {
+            let to_gen = details.get("to_gen").and_then(|v| v.as_u64());
+            match to_gen {
+                Some(n) => format!("\u{2192} gen {n}"),
+                None => String::new(),
+            }
+        }
+        "restore" => {
+            let host = details.get("from").and_then(|v| v.as_str()).unwrap_or("?");
+            format!("from {host}")
+        }
+        _ => String::new(),
     }
 }
 

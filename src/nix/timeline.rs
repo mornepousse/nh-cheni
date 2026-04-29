@@ -85,6 +85,47 @@ pub fn read_events() -> Result<Vec<Event>> {
     Ok(events)
 }
 
+/// Parse an RFC3339 timestamp (the format `record()` writes) back to
+/// Unix seconds. Returns `None` for unparseable strings — skip-and-debug
+/// is the policy for stale/garbage events.
+pub fn parse_rfc3339_to_unix(ts: &str) -> Option<u64> {
+    // Format: "YYYY-MM-DDTHH:MM:SSZ"
+    let trimmed = ts.trim_end_matches('Z');
+    let (date, time) = trimmed.split_once('T')?;
+    let date_parts: Vec<&str> = date.split('-').collect();
+    let time_parts: Vec<&str> = time.split(':').collect();
+    if date_parts.len() != 3 || time_parts.len() != 3 {
+        return None;
+    }
+    let year: i64 = date_parts[0].parse().ok()?;
+    let month: u32 = date_parts[1].parse().ok()?;
+    let day: u32 = date_parts[2].parse().ok()?;
+    let hour: u64 = time_parts[0].parse().ok()?;
+    let minute: u64 = time_parts[1].parse().ok()?;
+    let second: u64 = time_parts[2].parse().ok()?;
+
+    // Days from 1970-01-01 to year-month-day.
+    let mut days: i64 = 0;
+    for y in 1970..year {
+        let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
+        days += if leap { 366 } else { 365 };
+    }
+    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let month_lens = [
+        31u32,
+        if leap { 29 } else { 28 },
+        31, 30, 31, 30, 31, 31, 30, 31, 30, 31,
+    ];
+    for (i, m) in month_lens.iter().enumerate() {
+        if (i as u32) + 1 == month {
+            break;
+        }
+        days += *m as i64;
+    }
+    days += (day - 1) as i64;
+    Some((days as u64) * 86_400 + hour * 3600 + minute * 60 + second)
+}
+
 /// RFC 3339 timestamp for "now". Reuses the same manual decomposition
 /// as snapshot.rs (we don't pull chrono).
 pub(crate) fn now_rfc3339() -> String {

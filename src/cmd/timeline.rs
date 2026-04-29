@@ -131,46 +131,11 @@ fn event_within_last_secs(event: &Event, max_age_secs: u64) -> bool {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let event_secs = parse_rfc3339_to_unix(&event.ts).unwrap_or(0);
+    let event_secs = crate::nix::timeline::parse_rfc3339_to_unix(&event.ts).unwrap_or(0);
     if event_secs == 0 || event_secs > now {
         return false;
     }
     (now - event_secs) <= max_age_secs
-}
-
-fn parse_rfc3339_to_unix(ts: &str) -> Option<u64> {
-    // Format: "YYYY-MM-DDTHH:MM:SSZ"
-    let trimmed = ts.trim_end_matches('Z');
-    let (date, time) = trimmed.split_once('T')?;
-    let date_parts: Vec<&str> = date.split('-').collect();
-    let time_parts: Vec<&str> = time.split(':').collect();
-    if date_parts.len() != 3 || time_parts.len() != 3 {
-        return None;
-    }
-    let year: i64 = date_parts[0].parse().ok()?;
-    let month: u32 = date_parts[1].parse().ok()?;
-    let day: u32 = date_parts[2].parse().ok()?;
-    let hour: u64 = time_parts[0].parse().ok()?;
-    let minute: u64 = time_parts[1].parse().ok()?;
-    let second: u64 = time_parts[2].parse().ok()?;
-
-    // Days from 1970-01-01 to year-month-day.
-    let mut days: i64 = 0;
-    for y in 1970..year {
-        let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
-        days += if leap { 366 } else { 365 };
-    }
-    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let month_lens = [31u32, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    for (i, m) in month_lens.iter().enumerate() {
-        if (i as u32) + 1 == month {
-            break;
-        }
-        days += *m as i64;
-    }
-    days += (day - 1) as i64;
-    let unix = (days as u64) * 86_400 + hour * 3600 + minute * 60 + second;
-    Some(unix)
 }
 
 pub(crate) fn parse_since_duration_secs(spec: &str) -> Result<u64> {
