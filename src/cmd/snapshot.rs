@@ -2,8 +2,6 @@
 //!
 //! See `docs/superpowers/specs/2026-04-28-cheni-snapshot-design.md`.
 
-#![allow(dead_code, unused_imports)]
-
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
