@@ -58,6 +58,12 @@ pub fn run(target: Option<u32>, yes: bool) -> Result<()> {
 
     apply_rollback(target)?;
 
+    crate::nix::timeline::record(
+        "rollback",
+        None,
+        serde_json::json!({"to_gen": target_gen.number}),
+    );
+
     println!(
         "\n{} {} in {} — now on generation {}.",
         "✓".green().bold(),

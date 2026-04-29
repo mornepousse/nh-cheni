@@ -50,6 +50,11 @@ pub fn run() -> Result<()> {
     let (status, captured_stderr) = run_nh_capturing_stderr(config_path)?;
 
     if status.success() {
+        crate::nix::timeline::record(
+            "build",
+            None,
+            serde_json::json!({"outcome": "success"}),
+        );
         println!(
             "\n{} Build successful in {}.",
             "✓".green().bold(),
