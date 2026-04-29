@@ -322,7 +322,7 @@ async fn dispatch(action: Action) -> Result<()> {
         Action::Why => dispatch_why(&theme)?,
         Action::Status => super::status::run(false)?,
         Action::Clean => super::clean::run(super::clean::CleanOptions::default())?,
-        Action::Doctor => super::doctor::run(false)?,
+        Action::Doctor => super::doctor::run(false, false)?,
         Action::SelfUpdate => super::self_update::run(false).await?,
         Action::Init => super::init::run()?,
         Action::Quit => {}

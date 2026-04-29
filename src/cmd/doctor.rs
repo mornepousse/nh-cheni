@@ -41,7 +41,12 @@ pub(crate) struct CheckResult {
 /// (Ok with a pid message), it is printed inline before the summary so the
 /// user sees it regardless of the `--brief` flag. The idle case collapses
 /// into the Ok summary like all other Ok checks.
-pub fn run(brief: bool) -> Result<()> {
+///
+/// When `fix` is true, each warning or error is followed by an interactive
+/// prompt to apply a canned fix. Unknown check names show "(no automated fix)".
+/// `--brief` and `--fix` are independent — both can be set simultaneously
+/// (output is collapsed but prompts still appear).
+pub fn run(brief: bool, fix: bool) -> Result<()> {
     let nix_config = config::detect()?;
     if !brief {
         print_doctor_header(&nix_config);
@@ -71,18 +76,147 @@ pub fn run(brief: bool) -> Result<()> {
     // to the collapsed summary instead.
     if rebuild_is_active || rebuild_check.severity == Severity::Warning {
         print_check(&rebuild_check, brief);
+        if fix && rebuild_check.severity != Severity::Ok {
+            apply_fix_interactively(&rebuild_check);
+        }
     }
 
     for c in &errors {
         print_check(c, brief);
+        if fix {
+            apply_fix_interactively(c);
+        }
     }
     for c in &warnings {
         print_check(c, brief);
+        if fix {
+            apply_fix_interactively(c);
+        }
     }
     if !brief && !ok_checks.is_empty() {
         print_ok_summary(&ok_checks);
     }
     print_summary(ok, warn, err);
+    Ok(())
+}
+
+// ─── Fix dispatcher ────────────────────────────────────────────────────────────
+
+/// Look up the fix function for a known check name.
+/// Returns `Some(fn)` when a canned fix is registered, `None` otherwise.
+/// Extracted as a pure helper so it can be unit-tested without I/O.
+pub(crate) fn fix_fn_for(name: &str) -> Option<fn() -> Result<()>> {
+    match name {
+        "flake.lock" => Some(fix_flake_lock_dirty),
+        "Active rebuild" => Some(fix_dead_upgrade),
+        "Nix store size" => Some(fix_store_size),
+        "Stale flake inputs" => Some(fix_stale_inputs),
+        _ => None,
+    }
+}
+
+/// Prompt the user to apply the fix for `check`, then run it if confirmed.
+/// Unknown check names print "(no automated fix — apply the hint manually)".
+///
+/// `s for skip-all` is documented in the prompt but is NOT implemented as a
+/// session-wide skip state — accepting `s` just skips the current prompt,
+/// which is the same as pressing N. Keeping the prompt string consistent
+/// with the spec while staying simple.
+fn apply_fix_interactively(check: &CheckResult) {
+    use colored::Colorize;
+    use dialoguer::{theme::ColorfulTheme, Confirm};
+
+    let Some(action) = fix_fn_for(&check.name) else {
+        println!("  {} (no automated fix — apply the hint manually)", "·".dimmed());
+        return;
+    };
+
+    if let Some(hint) = &check.hint {
+        println!("  {} {}", "?".cyan(), hint);
+    }
+
+    let go = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Apply fix? [y/N/s for skip-all]")
+        .default(false)
+        .interact();
+
+    match go {
+        Ok(true) => {
+            if let Err(e) = action() {
+                println!("  {} fix failed: {e}", "✗".red());
+            }
+        }
+        Ok(false) => {} // user declined or pressed s
+        Err(e) => {
+            println!("  {} could not read confirmation: {e}", "✗".red());
+        }
+    }
+    println!();
+}
+
+fn fix_flake_lock_dirty() -> Result<()> {
+    use colored::Colorize;
+    use dialoguer::{theme::ColorfulTheme, Select};
+
+    let theme = ColorfulTheme::default();
+    let opts = &[
+        "Discard (git checkout flake.lock)",
+        "Build now (cheni build)",
+        "Skip",
+    ];
+    let choice = Select::with_theme(&theme)
+        .with_prompt("Choose")
+        .items(opts)
+        .default(2)
+        .interact()
+        .map_err(|e| anyhow::anyhow!("reading selection: {e}"))?;
+
+    match choice {
+        0 => {
+            let flake_dir = config::detect()?.flake_dir;
+            let status = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&flake_dir)
+                .args(["checkout", "flake.lock"])
+                .status()
+                .map_err(|e| crate::nix::tools::tool_error("git", e))?;
+            if !status.success() {
+                anyhow::bail!("git checkout flake.lock failed");
+            }
+            println!("  {} flake.lock reset to HEAD.", "✓".green());
+        }
+        1 => crate::cmd::build::run()?,
+        _ => println!("  {}", "Skipped.".dimmed()),
+    }
+    Ok(())
+}
+
+fn fix_dead_upgrade() -> Result<()> {
+    use colored::Colorize;
+    println!(
+        "  {} Running `cheni build` to apply the current flake.lock + config…",
+        "→".cyan()
+    );
+    crate::cmd::build::run()
+}
+
+fn fix_store_size() -> Result<()> {
+    use colored::Colorize;
+    println!("  {} Running `cheni gc` to reclaim disk space…", "→".cyan());
+    crate::cmd::gc::run(crate::cmd::gc::GcOptions::default())
+}
+
+fn fix_stale_inputs() -> Result<()> {
+    use colored::Colorize;
+    println!(
+        "  {} Run `{}` to see available updates and pick what to update.",
+        "→".cyan(),
+        "cheni pin --flakes".bold()
+    );
+    println!(
+        "  {} (cheni doctor --fix doesn't auto-run this — choose what you want)",
+        "·".dimmed()
+    );
     Ok(())
 }
 
