@@ -52,6 +52,7 @@ impl RestoreDiff {
 ///
 /// Format: `YYYY-MM-DDTHH:MM:SSZ`. Seconds precision is enough for a
 /// human-readable timestamp in a snapshot file.
+#[allow(clippy::manual_is_multiple_of)]
 fn now_rfc3339() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
@@ -156,6 +157,145 @@ pub(crate) fn compute_diff(
         freezes_removed,
         freezes_changed,
     }
+}
+
+/// Run `cheni snapshot`. Reads pins + freezes, composes a Snapshot,
+/// writes JSON to `out` (or stdout if None).
+pub fn snapshot(out: Option<PathBuf>) -> Result<()> {
+    let nix_config = config::detect()?;
+    let pins = pins::read(&nix_config.flake_dir)?;
+    let freezes = freezes::read(&nix_config.flake_dir)?;
+    let snap = compose_snapshot(pins, freezes, &nix_config.hostname);
+    let json = serde_json::to_string_pretty(&snap)?;
+
+    let n_pins = snap.pins.len();
+    let n_freezes = snap.freezes.len();
+
+    match out {
+        Some(path) => {
+            crate::util::atomic_write(&path, &json)?;
+            eprintln!(
+                "{} Snapshot written to {} ({} pin(s), {} freeze(s)).",
+                "✓".green(),
+                path.display(),
+                n_pins,
+                n_freezes
+            );
+        }
+        None => {
+            println!("{}", json);
+            eprintln!(
+                "{} Snapshotted {} pin(s) + {} freeze(s) to stdout.",
+                "✓".green(),
+                n_pins,
+                n_freezes
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Run `cheni restore <FILE>`. Replaces local pins+freezes with the
+/// content of the snapshot file, after showing a diff and asking
+/// confirmation (default-no since this is destructive).
+pub fn restore(file: &Path, yes: bool) -> Result<()> {
+    let raw = std::fs::read_to_string(file)
+        .with_context(|| format!("reading snapshot file {}", file.display()))?;
+    let snap: Snapshot = serde_json::from_str(&raw)
+        .with_context(|| format!("parsing snapshot file {}", file.display()))?;
+
+    if snap.format_version > FORMAT_VERSION {
+        bail!(
+            "snapshot uses format version {}, this cheni supports up to {}. Update cheni.",
+            snap.format_version,
+            FORMAT_VERSION
+        );
+    }
+
+    let nix_config = config::detect()?;
+    let current_pins = pins::read(&nix_config.flake_dir)?;
+    let current_freezes = freezes::read(&nix_config.flake_dir)?;
+
+    let diff = compute_diff(&current_pins, &current_freezes, &snap);
+    if diff.is_empty() {
+        println!("{} Already in sync with snapshot.", "✓".green());
+        return Ok(());
+    }
+
+    println!("{}", "=== cheni restore ===".bold());
+    println!();
+    println!(
+        "Snapshot from {} (created {}).",
+        snap.hostname.dimmed(),
+        snap.created_at.dimmed()
+    );
+    println!();
+    print_diff_section("Pins to add", &diff.pins_added, "+", colored::Color::Green);
+    print_diff_section("Pins to remove", &diff.pins_removed, "-", colored::Color::Red);
+    print_diff_section(
+        "Freezes to add",
+        &diff.freezes_added,
+        "+",
+        colored::Color::Green,
+    );
+    print_diff_section(
+        "Freezes to remove",
+        &diff.freezes_removed,
+        "-",
+        colored::Color::Red,
+    );
+    print_diff_section(
+        "Freezes to change",
+        &diff.freezes_changed,
+        "~",
+        colored::Color::Yellow,
+    );
+
+    if !yes {
+        let theme = ColorfulTheme::default();
+        let go = Confirm::with_theme(&theme)
+            .with_prompt("Apply this restore? Local pins+freezes will be REPLACED.")
+            .default(false)
+            .interact()
+            .map_err(|e| anyhow::anyhow!("reading confirmation: {e}"))?;
+        if !go {
+            println!("{}", "  Cancelled — nothing changed.".yellow());
+            return Ok(());
+        }
+    }
+
+    apply_restore(&nix_config.flake_dir, &snap)?;
+    println!(
+        "{} Restored {} pin(s) + {} freeze(s) from snapshot.",
+        "✓".green(),
+        snap.pins.len(),
+        snap.freezes.len()
+    );
+    Ok(())
+}
+
+fn print_diff_section(label: &str, items: &[String], glyph: &str, color: colored::Color) {
+    if items.is_empty() {
+        return;
+    }
+    println!("{}:", label.bold());
+    for name in items {
+        println!("  {} {}", glyph.color(color), name);
+    }
+    println!();
+}
+
+/// Replace local pins and freezes with the snapshot's content.
+fn apply_restore(flake_dir: &Path, snap: &Snapshot) -> Result<()> {
+    pins::clear(flake_dir)?;
+    if !snap.pins.is_empty() {
+        pins::add(flake_dir, &snap.pins)?;
+    }
+    freezes::clear(flake_dir)?;
+    for (name, entry) in &snap.freezes {
+        freezes::add(flake_dir, name, entry.clone())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

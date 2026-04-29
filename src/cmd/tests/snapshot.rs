@@ -88,3 +88,21 @@ fn compute_diff_detects_added_and_removed_freezes() {
     assert_eq!(diff.freezes_added, vec!["vivaldi".to_string()]);
     assert_eq!(diff.freezes_removed, vec!["kicad".to_string()]);
 }
+
+#[test]
+fn restore_bails_on_unsupported_format_version() {
+    let snap = Snapshot {
+        format_version: FORMAT_VERSION + 1,
+        created_at: "2026-04-28T00:00:00Z".to_string(),
+        hostname: "host1".to_string(),
+        pins: vec![],
+        freezes: BTreeMap::new(),
+    };
+    let json = serde_json::to_string(&snap).expect("serialise");
+    let dir = tempfile::TempDir::new().expect("tempdir");
+    let path = dir.path().join("snap.json");
+    std::fs::write(&path, json).expect("write");
+    let err = restore(&path, true).expect_err("should bail");
+    let msg = format!("{err}");
+    assert!(msg.contains("format version"));
+}
