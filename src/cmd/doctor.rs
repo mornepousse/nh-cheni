@@ -201,15 +201,22 @@ fn fix_store_size() -> Result<()> {
 
 fn fix_stale_inputs() -> Result<()> {
     use colored::Colorize;
-    println!(
-        "  {} Run `{}` to see available updates and pick what to update.",
-        "→".cyan(),
-        "cheni pin --flakes".bold()
-    );
-    println!(
-        "  {} (cheni doctor --fix doesn't auto-run this — choose what you want)",
-        "·".dimmed()
-    );
+    println!("  {} Running `cheni pin --flakes`…", "→".cyan());
+    // pin_flake_inputs() is async (it shells out to nix). Re-invoking
+    // ourselves as a subprocess avoids dragging an async runtime into
+    // doctor::run, which is otherwise pure sync.
+    let exe = std::env::current_exe()
+        .map_err(|e| anyhow::anyhow!("locating own binary: {e}"))?;
+    let status = std::process::Command::new(&exe)
+        .args(["pin", "--flakes"])
+        .status()
+        .map_err(|e| anyhow::anyhow!("running cheni pin --flakes: {e}"))?;
+    if !status.success() {
+        anyhow::bail!(
+            "cheni pin --flakes exited with status {:?}",
+            status.code()
+        );
+    }
     Ok(())
 }
 
