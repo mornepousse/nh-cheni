@@ -22,11 +22,14 @@ A personal tool that adds three things on top of `nh`:
    version than your stable `nixpkgs` provides. `cheni freeze
    <pkg>` does the inverse: locks a package at its current
    `nixpkgs` revision while everything else moves on.
-2. **Upstream awareness** — Repology integration tells you when
-   upstream has shipped newer than what your `nixpkgs` ships, even
-   for packages you haven't named in your modules. `cheni check`
-   for the user-named packages, `cheni check --pending` for the
-   closure-level dry-run that surfaces kernel + base updates too.
+2. **Upstream awareness** — cheni evaluates a second flake input
+   (`nixpkgs-latest`) via `nix eval --raw` to compare what your
+   stable `nixpkgs` ships against what the latest channel actually
+   exposes. The delta you see is exactly what `cheni pin` /
+   `cheni upgrade --pins-only` can deliver — no third-party API,
+   no name mapping. `cheni check` for the user-named packages,
+   `cheni check --pending` for the closure-level dry-run that
+   surfaces kernel + base updates too.
 3. **Cross-context wrappers** — every flow that already works
    through `nh` (build, rollback, history, diff, search) gains a
    small layer that surfaces what `nh` cannot see by construction:
@@ -122,13 +125,15 @@ keys; cheni prompts for any extra input it needs.
 
 > **`check` vs `check --pending`.** Plain `cheni check` looks
 > *upstream*: it scans your modules for named packages and asks
-> Repology whether the current nixpkgs version is the latest one.
+> `nixpkgs-latest` (via `nix eval --raw`) whether the current
+> nixpkgs version is the newest one available on that channel.
 > `--pending` adds a second pass that looks *downstream*: a
 > `nix build --dry-run` against your current `flake.lock` to list
 > what would actually rebuild — kernel, base nixpkgs packages and
 > transitive dependencies included, none of which appear in the
-> Repology view because they aren't directly named in your modules.
-> The two views answer different questions and complement each other.
+> nixpkgs-latest view because they aren't directly named in your
+> modules. The two views answer different questions and complement
+> each other.
 
 ### Pinning (route to a newer version via `nixpkgs-latest`)
 
@@ -165,6 +170,9 @@ it for "nvidia 560 works, don't move me to 570 before I test" or
 | `cheni upgrade`               | Refresh ALL flake inputs, preview, then rebuild       |
 | `cheni upgrade --gc`          | Same + `nix-collect-garbage --delete-older-than 30d`  |
 | `cheni clean`                 | Auto-remove obsolete pins (nixpkgs caught up)         |
+| `cheni clean --orphans`       | Drop pins/freezes that no module declares             |
+| `cheni clean --cruft`         | Remove `result*` symlinks + truncate version-cache > 10 MiB |
+| `cheni clean --all`           | `--orphans` + `--cruft` in one pass                   |
 
 > **A typical trap with `flake.lock`.** `cheni upgrade` runs
 > `nix flake update` *before* the rebuild prompt. If you cancel at
@@ -237,6 +245,26 @@ cheni completion bash > /etc/bash_completion.d/cheni    # or ~/.bash_completion
 cheni man > ~/.local/share/man/man1/cheni.1
 # then: man cheni
 ```
+
+### New in v0.6.0+
+
+State management, lifecycle flips, and an operation log that crosses
+session boundaries:
+
+| Command                        | What it does                                              |
+|--------------------------------|-----------------------------------------------------------|
+| `cheni audit`                  | Combined health overview (doctor + check + status) with verdict-line and next-action tip; `--brief`, `--json` |
+| `cheni gc`                     | Disk-space orchestrator with safety guards; `--keep N`, `--dry-run`, `--yes`, `--force` |
+| `cheni promote <pkg>`          | Flip a freeze → pin (release the lock, take updates from `nixpkgs-latest`) |
+| `cheni demote <pkg>`           | Flip a pin → freeze (lock at the currently-installed version) |
+| `cheni snapshot [--out FILE]`  | Dump pins+freezes to JSON for portability across machines |
+| `cheni restore <FILE>`         | Apply a snapshot, replacing the local pin/freeze state    |
+| `cheni timeline`               | Append-only operation log (pin/unpin/freeze/.../restore); `--last`, `--package`, `--kind`, `--since`, `--json` |
+
+`audit` is the recommended single entry-point for "what's the state of
+this machine". `timeline` answers "what changed and when" across
+sessions — written to `~/.cache/cheni/timeline.jsonl` on every
+state-mutating command.
 
 ### Short aliases
 
