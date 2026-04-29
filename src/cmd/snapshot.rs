@@ -46,47 +46,6 @@ impl RestoreDiff {
     }
 }
 
-/// Return the current UTC time formatted as RFC 3339 without pulling in chrono.
-///
-/// Format: `YYYY-MM-DDTHH:MM:SSZ`. Seconds precision is enough for a
-/// human-readable timestamp in a snapshot file.
-#[allow(clippy::manual_is_multiple_of)]
-fn now_rfc3339() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    // Manual decomposition — no external crate needed for a simple
-    // ISO 8601 "T Z" timestamp.
-    let s = secs % 60;
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    let mut days = secs / 86400; // days since 1970-01-01
-    let mut year = 1970u32;
-    loop {
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-        let days_in_year = if leap { 366 } else { 365 };
-        if days < days_in_year {
-            break;
-        }
-        days -= days_in_year;
-        year += 1;
-    }
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let month_days: [u64; 12] = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    let mut month = 1u32;
-    for &md in &month_days {
-        if days < md {
-            break;
-        }
-        days -= md;
-        month += 1;
-    }
-    let day = days + 1;
-    format!("{year:04}-{month:02}-{day:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
 /// Build a Snapshot from current pins + freezes + hostname.
 pub(crate) fn compose_snapshot(
     pins: Vec<String>,
@@ -95,7 +54,7 @@ pub(crate) fn compose_snapshot(
 ) -> Snapshot {
     Snapshot {
         format_version: FORMAT_VERSION,
-        created_at: now_rfc3339(),
+        created_at: crate::nix::timeline::now_rfc3339(),
         hostname: hostname.to_string(),
         pins,
         freezes,
