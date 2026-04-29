@@ -358,13 +358,13 @@ fn classify_rebuild_state_active_rebuild_ignores_lock_flag() {
 }
 
 #[test]
-fn classify_rebuild_state_no_rebuild_stale_lock_warns() {
+fn classify_rebuild_state_no_rebuild_dirty_lock_warns() {
     let result = classify_rebuild_state(None, true);
-    assert_eq!(result.severity, Severity::Warning, "stale lock without rebuild → Warning");
+    assert_eq!(result.severity, Severity::Warning, "dirty lock without rebuild → Warning");
     assert_eq!(result.name, "Active rebuild");
     assert!(
-        result.message.contains("Recent flake.lock change"),
-        "message must mention the stale lock, got: {}",
+        result.message.contains("flake.lock has uncommitted changes"),
+        "message must mention the dirty lock, got: {}",
         result.message
     );
     let hint = result.hint.as_deref().unwrap_or("");

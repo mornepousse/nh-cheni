@@ -1117,11 +1117,15 @@ fn format_duration(secs: u64) -> String {
 
 /// Pure classification logic — given what the I/O layer found, return
 /// the appropriate `CheckResult`. Separated for unit-testability.
+///
+/// `lock_dirty` = `flake.lock` has uncommitted changes per `git status`.
+/// Combined with "no active rebuild", this means a previous `cheni upgrade`
+/// updated the lock but didn't reach the rebuild step (likely killed mid-flight).
 pub(crate) fn classify_rebuild_state(
     active: Option<String>,
-    recent_lock_change: bool,
+    lock_dirty: bool,
 ) -> CheckResult {
-    match (active, recent_lock_change) {
+    match (active, lock_dirty) {
         (Some(detail), _) => CheckResult {
             severity: Severity::Ok,
             name: "Active rebuild".to_string(),
@@ -1131,10 +1135,11 @@ pub(crate) fn classify_rebuild_state(
         (None, true) => CheckResult {
             severity: Severity::Warning,
             name: "Active rebuild".to_string(),
-            message: "Recent flake.lock change but no rebuild in progress".to_string(),
+            message: "flake.lock has uncommitted changes but no rebuild is running".to_string(),
             hint: Some(
-                "Previous upgrade may have died. \
-                 Run `cheni build` to apply current flake.lock + config."
+                "Previous `cheni upgrade` likely died. \
+                 Run `cheni build` to apply the current flake.lock + config, \
+                 or `git checkout flake.lock` to discard."
                     .to_string(),
             ),
         },
@@ -1147,19 +1152,17 @@ pub(crate) fn classify_rebuild_state(
     }
 }
 
-/// I/O wrapper: walk `/proc` and stat `flake.lock`, then delegate to
-/// `classify_rebuild_state` for the pure logic.
+/// I/O wrapper: walk `/proc` and check `flake.lock` git state, then
+/// delegate to `classify_rebuild_state` for the pure logic.
+///
+/// We use `git diff` rather than mtime because mtime gives false
+/// negatives for upgrades that started > 1h ago (the user may run
+/// `cheni doctor` 2h after killing a stuck upgrade — mtime says "old"
+/// but the lock IS still uncommitted, which is the real signal).
 fn check_active_rebuild(flake_dir: &std::path::Path) -> CheckResult {
     let active = find_active_rebuild();
-
-    let lock = flake_dir.join("flake.lock");
-    let recent_lock_change = std::fs::metadata(&lock)
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .and_then(|t| t.elapsed().ok())
-        .is_some_and(|e| e < std::time::Duration::from_secs(3600));
-
-    classify_rebuild_state(active, recent_lock_change)
+    let lock_dirty = crate::nix::git::is_flake_lock_dirty(flake_dir);
+    classify_rebuild_state(active, lock_dirty)
 }
 
 #[cfg(test)]
