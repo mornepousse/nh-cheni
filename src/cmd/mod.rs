@@ -11,7 +11,6 @@ pub mod diagnose;
 pub mod diff;
 pub mod doctor;
 pub mod freeze;
-pub mod gc;
 pub mod history;
 pub mod init;
 pub mod interactive;

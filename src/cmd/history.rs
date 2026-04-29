@@ -832,32 +832,6 @@ pub(crate) fn pick_oldest_beyond(all: &[u32], keep: usize) -> Vec<u32> {
     all[..all.len() - keep].to_vec()
 }
 
-/// Structured plan for "delete oldest N generations", with both
-/// kept and deleted IDs surfaced so callers can render an audit.
-#[derive(Debug, Clone)]
-pub(crate) struct PrunePlan {
-    /// Generation IDs that would be deleted (oldest beyond `keep`).
-    pub deleted_ids: Vec<u32>,
-    /// Generation IDs kept (the most recent `keep`, in ascending order).
-    pub kept_ids: Vec<u32>,
-}
-
-impl PrunePlan {
-    pub fn kept_count(&self) -> usize {
-        self.kept_ids.len()
-    }
-}
-
-/// Build a prune plan that keeps the `keep` most recent generations and
-/// schedules the rest for deletion. Pure function — no I/O.
-pub(crate) fn plan_prune_keep_n(generations: &[Generation], keep: usize) -> PrunePlan {
-    let all_ids: Vec<u32> = generations.iter().map(|g| g.number).collect();
-    let deleted_ids = pick_oldest_beyond(&all_ids, keep);
-    let deleted_set: std::collections::HashSet<u32> = deleted_ids.iter().copied().collect();
-    let kept_ids: Vec<u32> = all_ids.iter().copied().filter(|id| !deleted_set.contains(id)).collect();
-    PrunePlan { deleted_ids, kept_ids }
-}
-
 /// Parse a duration like "30d", "2w", "1m" into days.
 ///
 /// Rejects `0d` / `0w` / etc — passing zero would mean "everything
