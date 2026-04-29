@@ -16,6 +16,12 @@ use colored::Colorize;
 use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
 use tracing::debug;
 
+/// Minimum number of generations to keep without `--force`.
+/// Mirrors the safety floor from `cheni gc` — ported here so
+/// `cheni history --keep N` also refuses to leave the system
+/// unable to rollback.
+pub(crate) const MIN_SAFETY_FLOOR: usize = 3;
+
 /// Options accepted by `cheni history`.
 pub struct HistoryOptions {
     pub diff: bool,
@@ -37,6 +43,9 @@ pub struct HistoryOptions {
     /// Print a one-line summary instead of the per-generation list.
     /// --diff overrides --brief (specific request wins).
     pub brief: bool,
+    /// Override the safety floor check (allow keep < MIN_SAFETY_FLOOR).
+    /// Zero is always refused, even with --force.
+    pub force: bool,
 }
 
 /// A single NixOS generation.
@@ -492,6 +501,29 @@ fn truncate_to_terminal(s: &str, indent: usize) -> String {
     out
 }
 
+/// Validate the `--keep N` safety floor: refuse zero unconditionally,
+/// refuse below `MIN_SAFETY_FLOOR` without `--force`.
+///
+/// Pure function so tests can exercise the guard without spinning up
+/// real generation data or shelling out.
+pub(crate) fn validate_keep_safety(kept_count: usize, force: bool) -> Result<()> {
+    if kept_count == 0 {
+        anyhow::bail!(
+            "Refusing to keep 0 generations — that would leave you unable \
+             to rollback. Increase --keep."
+        );
+    }
+    if kept_count < MIN_SAFETY_FLOOR && !force {
+        anyhow::bail!(
+            "Would keep only {} generation(s) — below the safety floor of {}. \
+             Use --force to override if you really mean it.",
+            kept_count,
+            MIN_SAFETY_FLOOR
+        );
+    }
+    Ok(())
+}
+
 /// Top-level dispatcher for `cheni history --prune/--delete/--keep/--older-than`.
 /// Reads as four phases: collect targets, guard the active gen, confirm,
 /// then apply.
@@ -504,6 +536,15 @@ fn run_delete(opts: &HistoryOptions, generations: &[Generation]) -> Result<()> {
         println!("{}", "Nothing to delete.".dimmed());
         return Ok(());
     }
+
+    // Safety floor check: applies when --keep drives the deletion.
+    // For --prune / --delete / --older-than the user picked explicitly,
+    // so we only enforce the floor for the --keep path.
+    if opts.keep.is_some() {
+        let kept_count = generations.len() - to_delete.len();
+        validate_keep_safety(kept_count, opts.force)?;
+    }
+
     if !confirm_targets(&to_delete, generations, opts.yes)? {
         return Ok(());
     }

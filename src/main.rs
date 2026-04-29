@@ -414,6 +414,11 @@ enum Commands {
         /// --diff overrides --brief (specific request wins).
         #[arg(long)]
         brief: bool,
+
+        /// Override the safety floor (allow keep < 3 generations).
+        /// Zero is always refused even with --force.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Restore pins+freezes state from a snapshot file (replaces local state).
@@ -675,9 +680,9 @@ async fn dispatch(command: Commands) -> Result<()> {
         Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned).await,
         Commands::Verify { tag } => cmd::verify::run(cmd::verify::VerifyOptions { tag }).await,
         Commands::Diagnose { path } => cmd::diagnose::run(cmd::diagnose::DiagnoseOptions { path }),
-        Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes, brief } => {
+        Commands::History { diff, full, limit, delete, prune, keep, older_than, gc, yes, brief, force } => {
             cmd::history::run(cmd::history::HistoryOptions {
-                diff, full, limit, delete, prune, keep, older_than, gc, yes, brief,
+                diff, full, limit, delete, prune, keep, older_than, gc, yes, brief, force,
             })
         }
         Commands::Restore { file, yes } => cmd::snapshot::restore(&file, yes),

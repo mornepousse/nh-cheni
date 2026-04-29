@@ -246,3 +246,34 @@ fn brief_stays_on_without_diff() {
     let effective_brief = brief && !diff;
     assert!(effective_brief, "--brief should be effective when --diff is absent");
 }
+
+// --- validate_keep_safety ---------------------------------------------------
+
+#[test]
+fn keep_zero_bails_unconditionally() {
+    // keep=0 is refused even with --force (no generations = no rollback).
+    let result_no_force = validate_keep_safety(0, false);
+    assert!(result_no_force.is_err(), "keep=0 without force must bail");
+    let result_force = validate_keep_safety(0, true);
+    assert!(result_force.is_err(), "keep=0 with force must still bail");
+    let msg = format!("{}", result_force.unwrap_err());
+    assert!(msg.contains("0 generations"), "error must mention 0 generations: {msg}");
+}
+
+#[test]
+fn keep_below_floor_bails_without_force() {
+    // keep=2 is below MIN_SAFETY_FLOOR=3 — must bail without --force.
+    // We simulate 5 total generations, 2 kept → kept_count = 2.
+    let result = validate_keep_safety(2, false);
+    assert!(result.is_err(), "kept=2 without force must bail");
+    let msg = format!("{}", result.unwrap_err());
+    assert!(msg.contains("safety floor"), "error must mention safety floor: {msg}");
+    assert!(msg.contains("--force"), "error must hint --force: {msg}");
+}
+
+#[test]
+fn keep_below_floor_passes_with_force() {
+    // Same scenario but --force is set: must succeed.
+    let result = validate_keep_safety(2, true);
+    assert!(result.is_ok(), "kept=2 with --force must succeed");
+}
