@@ -1,5 +1,23 @@
 use super::*;
 
+// ─── fix_fn_for registry ──────────────────────────────────────────────────────
+
+#[test]
+fn fix_fn_for_returns_none_for_unknown_check() {
+    assert!(fix_fn_for("nonexistent").is_none());
+    assert!(fix_fn_for("").is_none());
+    assert!(fix_fn_for("nix store size").is_none()); // case-sensitive
+    assert!(fix_fn_for("FLAKE.LOCK").is_none());     // uppercase must not match
+}
+
+#[test]
+fn fix_fn_for_returns_some_for_all_four_known_checks() {
+    assert!(fix_fn_for("flake.lock").is_some());
+    assert!(fix_fn_for("Active rebuild").is_some());
+    assert!(fix_fn_for("Nix store size").is_some());
+    assert!(fix_fn_for("Stale flake inputs").is_some());
+}
+
 // ─── tally_severities ─────────────────────────────────────────────────────────
 
 fn make_result(severity: Severity) -> CheckResult {

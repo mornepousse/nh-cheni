@@ -333,13 +333,19 @@ enum Commands {
     },
 
     /// Run health checks on the cheni setup (paths, pins, flake, store access)
-    #[command(after_help = "Example: cheni doctor --brief")]
+    #[command(after_help = "Example: cheni doctor --brief\nExample: cheni doctor --fix")]
     Doctor {
         /// Hide the collapsed "N other checks passed" line and the per-check
         /// hint paragraphs. Show only warnings + errors. Useful for piping
         /// into a status bar or running on a fast feedback loop.
         #[arg(long)]
         brief: bool,
+        /// Walk through warnings interactively and apply fixes where possible.
+        /// After each warning, prompts with [y/N/s for skip-all]. Hardcoded
+        /// fixes cover the four common warnings (flake.lock dirty, dead upgrade,
+        /// store size, stale inputs); other warnings show "(no automated fix)".
+        #[arg(long)]
+        fix: bool,
     },
 
     /// Update cheni itself (refresh the cheni flake input and rebuild)
@@ -665,7 +671,7 @@ async fn dispatch(command: Commands) -> Result<()> {
             })
         }
         Commands::Build => cmd::build::run(),
-        Commands::Doctor { brief } => cmd::doctor::run(brief),
+        Commands::Doctor { brief, fix } => cmd::doctor::run(brief, fix),
         Commands::SelfUpdate { allow_unsigned } => cmd::self_update::run(allow_unsigned).await,
         Commands::Verify { tag } => cmd::verify::run(cmd::verify::VerifyOptions { tag }).await,
         Commands::Diagnose { path } => cmd::diagnose::run(cmd::diagnose::DiagnoseOptions { path }),
