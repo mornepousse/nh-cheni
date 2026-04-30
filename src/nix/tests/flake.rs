@@ -492,3 +492,51 @@ fn read_input_rev_missing_input_returns_none() {
     .expect("write");
     assert_eq!(read_input_rev(dir.path(), "nixpkgs-latest"), None);
 }
+
+// --- validate_git_url ---
+
+#[test]
+fn validate_git_url_accepts_https() {
+    assert!(validate_git_url("https://example.com/foo/bar.git").is_ok());
+}
+
+#[test]
+fn validate_git_url_accepts_git_plus_https() {
+    assert!(validate_git_url("git+https://example.com/user/repo").is_ok());
+}
+
+#[test]
+fn validate_git_url_rejects_http_cleartext() {
+    let err = validate_git_url("http://example.com/repo.git").unwrap_err();
+    assert!(err.to_string().contains("https://"));
+}
+
+#[test]
+fn validate_git_url_rejects_git_cleartext_scheme() {
+    let err = validate_git_url("git://example.com/repo.git").unwrap_err();
+    assert!(err.to_string().contains("https://"));
+}
+
+#[test]
+fn validate_git_url_rejects_file_scheme() {
+    let err = validate_git_url("file:///home/user/repo").unwrap_err();
+    assert!(err.to_string().contains("https://"));
+}
+
+#[test]
+fn validate_git_url_rejects_newline_in_url() {
+    let err = validate_git_url("https://example.com/repo\ninjected").unwrap_err();
+    assert!(err.to_string().contains("control character"));
+}
+
+#[test]
+fn validate_git_url_rejects_carriage_return() {
+    let err = validate_git_url("https://example.com/repo\rinjected").unwrap_err();
+    assert!(err.to_string().contains("control character"));
+}
+
+#[test]
+fn validate_git_url_rejects_null_byte() {
+    let err = validate_git_url("https://example.com/repo\0").unwrap_err();
+    assert!(err.to_string().contains("control character"));
+}

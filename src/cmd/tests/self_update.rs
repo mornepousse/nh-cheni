@@ -113,6 +113,58 @@ fn cheni_timestamp_is_none_when_input_absent() {
 
 // format_elapsed is fully covered in src/tests/util.rs — no duplication here.
 
+// --- N4: self-update-unsigned timeline event ---
+
+/// Verify that the `self-update-unsigned` event kind serialises correctly
+/// and round-trips through JSONL parsing. This mirrors what
+/// `enforce_signature` records when `--allow-unsigned` bypasses a
+/// signature failure. No network required.
+#[test]
+fn self_update_unsigned_event_round_trips() {
+    use crate::nix::timeline::Event;
+
+    let event = Event {
+        ts: "2026-04-30T10:00:00Z".to_string(),
+        kind: "self-update-unsigned".to_string(),
+        package: None,
+        details: serde_json::json!({
+            "tag": "v0.8.0",
+            "reason": "minisign: signature file not found",
+        }),
+    };
+    let line = serde_json::to_string(&event).expect("serialise");
+    let parsed: Event = serde_json::from_str(&line).expect("parse");
+    assert_eq!(parsed.kind, "self-update-unsigned");
+    assert_eq!(
+        parsed.details.get("tag").and_then(|v| v.as_str()),
+        Some("v0.8.0")
+    );
+    assert!(parsed.package.is_none());
+}
+
+/// When tag is "unknown" (couldn't read flake.lock), the event must still
+/// serialise cleanly.
+#[test]
+fn self_update_unsigned_event_unknown_tag() {
+    use crate::nix::timeline::Event;
+
+    let event = Event {
+        ts: "2026-04-30T10:00:00Z".to_string(),
+        kind: "self-update-unsigned".to_string(),
+        package: None,
+        details: serde_json::json!({
+            "tag": "unknown",
+            "reason": "could not determine release tag",
+        }),
+    };
+    let line = serde_json::to_string(&event).expect("serialise");
+    let parsed: Event = serde_json::from_str(&line).expect("parse");
+    assert_eq!(
+        parsed.details.get("tag").and_then(|v| v.as_str()),
+        Some("unknown")
+    );
+}
+
 // --- bump_cheni_pin_in_flake_text ---
 
 #[test]

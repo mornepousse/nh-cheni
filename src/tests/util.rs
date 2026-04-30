@@ -95,3 +95,19 @@ fn pluralize_drops_count_keeps_only_noun() {
     assert_eq!(pluralize(1, "freeze"), "freeze");
     assert_eq!(pluralize(7, "freeze"), "freezes");
 }
+
+/// On Unix, `atomic_write` must produce a file with mode 0o600 so that
+/// cache and config files are not readable by group/other even when the
+/// process runs with a permissive umask (e.g. 0o022).
+#[cfg(unix)]
+#[test]
+fn atomic_write_creates_file_with_mode_0600() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secret.json");
+    atomic_write(&path, "{}").unwrap();
+    let perms = std::fs::metadata(&path).unwrap().permissions();
+    // Mask off the file-type bits — only the rwxrwxrwx portion matters.
+    let mode = perms.mode() & 0o777;
+    assert_eq!(mode, 0o600, "expected 0o600, got 0o{:03o}", mode);
+}

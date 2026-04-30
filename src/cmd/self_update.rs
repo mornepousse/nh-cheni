@@ -14,6 +14,7 @@ use regex::Regex;
 use tracing::debug;
 
 use crate::nix::config;
+use crate::nix::timeline;
 use crate::release;
 
 /// Run `cheni self-update`.
@@ -303,6 +304,16 @@ async fn enforce_signature(flake_dir: &Path, allow_unsigned: bool) -> Result<()>
                 "⚠".yellow(),
                 e
             );
+            // Audit trail: signature bypass was used and we couldn't even
+            // determine the tag. Record with tag="unknown".
+            timeline::record(
+                "self-update-unsigned",
+                None,
+                serde_json::json!({
+                    "tag": "unknown",
+                    "reason": "could not determine release tag",
+                }),
+            );
             return Ok(());
         }
         Err(e) => {
@@ -330,6 +341,18 @@ async fn enforce_signature(flake_dir: &Path, allow_unsigned: bool) -> Result<()>
                 "⚠".yellow(),
                 tag.bold(),
                 e
+            );
+            // Audit trail: signature verification would have failed but the
+            // user explicitly bypassed it with --allow-unsigned. Only recorded
+            // here (verification failure path), not on successful verification,
+            // so the timeline isn't spammed on normal self-updates.
+            timeline::record(
+                "self-update-unsigned",
+                None,
+                serde_json::json!({
+                    "tag": tag,
+                    "reason": e.to_string(),
+                }),
             );
             Ok(())
         }

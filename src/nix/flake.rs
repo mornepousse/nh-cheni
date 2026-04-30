@@ -669,6 +669,35 @@ pub fn target_system() -> &'static str {
     }
 }
 
+/// Validate a URL extracted from a `git`-type flake.lock input.
+///
+/// The URL is user-controlled (they wrote their own flake.lock), so the
+/// risk is low, but a URL containing control characters (`\n`, `\r`,
+/// `\0`) or a bare `&` could inject extra query-string parameters into
+/// the `git+<url>?ref=<ref>` flakeref passed to `nix flake metadata`.
+///
+/// Policy: accept only `https://` or `git+https://` schemes (clear-text
+/// `git://` and `file://` are rejected — if a user legitimately needs
+/// those schemes they can extend this list), and reject any character
+/// outside `[A-Za-z0-9:/?=._@~+%-]` plus the scheme-separator `//`.
+///
+/// Returns `Ok(&str)` on a well-formed URL, `Err` with a description
+/// otherwise.
+pub(crate) fn validate_git_url(url: &str) -> Result<&str> {
+    // Reject control characters that could break the flakeref assembly.
+    if url.bytes().any(|b| matches!(b, b'\n' | b'\r' | b'\0')) {
+        anyhow::bail!("git input URL contains illegal control character");
+    }
+    // Only allow safe schemes for remote git operations.
+    if !url.starts_with("https://") && !url.starts_with("git+https://") {
+        anyhow::bail!(
+            "git input URL must start with https:// or git+https://, got: {}",
+            url
+        );
+    }
+    Ok(url)
+}
+
 /// Resolve the HEAD rev + narHash of a flake input's tracked ref from
 /// the remote, WITHOUT updating flake.lock. Reads the input's `original`
 /// reference from the lock, reconstructs a flakeref, and runs
@@ -748,6 +777,16 @@ pub fn resolve_remote_head(
                 debug!("resolve_remote_head: missing url for git input '{}'", input_name);
                 return Ok(None);
             }
+            let url = match validate_git_url(url) {
+                Ok(u) => u,
+                Err(e) => {
+                    debug!(
+                        "resolve_remote_head: rejecting git input '{}' URL: {}",
+                        input_name, e
+                    );
+                    return Ok(None);
+                }
+            };
             match original.get("ref").and_then(|v| v.as_str()) {
                 Some(r) if !r.is_empty() => format!("git+{}?ref={}", url, r),
                 _ => format!("git+{}", url),

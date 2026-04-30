@@ -10,6 +10,9 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use colored::Colorize;
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 /// Write `content` to `path` atomically on POSIX.
 ///
 /// The file is first written to `<path>.tmp.<pid>`, flushed + synced,
@@ -38,6 +41,19 @@ pub fn atomic_write(path: &Path, content: &str) -> Result<()> {
     let tmp_path = parent.join(tmp_name);
 
     {
+        // On Unix, create the tmp file with mode 0o600 regardless of the
+        // process umask. The rename(2) call below preserves this mode on the
+        // final path, so cache and config files are not world-readable even
+        // when the user has a permissive umask (e.g. 0o022).
+        #[cfg(unix)]
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp_path)
+            .with_context(|| format!("Failed to open {} for writing", tmp_path.display()))?;
+        #[cfg(not(unix))]
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create(true)

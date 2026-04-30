@@ -61,6 +61,11 @@ fn append_event(event: &Event) -> Result<()> {
         .append(true)
         .open(&path)?;
     file.write_all(line.as_bytes())?;
+    // Flush data pages to disk so a crash doesn't leave a truncated JSONL
+    // line. sync_data (not sync_all) is sufficient — metadata (mtime, size)
+    // can lag behind without risking data loss. Swallow the error: the
+    // timeline is best-effort and the write already succeeded.
+    file.sync_data().ok();
     Ok(())
 }
 
