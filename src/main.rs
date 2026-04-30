@@ -92,7 +92,26 @@ struct Cli {
 enum Commands {
     /// One-shot health overview. Combines doctor + check + status into a
     /// single ordered report with a verdict line and a next-action tip.
-    #[command(after_help = "Example: cheni audit --brief")]
+    #[command(
+        long_about = "One-shot health overview. Combines doctor + check + status into a\n\
+            single ordered report.\n\
+            \n\
+            Layout (top-down by priority of action):\n\
+            \n\
+            1. TL;DR verdict line — `✓ All clear` / `⚠ N warnings` / `✗ N errors`\n\
+               summarising the worst signal found across the three sections.\n\
+            2. Health (from doctor) — errors and warnings with hints.\n\
+            3. Updates (from check) — verdict counts + flake-inputs needing\n\
+               update.\n\
+            4. State (from status) — pins / freezes / config path.\n\
+            5. Next-action tip — single sentence pointing the highest-priority\n\
+               item to address first.\n\
+            \n\
+            Use `--brief` for a one-line digest in shell prompts and status bars.\n\
+            Use `--json` for scripts. Use `--refresh-floor` to peek at HEAD remote\n\
+            without touching flake.lock (slow but accurate).",
+        after_help = "Example: cheni audit --brief"
+    )]
     Audit {
         /// Print a one-line summary instead of the full report.
         #[arg(long)]
@@ -297,7 +316,26 @@ enum Commands {
     Build,
 
     /// Drop obsolete pins (and optionally orphan pins/freezes + cruft).
-    #[command(after_help = "Example: cheni clean --all")]
+    #[command(
+        long_about = "Drop obsolete pins, plus optionally orphan pins/freezes and cruft.\n\
+            \n\
+            Three independent phases (default: only the first runs):\n\
+            \n\
+            1. Obsolete pins — pins that nixpkgs has caught up with. Once the\n\
+               regular nixpkgs floor reaches the version cheni was routing\n\
+               through nixpkgs-latest, the pin is no longer doing anything.\n\
+               Always runs.\n\
+            2. Orphans (`--orphans`) — pins or freezes whose package name\n\
+               doesn't appear in any active module. Likely leftover from a\n\
+               package you removed but forgot to unpin/unfreeze.\n\
+            3. Cruft (`--cruft`) — `result*` symlinks left behind by\n\
+               `nix build` in the flake dir, plus the on-disk version cache\n\
+               and timeline file when they grow above 10 MiB.\n\
+            \n\
+            `--all` enables both --orphans and --cruft. Each phase asks for\n\
+            its own confirmation prompt unless `--yes` is passed.",
+        after_help = "Example: cheni clean --all"
+    )]
     Clean {
         /// Also remove pins/freezes that no module declares.
         #[arg(long)]
