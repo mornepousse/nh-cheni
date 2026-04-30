@@ -553,6 +553,19 @@ pub(crate) fn is_heavy_build(name: &str) -> bool {
     HEAVY_BUILD_NAMES.iter().any(|p| name.contains(p))
 }
 
+/// True when the parsed version looks like a name-suffix integer rather
+/// than a real version (e.g. `dbus-1.drv` parses to name=`dbus`,
+/// version=`1`, but `1` is the protocol-major suffix of the derivation
+/// name, not an actual version). When the old version was verbose (had
+/// dots) and the new is a bare short integer, the comparison is bogus
+/// and we shouldn't tag it as a downgrade.
+pub(crate) fn looks_like_name_suffix(version: &str) -> bool {
+    !version.is_empty()
+        && version.len() <= 2
+        && !version.contains('.')
+        && version.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Render a single change as a one-liner. `major` bumps get a yellow
 /// arrow so they stand out at a glance; `patch` is dimmed.
 fn format_change(c: &PackageChange) -> String {
@@ -562,8 +575,14 @@ fn format_change(c: &PackageChange) -> String {
     } else {
         c.name.clone()
     };
+    // Detect the dbus-style "downgrade" caused by a derivation rename
+    // (old version had dots, new is a single-digit suffix).
+    let suspect_rename = matches!(c.diff, VersionDiff::Newer)
+        && c.old.as_deref().map(|o| o.contains('.')).unwrap_or(false)
+        && looks_like_name_suffix(&c.new);
     let tag = match (&c.old, &c.diff) {
         (None, _) => "new".green().to_string(),
+        _ if suspect_rename => "rebuild".dimmed().to_string(),
         (Some(_), VersionDiff::Major) => "major".yellow().bold().to_string(),
         (Some(_), VersionDiff::Minor) => "minor".to_string(),
         (Some(_), VersionDiff::Newer) => "downgrade".magenta().to_string(),

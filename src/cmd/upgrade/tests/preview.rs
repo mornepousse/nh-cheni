@@ -466,3 +466,32 @@ fn is_heavy_build_unwrapped_substring_does_not_overmatch() {
     assert!(!is_heavy_build("chromium"));
     assert!(!is_heavy_build("electron"));
 }
+
+#[test]
+fn looks_like_name_suffix_catches_dbus_style() {
+    // dbus-1.drv → split gives version="1" — that's a derivation name
+    // suffix, not a real version. Catches the [downgrade] glitch.
+    assert!(looks_like_name_suffix("1"));
+    assert!(looks_like_name_suffix("5"));
+    assert!(looks_like_name_suffix("62"));
+}
+
+#[test]
+fn looks_like_name_suffix_rejects_real_versions() {
+    assert!(!looks_like_name_suffix("1.0"));
+    assert!(!looks_like_name_suffix("1.16.2"));
+    assert!(!looks_like_name_suffix("128.5.0"));
+    assert!(!looks_like_name_suffix("2026.03.17"));
+}
+
+#[test]
+fn looks_like_name_suffix_rejects_long_or_alpha() {
+    // 3+ digit purely-numeric versions still look like real versions
+    // (e.g. tzdata 2026a, but inih really IS version 62; the heuristic
+    // only intervenes on top of an old-version-with-dots check, so
+    // false positives are gated by that second condition).
+    assert!(!looks_like_name_suffix("2026"));
+    assert!(!looks_like_name_suffix("128"));
+    assert!(!looks_like_name_suffix("1a"));
+    assert!(!looks_like_name_suffix(""));
+}
