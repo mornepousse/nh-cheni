@@ -5,6 +5,24 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## v0.8.1 — 2026-04-30
+
+### Added
+
+- Aliases `cheni a` (audit) and `cheni dr` (doctor) — round out the alias coverage for the two most-used everyday commands.
+- `Example:` footer on `cheni pin --help`, `cheni verify --help`, `cheni search --help` (the three commands that were missing one).
+- `long_about` descriptions on `cheni pin`, `cheni freeze`, `cheni audit`, `cheni clean` — explain the mental model (what pinning routes through, what freezing locks, the audit verdict layout, the clean phases) rather than just the syntax.
+
+### Changed
+
+- `cheni search` empty-state now suggests a broader query / spell-check / search.nixos.org fallback instead of the bare "No packages found." line.
+- `cheni search`, `cheni pin --flakes`, `cheni doctor --fix` git-checkout failure: bail messages gain actionable hints (cheni doctor / jq inspect / git status).
+- `cheni doctor --fix` flag description drops the stale `[y/N/s for skip-all]` text — skip-all was never implemented; the prompt is plain y/N.
+
+### Fixed
+
+- `cheni upgrade` preview: suppress the `[downgrade]` tag when the version comparison is an artefact of a derivation rename (old verbose like `1.16.2-lib`, new bare digit like `1`). Tag becomes `[rebuild]` in that specific shape, avoids the false alarm.
+
 ## v0.8.0 — 2026-04-29
 
 ### Breaking
