@@ -83,7 +83,6 @@ pub async fn run(
     brief: bool,
     refresh_floor: bool,
 ) -> Result<()> {
-    // --json always wins over --brief (machine output is unambiguous).
     let brief = resolve_brief_mode(json, brief);
     apply_early_flags(json, refresh);
 
@@ -98,56 +97,15 @@ pub async fn run(
             print_first_run_hint();
         } else {
             println!("{}", "No packages found to check.".dimmed());
-            println!(
-                "{}",
-                "  (no modules declare packages, or all are excluded by category filter)".dimmed()
-            );
+            println!("{}", "  (no modules declare packages, or all are excluded by category filter)".dimmed());
         }
         return Ok(());
     };
 
-    // Exclude frozen packages from the upstream check: the user has
-    // deliberately held them at a past version, so there's no update
-    // decision to make. We still surface them in a "Frozen" block so
-    // they're not invisible in the report.
     let current_freezes = freezes::read(&nix_config.flake_dir)?;
     let frozen_rows = split_out_frozen(&mut scan.packages, &current_freezes);
 
-    // When --refresh-floor is requested, probe the remote HEAD of
-    // nixpkgs-latest before starting the eval batch so the eval uses
-    // the fresh rev+narHash instead of the locked one. On failure we
-    // fall back silently and use the locked rev (same as without the flag).
-    let override_floor: Option<(String, String)> = if refresh_floor {
-        if !json && !brief {
-            println!("{}", "(refreshing nixpkgs-latest floor from remote…)".dimmed());
-        }
-        match flake::resolve_remote_head(&nix_config.flake_dir, "nixpkgs-latest") {
-            Ok(Some(pair)) => Some(pair),
-            Ok(None) => {
-                if !json {
-                    println!(
-                        "{}",
-                        "warning: couldn't refresh floor — using locked rev instead.".yellow()
-                    );
-                }
-                None
-            }
-            Err(e) => {
-                debug!("resolve_remote_head error: {:#}", e);
-                if !json {
-                    println!(
-                        "{}",
-                        "warning: couldn't refresh floor — using locked rev instead.".yellow()
-                    );
-                }
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Whether the floor was actually refreshed from remote (vs locked).
+    let override_floor = resolve_floor_override(refresh_floor, json, brief, &nix_config.flake_dir);
     let floor_was_refreshed = refresh_floor && override_floor.is_some();
 
     print_check_header(&scan, category, json, brief);
@@ -164,56 +122,101 @@ pub async fn run(
     let visible_flake_inputs =
         filter_visible_flake_inputs(&flake_inputs, &nix_config.flake_dir, scan.active_set.as_ref(), category);
 
-    // Read `nixpkgs` straight from the lock — `read_flake_inputs`
-    // excludes it by design (no per-pin update suggestion), but the
-    // freshness signal still has to surface so the user can tell
-    // "no updates available" from "behind reality by 12 days".
     let nixpkgs_age = flake::read_input_by_name(&nix_config.flake_dir, "nixpkgs");
+    let floor_days_old = if floor_was_refreshed { None } else { nixpkgs_age.as_ref().map(|i| i.days_old) };
 
-    // When the floor was refreshed, suppress the stale-floor warning:
-    // the verdict already reflects reality, so the warning is misleading.
-    let floor_days_old = if floor_was_refreshed {
-        None
-    } else {
-        nixpkgs_age.as_ref().map(|i| i.days_old)
-    };
+    dispatch_output(OutputParams {
+        json,
+        brief,
+        pending,
+        classification: &classification,
+        visible_flake_inputs: &visible_flake_inputs,
+        frozen_rows: &frozen_rows,
+        category,
+        details,
+        nixpkgs_age: nixpkgs_age.as_ref(),
+        floor_was_refreshed,
+        floor_days_old,
+        nix_config: &nix_config,
+    }).await
+}
 
-    if json {
-        print_json(&classification, &visible_flake_inputs, &frozen_rows)?;
-    } else if brief {
-        // --brief: verdict line only — no spinner was started, no
-        // details blocks, no tip, no self-update hint.
-        print_summary_line(&classification, frozen_rows.len(), floor_days_old);
+/// Resolve the remote floor override when `--refresh-floor` is requested.
+///
+/// Probes the remote HEAD of `nixpkgs-latest`; on failure falls back
+/// silently to `None` so the caller continues with the locked rev.
+/// The informational / warning lines are printed here so `run()` stays
+/// uncluttered.
+fn resolve_floor_override(
+    refresh_floor: bool,
+    json: bool,
+    brief: bool,
+    flake_dir: &std::path::Path,
+) -> Option<(String, String)> {
+    if !refresh_floor {
+        return None;
+    }
+    if !json && !brief {
+        println!("{}", "(refreshing nixpkgs-latest floor from remote…)".dimmed());
+    }
+    match flake::resolve_remote_head(flake_dir, "nixpkgs-latest") {
+        Ok(Some(pair)) => Some(pair),
+        Ok(None) => {
+            if !json {
+                println!("{}", "warning: couldn't refresh floor — using locked rev instead.".yellow());
+            }
+            None
+        }
+        Err(e) => {
+            debug!("resolve_remote_head error: {:#}", e);
+            if !json {
+                println!("{}", "warning: couldn't refresh floor — using locked rev instead.".yellow());
+            }
+            None
+        }
+    }
+}
+
+/// Parameters for the output-dispatch phase of `cheni check`.
+struct OutputParams<'a> {
+    json: bool,
+    brief: bool,
+    pending: bool,
+    classification: &'a Classification,
+    visible_flake_inputs: &'a [&'a flake::FlakeInput],
+    frozen_rows: &'a [FrozenRow],
+    category: Option<&'a str>,
+    details: bool,
+    nixpkgs_age: Option<&'a flake::FlakeInput>,
+    floor_was_refreshed: bool,
+    floor_days_old: Option<u64>,
+    nix_config: &'a config::NixConfig,
+}
+
+/// Dispatch to the correct output renderer (json / brief / human) and
+/// append the optional `--pending` section and self-update hint.
+async fn dispatch_output(p: OutputParams<'_>) -> Result<()> {
+    if p.json {
+        print_json(p.classification, p.visible_flake_inputs, p.frozen_rows)?;
+    } else if p.brief {
+        print_summary_line(p.classification, p.frozen_rows.len(), p.floor_days_old);
     } else {
         print_human(
-            &classification,
-            &visible_flake_inputs,
-            &frozen_rows,
-            category,
-            details,
-            nixpkgs_age.as_ref(),
-            floor_was_refreshed,
+            p.classification,
+            p.visible_flake_inputs,
+            p.frozen_rows,
+            p.category,
+            p.details,
+            p.nixpkgs_age,
+            p.floor_was_refreshed,
         );
     }
 
-    // Optional second pass: closure-level dry-run, surfaces what
-    // would actually rebuild — kernel, base system, transitive deps.
-    // Distinct view from the nix-eval section above (which only
-    // sees module-named packages present in nixpkgs). Skipped
-    // by default because it adds 30–60s of evaluation; --json
-    // ignores it because the section isn't represented in the
-    // schema yet (machine consumers usually want the structured
-    // nix-eval view alone). Also skipped in --brief mode.
-    if pending && !json && !brief {
-        append_pending_section(&nix_config)?;
+    if p.pending && !p.json && !p.brief {
+        append_pending_section(p.nix_config)?;
     }
-
-    // Best-effort self-update hint at the very tail. Cached for 24h
-    // so the GitLab API isn't hit on every check. Silent on failure
-    // — `cheni check` must keep working offline / under rate limit.
-    // Skipped in --brief mode (just the verdict).
-    if !json && !brief {
-        maybe_print_self_update_hint(&nix_config.flake_dir).await;
+    if !p.json && !p.brief {
+        maybe_print_self_update_hint(&p.nix_config.flake_dir).await;
     }
     Ok(())
 }

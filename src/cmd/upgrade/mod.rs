@@ -78,9 +78,6 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
         println!("{}\n", "=== cheni upgrade ===".bold());
     }
 
-    // --pins-only with no pins is meaningless — bail before touching
-    // anything so the user gets a clear "use plain upgrade" pointer
-    // instead of a no-op rebuild.
     if opts.pins_only && pins::read(&nix_config.flake_dir)?.is_empty() {
         println!(
             "  {} No pins to apply. Use '{}' for a full system upgrade.",
@@ -90,132 +87,47 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
         return Ok(());
     }
 
-    // Pre-step state check: an uncommitted flake.lock means a previous
-    // run (or a manual `nix flake update`) bumped inputs that haven't
-    // been built yet. The rebuild *will* apply those bumps even when
-    // the current flag scope (--pins-only) implies a smaller refresh.
-    // Surfacing the state up front prevents the "why did my kernel
-    // update?" surprise.
     if !opts.brief {
         warn_if_dirty_lock(&nix_config.flake_dir);
     }
 
-    let step1_title = if opts.pins_only {
-        "Updating nixpkgs-latest"
-    } else {
-        "Updating flake inputs"
-    };
-    if !opts.brief {
-        print_step(1, total_steps, step1_title);
-    }
+    let step1_title = if opts.pins_only { "Updating nixpkgs-latest" } else { "Updating flake inputs" };
+    if !opts.brief { print_step(1, total_steps, step1_title); }
     let step1_start = Instant::now();
     let context = flake_update::update_flake_inputs(&nix_config.flake_dir, opts.pins_only)?;
-    if !opts.brief {
-        println!(
-            "  {} done in {}s",
-            "✓".green().dimmed(),
-            step1_start.elapsed().as_secs().to_string().dimmed()
-        );
-    }
+    if !opts.brief { print_step_done("done", step1_start.elapsed().as_secs()); }
 
-    // Anti-downgrade guard for the targeted refresh: if nixpkgs has
-    // since caught up with (or moved past) nixpkgs-latest, applying
-    // pins would either be a no-op or actively roll packages back.
     if opts.pins_only && !flake_update::verify_nixpkgs_order(&nix_config.flake_dir) {
         return Ok(());
     }
 
     rebuild::refresh_constrained_freezes_step(&nix_config.flake_dir);
-    if !opts.brief {
-        print_separator();
-        print_step(2, total_steps, "Previewing changes");
-    }
-    let stats = match preview::preview_and_confirm(
-        config_path,
-        &nix_config.hostname,
-        &mut opts,
-        &context,
-    )? {
+    if !opts.brief { print_separator(); print_step(2, total_steps, "Previewing changes"); }
+    let stats = match preview::preview_and_confirm(config_path, &nix_config.hostname, &mut opts, &context)? {
         Some(s) => s,
         None => return Ok(()),
     };
-    if !opts.brief {
-        print_separator();
-    }
+    if !opts.brief { print_separator(); }
 
-    let step3_title = if opts.boot {
-        "Staging system for next boot"
-    } else {
-        "Rebuilding system"
-    };
-    if !opts.brief {
-        print_step(3, total_steps, step3_title);
-    }
+    let step3_title = if opts.boot { "Staging system for next boot" } else { "Rebuilding system" };
+    if !opts.brief { print_step(3, total_steps, step3_title); }
     let step3_start = Instant::now();
     let rebuild_result = rebuild::rebuild_system(config_path, opts.boot);
-    if !opts.brief {
-        print_separator();
-    }
-    // In brief mode: surface the rebuild error with the one-liner verdict.
+    if !opts.brief { print_separator(); }
+
     if let Err(ref e) = rebuild_result {
-        let elapsed = crate::util::format_elapsed(started.elapsed());
-        if opts.brief {
-            println!(
-                "{} Upgrade failed: {} ({})",
-                "✗".red().bold(),
-                e,
-                elapsed.dimmed(),
-            );
-        } else {
-            println!(
-                "{} Upgrade failed at step 3 (rebuild): {} ({}s)",
-                "✗".red().bold(),
-                e,
-                step3_start.elapsed().as_secs()
-            );
-            println!(
-                "  {} Steps 1-2 completed (flake.lock is updated, preview confirmed).",
-                "→".dimmed()
-            );
-            println!(
-                "  {} Fix the build error and run `{}` to re-attempt the rebuild only.",
-                "→".dimmed(),
-                "cheni build".bold()
-            );
-            println!(
-                "  {} Or `{}` to retry the full flow.",
-                "→".dimmed(),
-                "cheni upgrade --yes".bold()
-            );
-        }
+        print_rebuild_failure(e, started.elapsed(), step3_start.elapsed().as_secs(), opts.brief);
         return Err(rebuild_result.unwrap_err());
     }
-    if !opts.brief {
-        println!(
-            "  {} rebuild succeeded in {}s",
-            "✓".green().dimmed(),
-            step3_start.elapsed().as_secs().to_string().dimmed()
-        );
-    }
+    if !opts.brief { print_step_done("rebuild succeeded", step3_start.elapsed().as_secs()); }
 
-    if !opts.brief {
-        print_step(4, total_steps, "Checking obsolete pins");
-    }
+    if !opts.brief { print_step(4, total_steps, "Checking obsolete pins"); }
     let step4_start = Instant::now();
     cleanup::run_pin_cleanup_step(&nix_config.flake_dir, opts.no_clean_pins)?;
-    if !opts.brief {
-        println!(
-            "  {} done in {}s",
-            "✓".green().dimmed(),
-            step4_start.elapsed().as_secs().to_string().dimmed()
-        );
-    }
+    if !opts.brief { print_step_done("done", step4_start.elapsed().as_secs()); }
 
     if opts.gc {
-        if !opts.brief {
-            print_separator();
-            print_step(5, total_steps, "Collecting garbage (> 30 days)");
-        }
+        if !opts.brief { print_separator(); print_step(5, total_steps, "Collecting garbage (> 30 days)"); }
         cleanup::run_gc_step(opts.yes)?;
     }
 
@@ -223,13 +135,9 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
         print_separator();
         summary::print_final_summary(started.elapsed(), &stats, &context, opts.boot);
         if !opts.gc {
-            println!(
-                "{}",
-                "  Old generations kept for rollback. Use --gc to reclaim disk space later.".dimmed()
-            );
+            println!("{}", "  Old generations kept for rollback. Use --gc to reclaim disk space later.".dimmed());
         }
     } else {
-        // --brief: one-liner verdict only.
         let elapsed = crate::util::format_elapsed(started.elapsed());
         println!(
             "{} {} ({})",
@@ -241,12 +149,50 @@ pub fn run(mut opts: UpgradeOptions) -> Result<()> {
     crate::nix::timeline::record(
         "upgrade",
         None,
-        serde_json::json!({
-            "outcome": "success",
-            "duration_secs": started.elapsed().as_secs(),
-        }),
+        serde_json::json!({ "outcome": "success", "duration_secs": started.elapsed().as_secs() }),
     );
     Ok(())
+}
+
+/// Print the `✓ <label> in Xs` line shown after each completed step.
+fn print_step_done(label: &str, secs: u64) {
+    println!(
+        "  {} {} in {}s",
+        "✓".green().dimmed(),
+        label,
+        secs.to_string().dimmed()
+    );
+}
+
+/// Print the rebuild-failure block (step 3 error) in either brief or
+/// verbose mode and emit the recovery hints.
+///
+/// In brief mode a single verdict line is printed; in full mode the
+/// block includes the two recovery hints shipped in v0.8.0.
+fn print_rebuild_failure(err: &anyhow::Error, total_elapsed: std::time::Duration, step_secs: u64, brief: bool) {
+    if brief {
+        let elapsed = crate::util::format_elapsed(total_elapsed);
+        println!(
+            "{} Upgrade failed: {} ({})",
+            "✗".red().bold(),
+            err,
+            elapsed.dimmed(),
+        );
+    } else {
+        println!(
+            "{} Upgrade failed at step 3 (rebuild): {} ({}s)",
+            "✗".red().bold(),
+            err,
+            step_secs
+        );
+        println!("  {} Steps 1-2 completed (flake.lock is updated, preview confirmed).", "→".dimmed());
+        println!(
+            "  {} Fix the build error and run `{}` to re-attempt the rebuild only.",
+            "→".dimmed(),
+            "cheni build".bold()
+        );
+        println!("  {} Or `{}` to retry the full flow.", "→".dimmed(), "cheni upgrade --yes".bold());
+    }
 }
 
 /// Local thin alias to the shared `crate::output::print_step` so
