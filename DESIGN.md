@@ -313,12 +313,9 @@ cheni/
 │   │   ├── status.rs        # cheni status
 │   │   ├── doctor.rs        # cheni doctor (health checks)
 │   │   ├── audit.rs         # cheni audit (combined doctor+check+status)
-│   │   ├── gc.rs            # cheni gc (disk-space orchestrator)
 │   │   ├── search.rs        # cheni search (nix search wrapper)
 │   │   ├── why.rs           # cheni why (find declaring .nix file)
 │   │   ├── clean.rs         # cheni clean (obsolete pins / orphans / cruft)
-│   │   ├── lifecycle.rs     # cheni promote / demote (flip pin↔freeze)
-│   │   ├── snapshot.rs      # cheni snapshot / restore (export/import state)
 │   │   ├── timeline.rs      # cheni timeline (operation log reader)
 │   │   ├── self_update.rs   # cheni self-update (verifies signature)
 │   │   ├── verify.rs        # cheni verify (read-only signature check)
