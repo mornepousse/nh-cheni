@@ -55,12 +55,19 @@ pub async fn run(query: &str) -> Result<()> {
     println!("{} {}\n", "Searching nixpkgs for".dimmed(), query.bold());
 
     let raw = run_nix_search(query)?;
-    let Some(obj) = raw.as_object() else {
+    let no_results = || {
         println!("{}", "No packages found.".dimmed());
+        println!(
+            "  {} try a broader query, check spelling, or browse https://search.nixos.org",
+            "·".dimmed()
+        );
+    };
+    let Some(obj) = raw.as_object() else {
+        no_results();
         return Ok(());
     };
     if obj.is_empty() {
-        println!("{}", "No packages found.".dimmed());
+        no_results();
         return Ok(());
     }
     debug!("Found {} results", obj.len());
