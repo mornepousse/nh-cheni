@@ -5,6 +5,12 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## v0.8.4 — 2026-04-30
+
+### Fixed
+
+- `cheni history --prune` interactive picker felt "locked" on long history: the multi-select drew the full list every keypress with no scroll viewport, the prompt label didn't mention arrow-key navigation or escape-to-cancel, and the current generation appeared in the picker only to be silently dropped from the result. The picker now excludes the active generation from the start, caps the viewport at 10 lines so navigation feels responsive, and the prompt label spells out `↑/↓ move, space toggle, enter confirm, esc cancel`. If only the current generation is on disk, prints `Nothing to prune` instead of opening an empty picker.
+
 ## v0.8.3 — 2026-04-30
 
 ### Fixed

@@ -890,23 +890,30 @@ fn pick_older_than(all: &[u32], days: u64) -> Result<Vec<u32>> {
 }
 
 /// Show a multi-select picker so the user can tick generations to delete.
-/// The active generation is shown but excluded from the result.
+/// The active generation is excluded from the picker entirely (cannot be
+/// deleted) so the index returned by `interact_opt` maps directly back to
+/// a deletable generation. A bounded viewport keeps the prompt usable on
+/// short terminals: without it, `dialoguer` redraws the full list on every
+/// keypress, which on long history feels like the prompt is "locked".
 fn pick_interactively(generations: &[Generation], current: Option<u32>) -> Result<Vec<u32>> {
-    // Newest first for picking
-    let ordered: Vec<&Generation> = generations.iter().rev().collect();
-
-    let labels: Vec<String> = ordered
+    let deletable: Vec<&Generation> = generations
         .iter()
-        .map(|g| {
-            let marker = if Some(g.number) == current { " (current)" } else { "" };
-            let summary = if let Some(idx) = ordered.iter().position(|x| x.number == g.number) {
-                if idx + 1 < ordered.len() {
-                    let prev = ordered[idx + 1];
-                    get_diff_summary(&prev.store_path, &g.store_path)
-                        .unwrap_or_default()
-                } else {
-                    String::new()
-                }
+        .rev()
+        .filter(|g| Some(g.number) != current)
+        .collect();
+
+    if deletable.is_empty() {
+        println!("Nothing to prune — only the current generation is on disk.");
+        return Ok(Vec::new());
+    }
+
+    let labels: Vec<String> = deletable
+        .iter()
+        .enumerate()
+        .map(|(idx, g)| {
+            let summary = if idx + 1 < deletable.len() {
+                let prev = deletable[idx + 1];
+                get_diff_summary(&prev.store_path, &g.store_path).unwrap_or_default()
             } else {
                 String::new()
             };
@@ -915,21 +922,19 @@ fn pick_interactively(generations: &[Generation], current: Option<u32>) -> Resul
             } else {
                 format!("  — {}", summary)
             };
-            format!("{:<5} {}{}{}", g.number, g.date, marker, summary_str)
+            format!("{:<5} {}{}", g.number, g.date, summary_str)
         })
         .collect();
 
+    let viewport = labels.len().min(10);
     let selection = MultiSelect::with_theme(&ColorfulTheme::default())
-        .with_prompt("Pick generations to delete (space = toggle, enter = confirm)")
+        .with_prompt("Pick generations to delete (↑/↓ move, space toggle, enter confirm, esc cancel)")
         .items(&labels)
+        .max_length(viewport)
         .interact_opt()?
         .unwrap_or_default();
 
-    Ok(selection
-        .into_iter()
-        .map(|i| ordered[i].number)
-        .filter(|n| Some(*n) != current)
-        .collect())
+    Ok(selection.into_iter().map(|i| deletable[i].number).collect())
 }
 
 /// Read all system generations by listing symlinks in /nix/var/nix/profiles.
