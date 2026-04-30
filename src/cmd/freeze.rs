@@ -383,10 +383,9 @@ pub fn refresh_constrained_freezes(
     flake_dir: &std::path::Path,
 ) -> Result<Vec<(String, RefreshOutcome)>> {
     let current = freezes::read(flake_dir)?;
-    let constrained: Vec<(String, freezes::FreezeEntry)> = current
+    let constrained: Vec<(String, freezes::FreezeEntry, u32)> = current
         .iter()
-        .filter(|(_, e)| e.major_constraint.is_some())
-        .map(|(k, v)| (k.clone(), v.clone()))
+        .filter_map(|(k, v)| v.major_constraint.map(|c| (k.clone(), v.clone(), c)))
         .collect();
     if constrained.is_empty() {
         return Ok(Vec::new());
@@ -403,15 +402,14 @@ pub fn refresh_constrained_freezes(
             tracing::debug!("freeze refresh: prefetch failed ({}), reporting Unknown", e);
             return Ok(constrained
                 .into_iter()
-                .map(|(name, _)| (name, RefreshOutcome::Unknown))
+                .map(|(name, _, _)| (name, RefreshOutcome::Unknown))
                 .collect());
         }
     };
 
     let mut outcomes = Vec::with_capacity(constrained.len());
     let mut updated = current.clone();
-    for (name, entry) in constrained {
-        let constraint = entry.major_constraint.expect("filtered to Some");
+    for (name, entry, constraint) in constrained {
         let Some(upstream_version) =
             flake::query_pkg_version_at_rev(&current_rev, &current_nar, &name)
         else {

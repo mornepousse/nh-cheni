@@ -843,7 +843,9 @@ fn emit_completion(shell: clap_complete::Shell) -> Result<()> {
     // generations, and so on — turning what was static-only flag
     // completion into a useful daily-driver tool.
     if matches!(shell, clap_complete::Shell::Zsh) {
-        let patched = augment_zsh_completion(std::str::from_utf8(&buf).unwrap_or(""));
+        let patched = augment_zsh_completion(
+            std::str::from_utf8(&buf).expect("clap_complete output is UTF-8"),
+        );
         return write_ignoring_broken_pipe(patched.as_bytes());
     }
 
