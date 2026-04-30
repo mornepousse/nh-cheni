@@ -915,6 +915,34 @@ in pkgs.{pkg_name}.version",
     }
 }
 
+/// Run `nix flake update -- <input-name>` in `flake_dir`.
+///
+/// This is the canonical way to pull the latest HEAD of a flake input
+/// without going through the nixpkgs-latest overlay mechanism. Moves the
+/// lock entry to the upstream HEAD commit, leaving `flake.nix` unchanged.
+///
+/// Returns `Ok(())` on success. On a missing `nix` binary, the error
+/// carries the standard `tool_error` install hint; on a non-zero exit it
+/// surfaces the command used so the user can reproduce it manually.
+pub fn flake_input_update(flake_dir: &std::path::Path, input_name: &str) -> anyhow::Result<()> {
+    let status = std::process::Command::new("nix")
+        .args(["flake", "update", "--", input_name])
+        .current_dir(flake_dir)
+        .status()
+        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
+
+    if !status.success() {
+        anyhow::bail!(
+            "`nix flake update {}` failed.\n\
+             Check that the input's URL is reachable and the locked rev/branch \
+             still exists. `cat flake.lock | jq '.nodes.\"{}\"'` to inspect.",
+            input_name,
+            input_name
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "tests/flake.rs"]
 mod tests;

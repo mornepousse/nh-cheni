@@ -818,39 +818,12 @@ fn check_store_size() -> CheckResult {
 /// Shell out to `du -sh /nix/store`. Returns the parsed size on success,
 /// or a short human-readable reason string on any failure — intended to
 /// be shown directly to the user rather than hidden behind DEBUG logs.
+///
+/// Delegates to `crate::nix::tools::du_size` so error messages are
+/// consistent with the rest of the tool-error layer.
 fn size_via_du() -> Result<String, String> {
-    let output = std::process::Command::new("du")
-        .args(["-sh", "/nix/store"])
-        .output()
-        .map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => "'du' binary not in PATH".to_string(),
-            _ => format!("failed to run du: {}", e),
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let first_line = stderr.lines().next().unwrap_or("").trim();
-        let detail = if first_line.is_empty() {
-            match output.status.code() {
-                Some(c) => format!("du exited with code {}", c),
-                None => "du terminated without exit code".to_string(),
-            }
-        } else {
-            // Strip a leading "du: " if present — the error is still clear
-            // and a bit shorter.
-            first_line.strip_prefix("du: ").unwrap_or(first_line).to_string()
-        };
-        return Err(detail);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let size = stdout.split_whitespace().next()
-        .ok_or_else(|| "du returned empty output".to_string())?
-        .to_string();
-    if size.is_empty() || size == "?" {
-        return Err("du returned an unparseable size".to_string());
-    }
-    Ok(size)
+    crate::nix::tools::du_size(std::path::Path::new("/nix/store"))
+        .map_err(|e| e.to_string())
 }
 
 fn classify_store_size(size: &str) -> CheckResult {
@@ -1053,27 +1026,25 @@ fn check_version_cache() -> CheckResult {
 }
 
 /// Check that `nh` is installed (required by cheni build / update).
+///
+/// Delegates to `crate::nix::tools::nh_version` so probe logic is shared
+/// with the rest of the tool-error layer.
 fn check_nh_installed() -> CheckResult {
-    let output = std::process::Command::new("nh")
-        .arg("--version")
-        .output();
-
-    match output {
-        Ok(o) if o.status.success() => {
-            let stdout = String::from_utf8_lossy(&o.stdout);
-            let version = stdout.trim().to_string();
-            CheckResult {
-                severity: Severity::Ok,
-                name: "nh".to_string(),
-                message: format!("installed ({})", version),
-                hint: None,
-            }
-        }
-        _ => CheckResult {
+    match crate::nix::tools::nh_version() {
+        Some(version) => CheckResult {
+            severity: Severity::Ok,
+            name: "nh".to_string(),
+            message: format!("installed ({})", version),
+            hint: None,
+        },
+        None => CheckResult {
             severity: Severity::Error,
             name: "nh".to_string(),
             message: "not installed".to_string(),
-            hint: Some("cheni build/update depend on nh. Install it in your NixOS config.".to_string()),
+            hint: Some(
+                crate::nix::tools::missing_tool_hint("nh")
+                    .to_string()
+            ),
         },
     }
 }
@@ -1239,23 +1210,8 @@ fn read_process_start_ticks(proc_path: &std::path::Path) -> Option<u64> {
 /// affects the "running for Xm Ys" display string, not correctness of the
 /// check itself.
 fn clock_ticks_per_sec() -> u64 {
-    // Try `getconf CLK_TCK` — available on all POSIX systems without libc FFI.
-    let output = std::process::Command::new("getconf")
-        .arg("CLK_TCK")
-        .output()
-        .ok();
-    if let Some(out) = output {
-        if out.status.success() {
-            if let Ok(s) = std::str::from_utf8(&out.stdout) {
-                if let Ok(n) = s.trim().parse::<u64>() {
-                    if n > 0 {
-                        return n;
-                    }
-                }
-            }
-        }
-    }
-    100 // near-universal Linux default
+    // Delegate to the shared tool wrapper so error handling is consistent.
+    crate::nix::tools::getconf_clk_tck().unwrap_or(100)
 }
 
 /// Format a duration in seconds as "Xm Ys" or "Xs" for display.

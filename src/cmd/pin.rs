@@ -702,28 +702,17 @@ fn apply_flake_updates(flake_dir: &std::path::Path, inputs: &[&flake::FlakeInput
 /// Pin a flake input by updating it directly.
 ///
 /// Instead of using the nixpkgs-latest overlay, this runs
-/// `nix flake update <input-name>` to fetch the latest version.
+/// Update a flake input to its latest upstream HEAD.
+///
+/// Delegates the `nix flake update` shell-out to `crate::nix::flake` so
+/// the execution + error-mapping stays in the nix integration layer.
 fn pin_flake_input(flake_dir: &std::path::Path, name: &str) -> Result<()> {
     println!(
         "{} is a flake input — updating directly.\n",
         name.bold()
     );
 
-    let status = std::process::Command::new("nix")
-        .args(["flake", "update", "--", name])
-        .current_dir(flake_dir)
-        .status()
-        .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
-
-    if !status.success() {
-        anyhow::bail!(
-            "nix flake update {} failed.\n\
-             Check that the input's URL is reachable and the locked rev/branch \
-             still exists. `cat flake.lock | jq '.nodes.\"{}\"'` to inspect.",
-            name,
-            name
-        );
-    }
+    crate::nix::flake::flake_input_update(flake_dir, name)?;
 
     println!("\n{} Updated flake input {}.", "✓".green(), name.bold());
     println!("Run '{}' to rebuild.", "cheni build".bold());
