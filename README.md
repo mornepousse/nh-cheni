@@ -267,8 +267,10 @@ Every frequently-used command has a two-letter alias:
 
 | Alias        | Command        |
 |--------------|----------------|
+| `cheni a`    | `audit`        |
 | `cheni ck`   | `check`        |
 | `cheni st`   | `status`       |
+| `cheni dr`   | `doctor`       |
 | `cheni ug`   | `upgrade`      |
 | `cheni b`    | `build`        |
 | `cheni h`    | `history`      |

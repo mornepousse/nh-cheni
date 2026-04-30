@@ -110,6 +110,7 @@ enum Commands {
             Use `--brief` for a one-line digest in shell prompts and status bars.\n\
             Use `--json` for scripts. Use `--refresh-floor` to peek at HEAD remote\n\
             without touching flake.lock (slow but accurate).",
+        alias = "a",
         after_help = "Example: cheni audit --brief"
     )]
     Audit {
@@ -355,7 +356,7 @@ enum Commands {
     },
 
     /// Run health checks on the cheni setup (paths, pins, flake, store access)
-    #[command(after_help = "Example: cheni doctor --brief\nExample: cheni doctor --fix")]
+    #[command(alias = "dr", after_help = "Example: cheni doctor --brief\nExample: cheni doctor --fix")]
     Doctor {
         /// Hide the collapsed "N other checks passed" line and the per-check
         /// hint paragraphs. Show only warnings + errors. Useful for piping
