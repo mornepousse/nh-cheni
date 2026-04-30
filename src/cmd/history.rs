@@ -17,9 +17,9 @@ use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect};
 use tracing::debug;
 
 /// Minimum number of generations to keep without `--force`.
-/// Mirrors the safety floor from `cheni gc` — ported here so
-/// `cheni history --keep N` also refuses to leave the system
-/// unable to rollback.
+/// `cheni history --keep N` refuses to drop below this so the user
+/// keeps usable rollback targets. `--force` overrides except for
+/// `--keep 0`, which is always refused (no generations = no rollback).
 pub(crate) const MIN_SAFETY_FLOOR: usize = 3;
 
 /// Options accepted by `cheni history`.
