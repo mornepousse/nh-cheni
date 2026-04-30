@@ -5,6 +5,14 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## v0.8.2 — 2026-04-30
+
+### Changed
+
+- `DESIGN.md` file tree drops the dead entries for the removed `gc.rs`, `lifecycle.rs`, `snapshot.rs` modules.
+- `README.md` example output and `--details` description align with the v0.8.0 bucket renames (Newer/Unknown → Ahead/Missing).
+- `cmd/history.rs` MIN_SAFETY_FLOOR doc-comment drops the dead `cheni gc` reference (now stands on its own merit).
+
 ## v0.8.1 — 2026-04-30
 
 ### Added
