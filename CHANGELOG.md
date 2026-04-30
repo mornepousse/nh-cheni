@@ -5,6 +5,22 @@ in `0.1.0-alpha` — expect breaking changes. When `v1.0.0` ships, this
 file switches to [Keep a Changelog](https://keepachangelog.com) with
 semver.
 
+## v0.8.5 — 2026-04-30
+
+### Security
+
+- Validate hostname and git filename before splicing into shell-out arguments: both values are now checked against a strict allowlist pattern before reaching any `Command` builder, eliminating a shell-injection vector in `cheni pin`, `cheni freeze`, and `cheni doctor --fix`. (commit a809304)
+- `cheni self-update --allow-unsigned`: record a `self-update-unsigned` event in the timeline when the bypass is load-bearing (i.e., the release has no `.minisig`), making unsigned updates auditable after the fact. (commit c3d4752)
+- Harden timeline / cache / flake-url paths: reject path components that contain `..` or NUL bytes before any file operation; flake URL construction validates the input-name segment against the same allowlist as hostnames. (commit c3d4752)
+- Files created by `atomic_write` are now mode `0o600` (owner-read/write only). Pre-existing cache files keep their current mode; new files (version cache, pins, freezes) are restricted on creation.
+
+### Internal
+
+- Decompose oversized `run()` functions in `cmd/upgrade.rs` and `cmd/check.rs` (S1+S2 conventions audit): each `run()` is now a short orchestrator delegating to named helpers (`gather_*`, `print_*_section`, `dispatch_*`). (commit 6788e2a)
+- Centralize `du`, `nh`, and `getconf` shell-outs and migrate `nix flake update` invocation to the `nix::` module (S3+S4 conventions audit): shell-out sites no longer scattered across `cmd/` files. (commit c062d07)
+- Drop `expect`-after-`filter` patterns and tighten UTF-8 assumptions: replace with explicit `match` or `if let` to surface the "impossible" cases as proper errors rather than panics. (commit bbff3ed)
+- Lock v0.8.3 overlay-recursion fix against regression: new test suite covering the `inherit (prev) system` → hardcoded `"x86_64-linux"` substitution in generated overlay templates. (commit 00c89da)
+
 ## v0.8.4 — 2026-04-30
 
 ### Fixed
