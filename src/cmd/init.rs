@@ -390,12 +390,14 @@ fn add_overlay(flake_path: &Path, content: &str, _hostname: &str) -> Result<()> 
     let overlay_code = r#"              # cheni: per-package updates from nixpkgs-latest.
               # Safe to leave in place if cheni is uninstalled — an absent
               # or empty package-pins.json degrades to the identity overlay.
-              # `inherit (prev) system` picks up the current architecture
-              # automatically (x86_64-linux / aarch64-linux / aarch64-darwin).
+              # `system` is hardcoded to avoid `inherit (prev) system`, which
+              # forces the overlay fixpoint and can trigger an infinite
+              # recursion in nixpkgs `aliases.nix` once a pin actually fires.
+              # Adapt to "aarch64-linux" / "aarch64-darwin" if needed.
               (final: prev:
                 let
                   pkgs-latest = import inputs.nixpkgs-latest {
-                    inherit (prev) system;
+                    system = "x86_64-linux";
                     config.allowUnfree = true;
                   };
                   pins = if builtins.pathExists ./package-pins.json
@@ -462,8 +464,10 @@ fn add_freeze_overlay(flake_path: &Path, content: &str) -> Result<()> {
     let overlay_code = r#"              # cheni: frozen packages — held at their snapshot nixpkgs rev.
               # Safe to leave in place if cheni is uninstalled — an absent
               # or empty package-freezes.json degrades to the identity overlay.
-              # `inherit (prev) system` picks up the current architecture
-              # automatically (x86_64-linux / aarch64-linux / aarch64-darwin).
+              # `system` is hardcoded (matching the pin overlay below) to
+              # avoid `inherit (prev) system` — which forces the overlay
+              # fixpoint and triggers an `aliases.nix` infinite recursion as
+              # soon as a freeze entry actually fires `mkFrozen`.
               (final: prev:
                 let
                   freezes = if builtins.pathExists ./package-freezes.json
@@ -477,14 +481,12 @@ fn add_freeze_overlay(flake_path: &Path, content: &str) -> Result<()> {
                         repo = "nixpkgs";
                         rev = entry.rev;
                         narHash = entry.narHash;
-                      }) { inherit (prev) system; config.allowUnfree = true; };
+                      }) { system = "x86_64-linux"; config.allowUnfree = true; };
                     in
-                    if pkgs-at-rev ? ${name}
-                    then { inherit name; value = pkgs-at-rev.${name}; }
-                    else null;
+                    { inherit name; value = pkgs-at-rev.${name}; };
                 in
-                builtins.listToAttrs (builtins.filter (x: x != null)
-                  (builtins.attrValues (builtins.mapAttrs mkFrozen freezes))))"#;
+                builtins.listToAttrs
+                  (builtins.attrValues (builtins.mapAttrs mkFrozen freezes)))"#;
 
     let mut found = false;
     let lines: Vec<&str> = content.lines().collect();
@@ -535,12 +537,14 @@ fn print_overlay_instructions(_hostname: &str) {
     # Missing / empty file degrades to the identity overlay — remove cheni
     # safely at any time by deleting this block, the nixpkgs-latest input,
     # and (optionally) package-pins.json.
+    # `system` is hardcoded (adapt to your arch) to avoid an overlay fixpoint
+    # that triggers an `aliases.nix` infinite recursion on non-empty pins.
     nixpkgs.overlays = [
       # cheni: pinned packages from nixpkgs-latest
       (final: prev:
         let
           pkgs-latest = import inputs.nixpkgs-latest {
-            inherit (prev) system;
+            system = "x86_64-linux";
             config.allowUnfree = true;
           };
           pins = if builtins.pathExists ./package-pins.json
@@ -573,7 +577,10 @@ fn print_freeze_overlay_instructions(_hostname: &str) {
             .bold()
     );
     println!();
-    println!("{}", r#"  (final: prev:
+    println!("{}", r#"  # `system` is hardcoded (adapt to your arch). Using `inherit (prev) system`
+  # forces the overlay fixpoint and triggers an infinite recursion in
+  # nixpkgs `aliases.nix` as soon as a freeze actually fires.
+  (final: prev:
     let
       freezes = if builtins.pathExists ./package-freezes.json
                 then builtins.fromJSON (builtins.readFile ./package-freezes.json)
@@ -586,14 +593,12 @@ fn print_freeze_overlay_instructions(_hostname: &str) {
             repo = "nixpkgs";
             rev = entry.rev;
             narHash = entry.narHash;
-          }) { inherit (prev) system; config.allowUnfree = true; };
+          }) { system = "x86_64-linux"; config.allowUnfree = true; };
         in
-        if pkgs-at-rev ? ${name}
-        then { inherit name; value = pkgs-at-rev.${name}; }
-        else null;
+        { inherit name; value = pkgs-at-rev.${name}; };
     in
-    builtins.listToAttrs (builtins.filter (x: x != null)
-      (builtins.attrValues (builtins.mapAttrs mkFrozen freezes))))"#.cyan());
+    builtins.listToAttrs
+      (builtins.attrValues (builtins.mapAttrs mkFrozen freezes)))"#.cyan());
     println!();
     println!(
         "Then create {} with content: {}",
