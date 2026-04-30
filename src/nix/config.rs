@@ -314,15 +314,70 @@ pub fn is_initialized(flake_dir: &Path) -> bool {
     lock_text.contains("\"nixpkgs-latest\"")
 }
 
+/// Validate that a hostname candidate is safe to splice into a Nix flakeref.
+///
+/// Accepts only `[a-zA-Z0-9_.-]`, length 1–63.  This matches the RFC 952 /
+/// RFC 1123 label rules and the Nix attribute-name character set.
+///
+/// Returns the input unchanged on success so callers can write
+/// `let h = validate_hostname(raw)?;`.
+pub fn validate_hostname(s: &str) -> Result<&str> {
+    if s.is_empty() {
+        anyhow::bail!("Hostname is empty.");
+    }
+    if s.len() > 63 {
+        anyhow::bail!(
+            "Hostname '{}' is too long ({} chars, max 63).",
+            s,
+            s.len()
+        );
+    }
+    for ch in s.chars() {
+        if !matches!(ch, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_' | '.' | '-') {
+            anyhow::bail!(
+                "Hostname '{}' contains an invalid character '{}'.\n\
+                 Only [a-zA-Z0-9_.-] are allowed.\n\
+                 Override with: CHENI_HOSTNAME=<safe-name> cheni <command>",
+                s,
+                ch
+            );
+        }
+    }
+    if s.contains("..") {
+        anyhow::bail!(
+            "Hostname '{}' contains '..', which is not allowed.\n\
+             Override with: CHENI_HOSTNAME=<safe-name> cheni <command>",
+            s
+        );
+    }
+    Ok(s)
+}
+
 /// Detect the system hostname. Falls back to reading /etc/hostname
 /// if the `hostname` binary isn't in PATH, so cheni keeps working on
 /// a minimal environment (rescue shell, container, etc.).
+///
+/// Every candidate is passed through `validate_hostname` before being
+/// accepted — this prevents a poisoned `$HOSTNAME` or a weird
+/// `/etc/hostname` from splicing unexpected characters into a Nix flakeref.
 fn detect_hostname() -> Result<String> {
+    // Priority 0: $CHENI_HOSTNAME override (validated, same rules).
+    if let Ok(env_host) = std::env::var("CHENI_HOSTNAME") {
+        if !env_host.is_empty() {
+            return validate_hostname(&env_host)
+                .context("$CHENI_HOSTNAME is set but contains invalid characters")
+                .map(str::to_string);
+        }
+    }
+
     if let Ok(output) = Command::new("hostname").output() {
         if let Ok(s) = String::from_utf8(output.stdout) {
             let trimmed = s.trim();
             if !trimmed.is_empty() {
-                return Ok(trimmed.to_string());
+                if let Ok(valid) = validate_hostname(trimmed) {
+                    return Ok(valid.to_string());
+                }
+                debug!("hostname(1) returned invalid value '{}', trying fallbacks", trimmed);
             }
         }
     }
@@ -331,20 +386,29 @@ fn detect_hostname() -> Result<String> {
     if let Ok(content) = std::fs::read_to_string("/etc/hostname") {
         let trimmed = content.trim();
         if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
+            if let Ok(valid) = validate_hostname(trimmed) {
+                return Ok(valid.to_string());
+            }
+            debug!("/etc/hostname contains invalid value '{}', trying $HOSTNAME", trimmed);
         }
     }
 
     // Last resort: $HOSTNAME env var
     if let Ok(env_host) = std::env::var("HOSTNAME") {
         if !env_host.is_empty() {
-            return Ok(env_host);
+            return validate_hostname(&env_host)
+                .context(
+                    "All hostname sources failed validation.\n\
+                     Set CHENI_HOSTNAME=<safe-name> to override."
+                )
+                .map(str::to_string);
         }
     }
 
     anyhow::bail!(
-        "Could not determine hostname: 'hostname' binary not found, \
-         /etc/hostname empty or missing, and $HOSTNAME not set."
+        "Could not determine a valid hostname.\n\
+         Tried: hostname(1), /etc/hostname, $HOSTNAME — all missing or invalid.\n\
+         Fix: CHENI_HOSTNAME=<your-nixos-config-hostname> cheni <command>"
     )
 }
 

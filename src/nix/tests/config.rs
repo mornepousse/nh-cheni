@@ -107,3 +107,75 @@ fn parse_imports_strips_trailing_semicolons() {
     let imports = parse_imports(content);
     assert_eq!(imports, vec!["./foo.nix"]);
 }
+
+// --- validate_hostname ---
+
+#[test]
+fn validate_hostname_accepts_simple_name() {
+    assert!(validate_hostname("morthinkpad").is_ok());
+}
+
+#[test]
+fn validate_hostname_accepts_alphanumeric_with_separators() {
+    assert!(validate_hostname("my-host.home_1").is_ok());
+}
+
+#[test]
+fn validate_hostname_accepts_max_length_63() {
+    let name = "a".repeat(63);
+    assert!(validate_hostname(&name).is_ok());
+}
+
+#[test]
+fn validate_hostname_rejects_empty() {
+    assert!(validate_hostname("").is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_too_long() {
+    let name = "a".repeat(64);
+    assert!(validate_hostname(&name).is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_space() {
+    assert!(validate_hostname("my host").is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_double_quote() {
+    assert!(validate_hostname("host\"name").is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_semicolon() {
+    assert!(validate_hostname("host;name").is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_newline() {
+    assert!(validate_hostname("host\nname").is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_dotdot_sequence() {
+    // ".." could traverse Nix attribute sets in a flakeref; we reject it
+    // explicitly in addition to the per-character allow-list.
+    assert!(validate_hostname("..").is_err());
+    assert!(validate_hostname("host..name").is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_hash() {
+    assert!(validate_hostname("host#name").is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_dollar() {
+    assert!(validate_hostname("host$name").is_err());
+}
+
+#[test]
+fn validate_hostname_rejects_slash() {
+    assert!(validate_hostname("host/name").is_err());
+}

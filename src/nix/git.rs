@@ -47,6 +47,42 @@ pub fn is_repo(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Validate that `filename` is a safe bare filename (no path traversal).
+///
+/// Accepts only filenames that:
+/// - are non-empty
+/// - do not start with `.`
+/// - do not contain `/` or `\`
+/// - do not contain the sequence `..`
+///
+/// This prevents `git show <commit>:./<filename>` from being used as a
+/// path-traversal vector if the function ever receives attacker-controlled
+/// input (e.g. a future call site that derives filenames from external data).
+fn validate_git_filename(filename: &str) -> anyhow::Result<()> {
+    if filename.is_empty() {
+        anyhow::bail!("git filename must not be empty");
+    }
+    if filename.starts_with('.') {
+        anyhow::bail!(
+            "git filename '{}' must not start with '.'",
+            filename
+        );
+    }
+    if filename.contains('/') || filename.contains('\\') {
+        anyhow::bail!(
+            "git filename '{}' must not contain path separators",
+            filename
+        );
+    }
+    if filename.contains("..") {
+        anyhow::bail!(
+            "git filename '{}' must not contain '..'",
+            filename
+        );
+    }
+    Ok(())
+}
+
 /// Return `<repo_dir>/<filename>` as it was at-or-before `at`,
 /// by walking git history.
 ///
@@ -54,6 +90,8 @@ pub fn is_repo(dir: &Path) -> bool {
 /// - git itself errored or isn't installed
 /// - the file wasn't tracked yet at `at` (no commit before that time)
 /// - the blob can't be decoded as UTF-8
+/// - `filename` fails the safety check (no path separators, no `..`,
+///   must not start with `.`)
 ///
 /// `repo_dir` may be the repo root or any subdirectory — we use `git -C`
 /// which lets git resolve `<commit>:./<filename>` relative to that dir.
@@ -62,6 +100,10 @@ pub fn read_file_at_time(
     filename: &str,
     at: SystemTime,
 ) -> Option<String> {
+    if let Err(e) = validate_git_filename(filename) {
+        debug!("read_file_at_time: rejected filename '{}': {}", filename, e);
+        return None;
+    }
     let secs = at.duration_since(SystemTime::UNIX_EPOCH).ok()?.as_secs();
     let iso = crate::util::format_iso_utc(secs);
 

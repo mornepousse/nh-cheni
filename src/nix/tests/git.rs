@@ -2,6 +2,49 @@ use super::*;
 use std::process::Command;
 use std::time::{Duration, UNIX_EPOCH};
 
+// --- validate_git_filename ---
+
+#[test]
+fn git_filename_valid_simple() {
+    assert!(validate_git_filename("package-pins.json").is_ok());
+}
+
+#[test]
+fn git_filename_valid_freezes() {
+    assert!(validate_git_filename("package-freezes.json").is_ok());
+}
+
+#[test]
+fn git_filename_rejects_empty() {
+    assert!(validate_git_filename("").is_err());
+}
+
+#[test]
+fn git_filename_rejects_path_with_slash() {
+    assert!(validate_git_filename("subdir/file.json").is_err());
+}
+
+#[test]
+fn git_filename_rejects_dotdot_traversal() {
+    assert!(validate_git_filename("../etc/passwd").is_err());
+}
+
+#[test]
+fn git_filename_rejects_leading_dot() {
+    assert!(validate_git_filename(".git").is_err());
+    assert!(validate_git_filename(".gitconfig").is_err());
+}
+
+#[test]
+fn git_filename_rejects_backslash() {
+    assert!(validate_git_filename("sub\\file").is_err());
+}
+
+#[test]
+fn git_filename_rejects_dotdot_embedded() {
+    assert!(validate_git_filename("foo..bar").is_err());
+}
+
 /// Spin up a fresh git repo in a tempdir with a deterministic identity
 /// and a single committed file. Returns the tempdir handle (kept alive
 /// by the caller for the test's lifetime) and the absolute commit time
