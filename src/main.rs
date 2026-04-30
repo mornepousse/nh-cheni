@@ -150,6 +150,7 @@ enum Commands {
     },
 
     /// Pin a package (or list active pins when called with no arguments)
+    #[command(after_help = "Example: cheni pin firefox\n         cheni pin --flakes")]
     Pin {
         /// Package name to pin (e.g. "vivaldi", "zen-browser")
         package: Option<String>,
@@ -316,6 +317,7 @@ enum Commands {
     },
 
     /// Verify that the installed cheni matches a signed release
+    #[command(after_help = "Example: cheni verify\n         cheni verify v0.8.0")]
     Verify {
         /// Tag to verify (defaults to the installed version).
         #[arg(long)]
@@ -399,7 +401,7 @@ enum Commands {
     },
 
     /// Search nixpkgs for a package
-    #[command(alias = "s")]
+    #[command(alias = "s", after_help = "Example: cheni search firefox\n         cheni search rust analyzer")]
     Search {
         /// Search query (e.g. "firefox", "rust analyzer")
         query: String,
