@@ -174,7 +174,10 @@ fn fix_flake_lock_dirty() -> Result<()> {
                 .status()
                 .map_err(|e| crate::nix::tools::tool_error("git", e))?;
             if !status.success() {
-                anyhow::bail!("git checkout flake.lock failed");
+                anyhow::bail!(
+                    "git checkout flake.lock failed. \
+                     Check git's stderr above and run `git status` in your flake dir to inspect."
+                );
             }
             println!("  {} flake.lock reset to HEAD.", "✓".green());
         }

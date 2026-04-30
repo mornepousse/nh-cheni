@@ -289,7 +289,12 @@ fn run_nix_search(query: &str) -> Result<serde_json::Value> {
         .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("nix search failed: {}", stderr.lines().next().unwrap_or(""));
+        anyhow::bail!(
+            "nix search failed: {}\n\
+             Check that nixpkgs is reachable and the search index is built. \
+             Try `cheni doctor` or browse https://search.nixos.org as a fallback.",
+            stderr.lines().next().unwrap_or("")
+        );
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     serde_json::from_str(&stdout).context("Failed to parse nix search output")

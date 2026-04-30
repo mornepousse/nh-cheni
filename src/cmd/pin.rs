@@ -716,7 +716,13 @@ fn pin_flake_input(flake_dir: &std::path::Path, name: &str) -> Result<()> {
         .map_err(|e| crate::nix::tools::tool_error("nix", e))?;
 
     if !status.success() {
-        anyhow::bail!("nix flake update {} failed", name);
+        anyhow::bail!(
+            "nix flake update {} failed.\n\
+             Check that the input's URL is reachable and the locked rev/branch \
+             still exists. `cat flake.lock | jq '.nodes.\"{}\"'` to inspect.",
+            name,
+            name
+        );
     }
 
     println!("\n{} Updated flake input {}.", "✓".green(), name.bold());
