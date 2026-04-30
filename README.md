@@ -78,7 +78,7 @@ Updates available:
 Major updates (use 'cheni pin --force' to apply):
   mesa                     24.3.2         → 26.0.4         (major)
 
-Up to date: 116 | Minor: 3 | Major: 1 | Newer: 6 | Unknown: 11
+Up to date: 116 | Minor: 3 | Major: 1 | Ahead: 6 | Missing: 11
 ```
 
 Then pin what you want, and apply:
@@ -117,7 +117,7 @@ keys; cheni prompts for any extra input it needs.
 |-----------------------------|--------------------------------------------------------|
 | `cheni check`               | Show available updates (nixpkgs + flake inputs)        |
 | `cheni check -c dev`        | Filter to packages declared in `modules/dev/`          |
-| `cheni check --details`     | Expand the "Newer" and "Unknown" buckets               |
+| `cheni check --details`     | Expand the "Ahead" and "Missing" buckets               |
 | `cheni check --refresh`     | Ignore the on-disk cache, re-fetch every lookup        |
 | `cheni check --pending`     | Append a closure dry-run section (kernel + base, ~30s) |
 | `cheni check --json`        | Machine-readable output for scripts / CI               |
