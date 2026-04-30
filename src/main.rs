@@ -150,7 +150,19 @@ enum Commands {
     },
 
     /// Pin a package (or list active pins when called with no arguments)
-    #[command(after_help = "Example: cheni pin firefox\n         cheni pin --flakes")]
+    #[command(
+        long_about = "Pin a package (or list active pins when called with no arguments).\n\
+            \n\
+            Pinning routes a package through the `nixpkgs-latest` flake input\n\
+            instead of plain `nixpkgs`. The package gets a newer version and\n\
+            keeps tracking nixpkgs-latest updates at every `cheni upgrade`.\n\
+            When `nixpkgs` catches up with `nixpkgs-latest`, the pin becomes\n\
+            obsolete and `cheni clean` drops it.\n\
+            \n\
+            With no arguments: lists current pins. With `--flakes`: walks the\n\
+            non-nixpkgs flake inputs and proposes updates for each.",
+        after_help = "Example: cheni pin firefox\n         cheni pin --flakes"
+    )]
     Pin {
         /// Package name to pin (e.g. "vivaldi", "zen-browser")
         package: Option<String>,
@@ -195,7 +207,20 @@ enum Commands {
     },
 
     /// Hold a package at its current version (inverse of `pin`: freezes ≠ pins)
-    #[command(after_help = "Example: cheni freeze kicad")]
+    #[command(
+        long_about = "Hold a package at its current version (inverse of `pin`).\n\
+            \n\
+            Freezing locks a package to its currently-installed version using\n\
+            the locked nixpkgs rev. `cheni upgrade` no longer touches it. The\n\
+            freeze entry stays in the freezes file until you `cheni unfreeze`.\n\
+            \n\
+            Pin and freeze are mutually exclusive — a package can be one or\n\
+            the other, not both. Use `--major N` to track the latest patch\n\
+            within a major series instead of locking one specific version.\n\
+            \n\
+            With no arguments: lists current freezes.",
+        after_help = "Example: cheni freeze kicad"
+    )]
     Freeze {
         /// Package name to freeze. Omit to list current freezes.
         package: Option<String>,
@@ -300,9 +325,9 @@ enum Commands {
         #[arg(long)]
         brief: bool,
         /// Walk through warnings interactively and apply fixes where possible.
-        /// After each warning, prompts with [y/N/s for skip-all]. Hardcoded
-        /// fixes cover the four common warnings (flake.lock dirty, dead upgrade,
-        /// store size, stale inputs); other warnings show "(no automated fix)".
+        /// After each warning, prompts y/N. Hardcoded fixes cover the four
+        /// common warnings (flake.lock dirty, dead upgrade, store size,
+        /// stale inputs); other warnings show "(no automated fix)".
         #[arg(long)]
         fix: bool,
     },
