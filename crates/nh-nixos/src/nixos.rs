@@ -99,6 +99,7 @@ impl args::OsArgs {
       OsSubcommand::Unpin(args) => args.run(),
       OsSubcommand::Freeze(args) => args.run(),
       OsSubcommand::Unfreeze(args) => args.run(),
+      OsSubcommand::Timeline(args) => args.run(),
     }
   }
 }

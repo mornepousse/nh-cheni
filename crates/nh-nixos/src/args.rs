@@ -82,13 +82,13 @@ impl OsArgs {
           Box::new(LegacyFeatures)
         }
       },
-      // Pin/Unpin only touch local files in the user's flake-dir;
-      // they do not invoke nix at all, so no feature requirements.
-      // Freeze does invoke `nix flake prefetch`, but that's a flake
-      // operation — same FlakeFeatures as everything else flake-shaped.
+      // Pin/Unpin/Unfreeze/Timeline only touch local files; no Nix
+      // feature requirements. Freeze does invoke `nix flake prefetch`,
+      // so it inherits FlakeFeatures.
       OsSubcommand::Pin(_)
       | OsSubcommand::Unpin(_)
-      | OsSubcommand::Unfreeze(_) => Box::new(NoFeatures),
+      | OsSubcommand::Unfreeze(_)
+      | OsSubcommand::Timeline(_) => Box::new(NoFeatures),
       OsSubcommand::Freeze(_) => Box::new(FlakeFeatures),
     }
   }
@@ -134,6 +134,10 @@ pub enum OsSubcommand {
 
   /// Release a freeze set by `os freeze` (cheni extension)
   Unfreeze(OsUnfreezeArgs),
+
+  /// Show recent cheni events (pin/unpin/freeze/unfreeze) in
+  /// reverse-chronological order. (cheni extension)
+  Timeline(OsTimelineArgs),
 }
 
 #[derive(Debug, Args)]
@@ -194,6 +198,14 @@ pub struct OsUnfreezeArgs {
   /// Remove every freeze in one go.
   #[arg(long, conflicts_with = "names")]
   pub all: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct OsTimelineArgs {
+  /// Maximum number of events to print (default 20). Pass a high
+  /// value to see the full history.
+  #[arg(long, short = 'n', value_name = "N")]
+  pub limit: Option<usize>,
 }
 
 #[derive(Debug, Args)]

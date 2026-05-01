@@ -388,6 +388,11 @@ impl OsUnfreezeArgs {
       if count == 0 {
         println!("No freezes to clear.");
       } else {
+        crate::timeline::record(
+          "unfreeze-all",
+          None,
+          serde_json::json!({"count": count}),
+        );
         println!("Cleared {count} freeze(s).");
       }
       return Ok(());
@@ -396,6 +401,13 @@ impl OsUnfreezeArgs {
       bail!("Specify package names to unfreeze, or pass --all.");
     }
     let removed = remove(&flake_dir, &self.names)?;
+    for name in &removed {
+      crate::timeline::record(
+        "unfreeze",
+        Some(name),
+        serde_json::json!({}),
+      );
+    }
     if removed.is_empty() {
       println!("None of the requested packages were frozen.");
     } else {
@@ -455,6 +467,11 @@ fn freeze_one(
     major_constraint: None,
   };
   let new = add(flake_dir, name, entry)?;
+  crate::timeline::record(
+    if new { "freeze" } else { "refreeze" },
+    Some(name),
+    serde_json::json!({"version": version_override.unwrap_or("")}),
+  );
   let verb = if new { "Froze" } else { "Re-froze" };
   println!(
     "{verb} {name}. Run `nh os switch` to apply (your flake's overlay \

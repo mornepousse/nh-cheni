@@ -270,6 +270,13 @@ impl OsPinArgs {
       return Ok(());
     }
     let added = add(&flake_dir, &self.names)?;
+    for name in &added {
+      crate::timeline::record(
+        "pin",
+        Some(name),
+        serde_json::json!({"flake_dir": flake_dir.display().to_string()}),
+      );
+    }
     if added.is_empty() {
       println!("All requested packages were already pinned.");
     } else {
@@ -299,6 +306,11 @@ impl OsUnpinArgs {
       if count == 0 {
         println!("No pins to clear.");
       } else {
+        crate::timeline::record(
+          "unpin-all",
+          None,
+          serde_json::json!({"count": count}),
+        );
         println!("Cleared {count} pin(s).");
       }
       return Ok(());
@@ -307,6 +319,9 @@ impl OsUnpinArgs {
       bail!("Specify package names to unpin, or pass --all.");
     }
     let removed = remove(&flake_dir, &self.names)?;
+    for name in &removed {
+      crate::timeline::record("unpin", Some(name), serde_json::json!({}));
+    }
     if removed.is_empty() {
       println!("None of the requested packages were pinned.");
     } else {
