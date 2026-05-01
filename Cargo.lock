@@ -1337,7 +1337,7 @@ dependencies = [
 
 [[package]]
 name = "nh"
-version = "0.9.0-bootstrap"
+version = "0.8.6"
 dependencies = [
  "anstyle",
  "clap",
@@ -1426,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "nh-nixos"
-version = "0.9.0-bootstrap"
+version = "0.8.6"
 dependencies = [
  "chrono",
  "clap",
@@ -3336,7 +3336,7 @@ checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
 name = "xtask"
-version = "0.9.0-bootstrap"
+version = "0.8.6"
 dependencies = [
  "clap",
  "clap_complete",

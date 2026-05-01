@@ -6,7 +6,10 @@ resolver = "3"
 edition      = "2024"
 license      = "EUPL-1.2"
 rust-version = "1.91.1"
-version      = "0.9.0-bootstrap"
+# Continuité depuis wrapper-era v0.8.5 — le fork est conceptuellement
+# le suivant (next patch). Le tag wrapper-archive-v0.8.5 reste le
+# rollback target ; la nouvelle ère démarre à 0.8.6.
+version      = "0.8.6"
 
 [workspace.dependencies]
 nh        = { path = "crates/nh" }

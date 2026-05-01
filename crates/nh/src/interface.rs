@@ -19,7 +19,7 @@ const fn make_style() -> Styles {
 
 #[derive(Parser, Debug)]
 #[command(
-    version,
+    version = env!("CHENI_FULL_VERSION"),
     about,
     long_about = None,
     styles=make_style(),
