@@ -104,6 +104,7 @@ impl args::OsArgs {
       OsSubcommand::BugReport(args) => args.run(),
       OsSubcommand::Doctor(args) => args.run(),
       OsSubcommand::Check(args) => args.run(),
+      OsSubcommand::SelfUpdate(args) => args.run(),
     }
   }
 }

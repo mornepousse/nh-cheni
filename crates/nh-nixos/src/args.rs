@@ -94,9 +94,9 @@ impl OsArgs {
       | OsSubcommand::Events(_)
       | OsSubcommand::BugReport(_)
       | OsSubcommand::Doctor(_) => Box::new(NoFeatures),
-      OsSubcommand::Freeze(_) | OsSubcommand::Check(_) => {
-        Box::new(FlakeFeatures)
-      },
+      OsSubcommand::Freeze(_)
+      | OsSubcommand::Check(_)
+      | OsSubcommand::SelfUpdate(_) => Box::new(FlakeFeatures),
     }
   }
 }
@@ -160,6 +160,10 @@ pub enum OsSubcommand {
   /// Check pins/freezes against current nixpkgs to flag obsolete
   /// entries. (cheni extension)
   Check(OsCheckArgs),
+
+  /// Pull the latest cheni-fork commit into your flake.
+  /// (cheni extension)
+  SelfUpdate(OsSelfUpdateArgs),
 }
 
 #[derive(Debug, Args)]
@@ -274,6 +278,25 @@ pub struct OsCheckArgs {
   /// as `os pin --flake-dir`.
   #[arg(long, value_name = "PATH")]
   pub flake_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct OsSelfUpdateArgs {
+  /// Path to your NixOS flake. Resolved the same way as
+  /// `os pin --flake-dir`.
+  #[arg(long, value_name = "PATH")]
+  pub flake_dir: Option<PathBuf>,
+
+  /// Name of the flake input that points at cheni. Defaults to
+  /// `cheni`. Override if your flake declares the input under a
+  /// different name.
+  #[arg(long, value_name = "NAME")]
+  pub input: Option<String>,
+
+  /// After updating the flake input, chain into `nh os switch` to
+  /// rebuild and activate the new commit.
+  #[arg(long)]
+  pub switch: bool,
 }
 
 #[derive(Debug, Args)]
