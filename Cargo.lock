@@ -1426,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "nh-nixos"
-version = "0.1.0"
+version = "0.9.0-bootstrap"
 dependencies = [
  "chrono",
  "clap",

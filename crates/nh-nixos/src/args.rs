@@ -82,14 +82,15 @@ impl OsArgs {
           Box::new(LegacyFeatures)
         }
       },
-      // Pin/Unpin/Unfreeze/Timeline/Events only touch local files;
-      // no Nix feature requirements. Freeze does invoke `nix flake
-      // prefetch`, so it inherits FlakeFeatures.
+      // Pin/Unpin/Unfreeze/Timeline/Events/BugReport only touch
+      // local files; no Nix feature requirements. Freeze invokes
+      // `nix flake prefetch`, so it inherits FlakeFeatures.
       OsSubcommand::Pin(_)
       | OsSubcommand::Unpin(_)
       | OsSubcommand::Unfreeze(_)
       | OsSubcommand::Timeline(_)
-      | OsSubcommand::Events(_) => Box::new(NoFeatures),
+      | OsSubcommand::Events(_)
+      | OsSubcommand::BugReport(_) => Box::new(NoFeatures),
       OsSubcommand::Freeze(_) => Box::new(FlakeFeatures),
     }
   }
@@ -143,6 +144,10 @@ pub enum OsSubcommand {
   /// List system generations annotated with cheni timeline events.
   /// (cheni extension)
   Events(OsEventsArgs),
+
+  /// Print a markdown diagnostic dump suitable for issue triage.
+  /// (cheni extension)
+  BugReport(OsBugReportArgs),
 }
 
 #[derive(Debug, Args)]
@@ -224,6 +229,15 @@ pub struct OsEventsArgs {
   /// where profiles live elsewhere.
   #[arg(long, value_name = "PATH")]
   pub profiles_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct OsBugReportArgs {
+  /// Path to your NixOS flake — used to enumerate active pins/freezes.
+  /// Resolved the same way as `os pin --flake-dir`. Optional: report
+  /// degrades gracefully when the flake can't be located.
+  #[arg(long, value_name = "PATH")]
+  pub flake_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

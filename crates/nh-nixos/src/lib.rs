@@ -1,4 +1,5 @@
 pub mod args;
+pub mod bug_report;
 pub mod events;
 pub mod freezes;
 pub mod generations;
