@@ -1,9 +1,0 @@
-target/
-*.swp
-.DS_Store
-result
-
-# Release artifacts. The documented procedure signs inside a temp dir,
-# but guard against accidental commits if run from the repo root.
-/cheni-v*.tar.gz
-/cheni-v*.tar.gz.minisig
