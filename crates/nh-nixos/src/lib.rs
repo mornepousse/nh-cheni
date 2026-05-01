@@ -1,4 +1,5 @@
 pub mod args;
+pub mod events;
 pub mod freezes;
 pub mod generations;
 pub mod nixos;

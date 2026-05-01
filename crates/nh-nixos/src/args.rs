@@ -82,13 +82,14 @@ impl OsArgs {
           Box::new(LegacyFeatures)
         }
       },
-      // Pin/Unpin/Unfreeze/Timeline only touch local files; no Nix
-      // feature requirements. Freeze does invoke `nix flake prefetch`,
-      // so it inherits FlakeFeatures.
+      // Pin/Unpin/Unfreeze/Timeline/Events only touch local files;
+      // no Nix feature requirements. Freeze does invoke `nix flake
+      // prefetch`, so it inherits FlakeFeatures.
       OsSubcommand::Pin(_)
       | OsSubcommand::Unpin(_)
       | OsSubcommand::Unfreeze(_)
-      | OsSubcommand::Timeline(_) => Box::new(NoFeatures),
+      | OsSubcommand::Timeline(_)
+      | OsSubcommand::Events(_) => Box::new(NoFeatures),
       OsSubcommand::Freeze(_) => Box::new(FlakeFeatures),
     }
   }
@@ -138,6 +139,10 @@ pub enum OsSubcommand {
   /// Show recent cheni events (pin/unpin/freeze/unfreeze) in
   /// reverse-chronological order. (cheni extension)
   Timeline(OsTimelineArgs),
+
+  /// List system generations annotated with cheni timeline events.
+  /// (cheni extension)
+  Events(OsEventsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -206,6 +211,19 @@ pub struct OsTimelineArgs {
   /// value to see the full history.
   #[arg(long, short = 'n', value_name = "N")]
   pub limit: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+pub struct OsEventsArgs {
+  /// Maximum number of generations to print (default 10).
+  #[arg(long, short = 'n', value_name = "N")]
+  pub limit: Option<usize>,
+
+  /// Override the system profiles directory. Defaults to
+  /// `/nix/var/nix/profiles`. Useful for testing or for systems
+  /// where profiles live elsewhere.
+  #[arg(long, value_name = "PATH")]
+  pub profiles_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

@@ -100,6 +100,7 @@ impl args::OsArgs {
       OsSubcommand::Freeze(args) => args.run(),
       OsSubcommand::Unfreeze(args) => args.run(),
       OsSubcommand::Timeline(args) => args.run(),
+      OsSubcommand::Events(args) => args.run(),
     }
   }
 }

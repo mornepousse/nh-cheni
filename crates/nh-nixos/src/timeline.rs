@@ -179,6 +179,14 @@ pub fn now_rfc3339() -> String {
   format_rfc3339(secs)
 }
 
+/// Format `unix_secs` as an RFC 3339 timestamp. Public so other
+/// modules (e.g. `events`) can render generation mtimes in the same
+/// shape as the timeline's own event timestamps.
+#[must_use]
+pub fn now_rfc3339_from_secs(unix_secs: u64) -> String {
+  format_rfc3339(unix_secs)
+}
+
 #[allow(clippy::manual_is_multiple_of)]
 fn format_rfc3339(secs: u64) -> String {
   let secs_in_day = 86_400u64;
