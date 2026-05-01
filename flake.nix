@@ -1,5 +1,10 @@
 {
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
+  description = "cheni — personal fork of nh (NixOS helper) by harrael";
+
+  # Tracks nixos-unstable like the wrapper-era cheni did, so user-side
+  # nixos-config that pinned `cheni.inputs.nixpkgs.follows = "nixpkgs"`
+  # keeps resolving to the same channel.
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
     {
@@ -19,11 +24,11 @@
       rev = self.shortRev or self.dirtyShortRev or "dirty";
     in
     {
-      overlays.default = final: _: { nh = final.callPackage ./package.nix { inherit rev; }; };
+      overlays.default = final: _: { cheni = final.callPackage ./package.nix { inherit rev; }; };
 
       packages = forAllSystems (pkgs: {
-        nh = pkgs.callPackage ./package.nix { inherit rev; };
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.nh;
+        cheni = pkgs.callPackage ./package.nix { inherit rev; };
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.cheni;
       });
 
       checks = self.packages // self.devShells;
@@ -34,9 +39,6 @@
 
       formatter = forAllSystems (
         pkgs:
-        # Provides the default formatter for 'nix fmt', which will format the
-        # entire tree with Nixfmt. Treefmt is *wildly* overkill for this project
-        # so a simple bash script will suffice.
         pkgs.writeShellApplication {
           name = "nix3-fmt-wrapper";
 
@@ -46,7 +48,6 @@
           ];
 
           text = ''
-            # Find Nix files in the tree and format them with Alejandra
             fd "$@" -t f -e nix -x nixfmt -q '{}'
           '';
         }

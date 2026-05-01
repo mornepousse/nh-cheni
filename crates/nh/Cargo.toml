@@ -1,10 +1,9 @@
 [package]
 name                   = "nh"
 license.workspace      = true
-repository             = "https://github.com/nix-community/nh"
-description            = "Yet Another Nix Helper"
+repository             = "https://gitlab.com/harrael/cheni"
+description            = "Personal fork of nh (NixOS helper) by harrael"
 keywords               = [ "nix", "nixos", "nix-darwin", "helper", "CLI" ]
-readme                 = "README.md"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true

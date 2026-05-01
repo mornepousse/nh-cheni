@@ -16,7 +16,10 @@ let
   cargoToml = lib.importTOML ./Cargo.toml;
 in
 rustPlatform.buildRustPackage (finalAttrs: {
-  pname = "nh";
+  # Nix-store identifier stays "cheni" so it's clear this isn't upstream
+  # nh in the store path. The user-facing binary is still `nh` to keep
+  # muscle memory and tooling that already calls `nh os switch ...` working.
+  pname = "cheni";
   version = "${cargoToml.workspace.package.version}-${rev}";
 
   src = lib.fileset.toSource {
@@ -49,14 +52,6 @@ rustPlatform.buildRustPackage (finalAttrs: {
       # output directories.
       $out/bin/xtask dist
 
-      # The dist task above should've created
-      #  1. Shell completions in comp/
-      #  2. The NH manpage (nh.1) in man/
-      # Let's install those.
-      # The important thing to note here is that installShellCompletion cannot
-      # actually load *all* shell completions we generate with 'xtask dist'.
-      # Elvish, for example isn't supported. So we have to be very explicit
-      # about what we're installing, or this will fail.
       installShellCompletion --cmd ${finalAttrs.meta.mainProgram} ./comp/*.{bash,fish,zsh,nu}
       installManPage ./man/nh.1
     ''
@@ -121,15 +116,10 @@ rustPlatform.buildRustPackage (finalAttrs: {
   env.NH_REV = rev;
 
   meta = {
-    description = "Yet another nix cli helper";
-    homepage = "https://github.com/nix-community/nh";
+    description = "Personal fork of nh (Yet Another Nix Helper) by harrael — adds NixOS-management tooling on top of upstream nh.";
+    homepage = "https://gitlab.com/harrael/cheni";
     license = lib.licenses.eupl12;
     mainProgram = "nh";
-    maintainers = with lib.maintainers; [
-      drupol
-      faukah
-      NotAShelf
-      viperML
-    ];
+    maintainers = [ ];
   };
 })
