@@ -102,6 +102,7 @@ impl args::OsArgs {
       OsSubcommand::Timeline(args) => args.run(),
       OsSubcommand::Events(args) => args.run(),
       OsSubcommand::BugReport(args) => args.run(),
+      OsSubcommand::Doctor(args) => args.run(),
     }
   }
 }
