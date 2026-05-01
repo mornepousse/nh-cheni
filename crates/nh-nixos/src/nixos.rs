@@ -103,6 +103,7 @@ impl args::OsArgs {
       OsSubcommand::Events(args) => args.run(),
       OsSubcommand::BugReport(args) => args.run(),
       OsSubcommand::Doctor(args) => args.run(),
+      OsSubcommand::Check(args) => args.run(),
     }
   }
 }

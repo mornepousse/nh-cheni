@@ -83,8 +83,10 @@ impl OsArgs {
         }
       },
       // Pin/Unpin/Unfreeze/Timeline/Events/BugReport/Doctor only
-      // touch local files; no Nix feature requirements. Freeze
-      // invokes `nix flake prefetch`, so it inherits FlakeFeatures.
+      // touch local files; no Nix feature requirements. Freeze and
+      // Check invoke flake-aware Nix operations (`nix flake prefetch`,
+      // `nix eval --raw --expr` over fetchTree), so they inherit
+      // FlakeFeatures.
       OsSubcommand::Pin(_)
       | OsSubcommand::Unpin(_)
       | OsSubcommand::Unfreeze(_)
@@ -92,7 +94,9 @@ impl OsArgs {
       | OsSubcommand::Events(_)
       | OsSubcommand::BugReport(_)
       | OsSubcommand::Doctor(_) => Box::new(NoFeatures),
-      OsSubcommand::Freeze(_) => Box::new(FlakeFeatures),
+      OsSubcommand::Freeze(_) | OsSubcommand::Check(_) => {
+        Box::new(FlakeFeatures)
+      },
     }
   }
 }
@@ -152,6 +156,10 @@ pub enum OsSubcommand {
 
   /// Run health checks on the cheni-fork setup. (cheni extension)
   Doctor(OsDoctorArgs),
+
+  /// Check pins/freezes against current nixpkgs to flag obsolete
+  /// entries. (cheni extension)
+  Check(OsCheckArgs),
 }
 
 #[derive(Debug, Args)]
@@ -257,6 +265,15 @@ pub struct OsDoctorArgs {
   /// summary line for them.
   #[arg(long)]
   pub brief: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct OsCheckArgs {
+  /// Path to your NixOS flake — used to read pins/freezes and the
+  /// `nixpkgs` / `nixpkgs-latest` input revs. Resolved the same way
+  /// as `os pin --flake-dir`.
+  #[arg(long, value_name = "PATH")]
+  pub flake_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
