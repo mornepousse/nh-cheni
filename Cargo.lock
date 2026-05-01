@@ -1435,6 +1435,7 @@ dependencies = [
  "nh-core",
  "nh-remote",
  "nix",
+ "regex",
  "serde",
  "serde_json",
  "tempfile",

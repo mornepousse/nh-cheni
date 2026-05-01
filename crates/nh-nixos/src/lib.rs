@@ -8,3 +8,4 @@ pub mod nixos;
 pub mod pins;
 pub mod timeline;
 pub mod version_cache;
+pub mod versioning;
