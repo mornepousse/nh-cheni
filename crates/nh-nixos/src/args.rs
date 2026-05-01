@@ -84,7 +84,12 @@ impl OsArgs {
       },
       // Pin/Unpin only touch local files in the user's flake-dir;
       // they do not invoke nix at all, so no feature requirements.
-      OsSubcommand::Pin(_) | OsSubcommand::Unpin(_) => Box::new(NoFeatures),
+      // Freeze does invoke `nix flake prefetch`, but that's a flake
+      // operation — same FlakeFeatures as everything else flake-shaped.
+      OsSubcommand::Pin(_)
+      | OsSubcommand::Unpin(_)
+      | OsSubcommand::Unfreeze(_) => Box::new(NoFeatures),
+      OsSubcommand::Freeze(_) => Box::new(FlakeFeatures),
     }
   }
 }
@@ -123,6 +128,12 @@ pub enum OsSubcommand {
 
   /// Remove pins set by `os pin` (cheni extension)
   Unpin(OsUnpinArgs),
+
+  /// Freeze a package at the current `nixpkgs` rev (cheni extension)
+  Freeze(OsFreezeArgs),
+
+  /// Release a freeze set by `os freeze` (cheni extension)
+  Unfreeze(OsUnfreezeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -150,6 +161,37 @@ pub struct OsUnpinArgs {
   pub names: Vec<String>,
 
   /// Remove every pin in one go.
+  #[arg(long, conflicts_with = "names")]
+  pub all: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct OsFreezeArgs {
+  /// Path to the directory holding your NixOS flake.nix. Resolved
+  /// the same way as `os pin --flake-dir`.
+  #[arg(long, value_name = "PATH")]
+  pub flake_dir: Option<PathBuf>,
+
+  /// Package name to freeze. Run with no name to list current freezes.
+  pub name: Option<String>,
+
+  /// Diagnostic version string to record alongside the freeze (shown
+  /// in `nh os freeze` listing). Optional — empty when omitted.
+  #[arg(long)]
+  pub version: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct OsUnfreezeArgs {
+  /// Path to the directory holding your NixOS flake.nix. Resolved
+  /// the same way as `os pin --flake-dir`.
+  #[arg(long, value_name = "PATH")]
+  pub flake_dir: Option<PathBuf>,
+
+  /// Package names to unfreeze. Required unless `--all` is set.
+  pub names: Vec<String>,
+
+  /// Remove every freeze in one go.
   #[arg(long, conflicts_with = "names")]
   pub all: bool,
 }

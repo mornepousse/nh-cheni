@@ -1435,6 +1435,7 @@ dependencies = [
  "nh-core",
  "nh-remote",
  "nix",
+ "serde",
  "serde_json",
  "tempfile",
  "tracing",
