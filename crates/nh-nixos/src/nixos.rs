@@ -94,6 +94,9 @@ impl args::OsArgs {
       OsSubcommand::Info(args) => args.info(),
       OsSubcommand::Rollback(args) => args.rollback(elevation),
       OsSubcommand::BuildImage(args) => args.build_image(&elevation),
+      // cheni extensions — local file ops only, no elevation needed.
+      OsSubcommand::Pin(args) => args.run(),
+      OsSubcommand::Unpin(args) => args.run(),
     }
   }
 }

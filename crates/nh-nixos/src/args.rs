@@ -7,6 +7,7 @@ use nh_core::{
     FeatureRequirements,
     FlakeFeatures,
     LegacyFeatures,
+    NoFeatures,
     OsReplFeatures,
   },
   installable::Installable,
@@ -81,6 +82,9 @@ impl OsArgs {
           Box::new(LegacyFeatures)
         }
       },
+      // Pin/Unpin only touch local files in the user's flake-dir;
+      // they do not invoke nix at all, so no feature requirements.
+      OsSubcommand::Pin(_) | OsSubcommand::Unpin(_) => Box::new(NoFeatures),
     }
   }
 }
@@ -113,6 +117,41 @@ pub enum OsSubcommand {
 
   /// Build a `NixOS` disk-image variant
   BuildImage(OsBuildImageArgs),
+
+  /// Pin packages to a `nixpkgs-latest` overlay (cheni extension)
+  Pin(OsPinArgs),
+
+  /// Remove pins set by `os pin` (cheni extension)
+  Unpin(OsUnpinArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct OsPinArgs {
+  /// Path to the directory holding your NixOS flake.nix.
+  ///
+  /// Falls back to `$NH_FLAKE`, then `$CHENI_CONFIG`, then
+  /// `~/nixos-config`, then `/etc/nixos`. The first one that contains
+  /// a `flake.nix` is used.
+  #[arg(long, value_name = "PATH")]
+  pub flake_dir: Option<PathBuf>,
+
+  /// Package names to pin. Run with no names to list current pins.
+  pub names: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub struct OsUnpinArgs {
+  /// Path to the directory holding your NixOS flake.nix. Resolved
+  /// the same way as `os pin --flake-dir`.
+  #[arg(long, value_name = "PATH")]
+  pub flake_dir: Option<PathBuf>,
+
+  /// Package names to unpin. Required unless `--all` is set.
+  pub names: Vec<String>,
+
+  /// Remove every pin in one go.
+  #[arg(long, conflicts_with = "names")]
+  pub all: bool,
 }
 
 #[derive(Debug, Args)]
