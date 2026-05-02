@@ -1,54 +1,57 @@
-# cheni — Claude Code instructions
+# nh-cheni — Claude Code instructions
 
-Fork personnel de [nh](https://github.com/nix-community/nh) (Yet Another
-Nix Helper). Distribué via flake Nix sur `gitlab.com/harrael/nh-cheni`.
+Personal fork of [nh](https://github.com/viperML/nh) (Yet Another Nix
+Helper) by harrael. Distributed via Nix flake at
+`gitlab.com/harrael/nh-cheni`.
 
 ## Scope & non-goals
 
-cheni est un **outil personnel** pour la gestion NixOS de harrael.
-Aucun rayonnement community, aucune contribution upstream à nh.
+nh-cheni is a **personal-use tool** for harrael's NixOS workflow.
+No community ambition, no upstream contributions to nh.
 
-**Ce que cheni est** :
-- Un **fork de nh** qui tracke `viperML/nh` upstream via le remote
-  `upstream` (`https://github.com/viperML/nh.git`). Future release nh
-  = `git fetch upstream && git merge upstream/master`.
-- Le porteur de **fonctionnalités NixOS-management spécifiques à
-  harrael** (à porter progressivement depuis l'ère wrapper) : pins,
-  freezes, version-cache, timeline, repology integration, audit,
-  bug-report enrichi, etc.
-- Empaqueté avec le binaire `nh` user-facing (pas `cheni`) pour
-  préserver la muscle memory et les scripts existants. Le pname Nix
-  est `cheni` pour distinguer dans le store.
+**What nh-cheni IS**:
+- A **fork of nh** that tracks `viperML/nh` upstream via the
+  `upstream` git remote (`https://github.com/viperML/nh.git`). New
+  nh release = `git fetch upstream && git merge upstream/master`.
+- The carrier of **NixOS-management features specific to harrael**:
+  pins, freezes, version-cache, timeline, events, check, doctor,
+  bug-report, self-update.
+- Packaged with the user-facing binary named `nh` (NOT `cheni`) to
+  preserve muscle memory and existing scripts. The Nix store path
+  identifies the package as `nh-cheni-<version>`.
 
-**Ce que cheni n'est PAS** :
-- ❌ Pas un outil community / standalone — usage perso, mono-utilisateur
-- ❌ Pas de PRs upstream nh — on ne dérange pas les mainteneurs
-- ❌ Pas une réimplémentation from scratch — c'est un fork qui suit nh
-- ❌ Pas de CI : quality gates locaux suffisent (`cargo test &&
-  cargo clippy && nix flake check`)
+**What nh-cheni is NOT**:
+- ❌ Not a community / standalone tool — single-user, mono-machine
+  scope.
+- ❌ No upstream PRs to nh — we don't bother the maintainers.
+- ❌ Not a from-scratch reimplementation — it's a fork that follows nh.
+- ❌ No CI: local quality gates suffice (`cargo test && cargo clippy
+  && nix flake check`).
 
 ## Repo
 
-- **Origin** : https://gitlab.com/harrael/nh-cheni
-- **Upstream nh** (remote tracker) : https://github.com/viperML/nh
-- **Wrapper-era archive** : tag `wrapper-archive-v0.8.5` (préserve
-  l'ancienne implémentation de cheni en wrapper Rust qui shell-out
-  à nh)
-- **Local** : `~/cheni/`
+- **Origin**: https://gitlab.com/harrael/nh-cheni
+- **Upstream nh** (remote tracker): https://github.com/viperML/nh
+- **Wrapper-era archive**: tag `wrapper-archive-v0.8.5` (preserves
+  the previous cheni implementation as a thin wrapper that shelled
+  out to nh; rollback target).
+- **Local checkout**: `~/cheni/`
 
-Le mirror GitHub `mornepousse/cheni` (configuré côté GitLab UI) est
-historique, sera à reconfigurer ou supprimer post-pivot.
+The GitHub mirror `mornepousse/cheni` (configured on the GitLab
+side) is a historical artifact; reconfigure or delete it post-
+pivot when convenient.
 
 ## Architecture
 
-Workspace Cargo hérité de nh, structure inchangée par rapport à
-upstream :
+Cargo workspace inherited from nh, structure unchanged from
+upstream:
 
 ```
 crates/
-├── nh/         # binaire principal + dispatch CLI (clap)
+├── nh/         # main binary + top-level CLI dispatch (clap)
 ├── nh-core/    # exec layer, args, installable, update
 ├── nh-nixos/   # rebuild, generations, rollback
+│               # ← cheni-spec modules live HERE alongside upstream files
 ├── nh-clean/   # GC
 ├── nh-darwin/  # nix-darwin
 ├── nh-home/    # home-manager
@@ -57,10 +60,24 @@ crates/
 xtask/          # man-page + completions generation
 ```
 
-Les ajouts cheni-spécifiques (à venir, phases 2+) iront soit dans des
-modules nouveaux à l'intérieur de `crates/nh/src/`, soit (si la surface
-le justifie) dans des nouveaux crates `cheni-pins`, `cheni-freezes`,
-etc., listés dans le workspace.
+The cheni-specific code is **all inside `crates/nh-nixos/`**, in
+flat-named modules: `pins.rs`, `freezes.rs`, `timeline.rs`,
+`events.rs`, `check.rs`, `doctor.rs`, `bug_report.rs`,
+`self_update.rs`, `versioning.rs`, `version_cache.rs`,
+`cheni_meta.rs`. Shared utilities live under
+`crates/nh-nixos/src/cheni_util/{atomic,time,validation,flake}.rs`.
+
+The cheni-spec **additions to upstream nh files** are kept tiny
+(append-only) so future merges have a small conflict surface:
+
+| File | What we add |
+|---|---|
+| `crates/nh-nixos/src/args.rs` | `OsXxxArgs` structs + `OsSubcommand::Xxx` variants + `FeatureRequirements` arms |
+| `crates/nh-nixos/src/nixos.rs` | One dispatch arm per cheni subcommand |
+| `crates/nh-nixos/src/lib.rs` | `pub mod` declarations for cheni-spec modules |
+| `crates/nh/build.rs` | Decompose option-B workspace version → `CHENI_FULL_VERSION` |
+
+See `README.md` for a deeper walkthrough.
 
 ## Versioning
 
@@ -90,67 +107,105 @@ Two distinct things are bumped on different occasions:
 
 To cut a release:
 1. Bump `[workspace.package].version` in `Cargo.toml` (one of the two
-   bumps above, never both at once — keep the changelog clear)
-2. `cargo build` to validate that `Cargo.lock` updates cleanly
-3. `git commit -am "release: <version>"` then `git tag <version>`
-   (use the full version including `+cheni.<x>`)
-4. `git push && git push --tags`
-5. `glab release create <version> --name "<version>" --notes-file <path>`
-   so the release shows up on `gitlab.com/harrael/nh-cheni/-/releases`
+   bumps above, never both at once — keep the changelog clear).
+2. `cargo build` to validate that `Cargo.lock` updates cleanly.
+3. `git commit -am "release: v<full-version>"` then
+   `git tag -a "v<full-version>" -m "release v<full-version>"`
+   (use the full version including `+cheni.<x>`).
+4. `git push origin main && git push origin "v<full-version>"`.
+5. `glab release create "v<full-version>" -R harrael/nh-cheni --name
+   "v<full-version>" --notes-file <path>` so the release shows up on
+   `gitlab.com/harrael/nh-cheni/-/releases`.
 
-## Conventions code
+## Code conventions
 
-Le style de nh (en place dans le workspace) est la référence pour les
-fichiers nh-upstream — ne pas re-formatter agressivement (les merges
-upstream futurs seront plus propres). Les NOUVEAUX fichiers
-cheni-spécifiques peuvent suivre les conventions cheni-wrapper :
+The style of upstream nh (already in place across the workspace) is
+the reference for **nh-upstream files** — do not reformat them
+aggressively (future upstream merges stay clean). **NEW cheni-spec
+files** follow these conventions:
 
-- **`run()` court** : orchestrator de quelques lignes, helpers nommés
-- **Tests sibling files** quand on contrôle le fichier (pas pour les
-  fichiers qui viennent d'upstream nh) :
+- **Short `run()`** — `OsXxxArgs::run` should be a few lines that
+  delegate to named helpers (`gather_*`, `print_*_section`,
+  `classify_*`, `resolve_*`).
+- **Inline `mod tests`** at the bottom of each cheni-spec module
+  (NOT sibling files via `#[path]` — that was the wrapper-era
+  convention). Rationale: cheni-spec modules sit in the nh-nixos
+  crate alongside nh-upstream files that use inline tests; mixing
+  patterns within one crate is jarring.
   ```rust
   #[cfg(test)]
-  #[path = "tests/<name>.rs"]
-  mod tests;
+  #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
+  mod tests {
+      use super::*;
+      // ...
+  }
   ```
-- **Atomic writes** pour fichiers critiques via un helper dédié à créer
-  côté cheni (pas de helper équivalent côté nh)
-- **Pas de `.unwrap()` en prod** — préférer `color_eyre`/`thiserror`
-  comme nh
-- **Tests parallel-safe** : pas de mutation d'env globale
+- **Atomic writes** for any file the CLI mutates: use
+  `cheni_util::atomic::write` (handles tmp + fsync + rename + 0o600
+  + O_NOFOLLOW). Don't write a 4th private copy.
+- **No `.unwrap()` in prod** — `?` on `color_eyre::eyre::Result`
+  everywhere. `.expect("…")` only when the message annotates a
+  verifiable invariant.
+- **Parallel-safe tests** — no `std::env::set_var`, no
+  `std::env::set_current_dir`, no shared paths. Use `tempfile::TempDir`
+  and the `_in()` pattern.
+- **English in artifacts** — code comments, README, this file,
+  agent files in `.claude/agents/`. Conversation with Claude can
+  stay in French.
+- **Validation BEFORE format** — any value flowing from disk into
+  a Nix expression goes through `cheni_util::validation::*` first.
+  Defence in depth at every splice site, not just at write time.
 
-## Outils externes attendus
-- `nh` n'est PAS attendu (notre binaire EST notre nh)
+## External tools expected
+
+- `nh` is NOT expected (our binary IS our nh)
 - `nix`, `nix-store`, `nix-env`, `git` (standard NixOS)
-- `nvd` ou `dix` (selon ce que nh upstream utilise — actuellement `dix`
-  via cargo dep)
+- `nvd` or `dix` (whatever nh upstream uses — currently `dix` via a
+  cargo dep)
 
-## Workflow merge upstream nh
+## Workflow — merge upstream nh
 
-Pour tirer une nouvelle release nh :
+To pull a new nh release:
+
 ```bash
 git fetch upstream
 git checkout main
-git merge upstream/master    # résoudre conflits dans crates/nh/ si on a
-                             # touché les mêmes lignes que l'upstream
-cargo build                  # valider compile
-cargo test                   # valider tests
-nix flake check              # valider sandbox build
+git merge upstream/master --no-ff -m "Merge upstream nh <tag>"
+# Resolve expected conflicts (additive — keep both sides):
+#   - crates/nh-nixos/src/args.rs (OsSubcommand variants)
+#   - crates/nh-nixos/src/nixos.rs (dispatch arms)
+#   - Cargo.toml workspace.version (keep upstream's nh-base, our +cheni.<x> suffix)
+cargo build
+cargo test --workspace
+nix flake check
 ```
 
-Conflits attendus : essentiellement dans `crates/nh/src/interface.rs`
-si on a ajouté des subcommands cheni-spécifiques au dispatch.
+Then in a SEPARATE commit, bump the nh-base half of the workspace
+version to whatever upstream tag we merged
+(`git describe --tags upstream/master`).
 
-## Phases de migration en cours
+## Migration phases (history)
 
-1. ✅ Bootstrap fork (cette commit) — code = nh upstream + packaging cheni
-2. ⏳ Premier port (probablement `pin`) comme proof-of-concept
-3. ⏳ Pins + Freezes + Version-cache
-4. ⏳ Observabilité (timeline, history, audit)
-5. ⏳ Écosystème (repology, search badges, doctor++, bug-report++)
-6. ⏳ Self-update du fork
-7. ⏳ Décommission du tag wrapper-archive (rester accessible mais retirer
-   les références actives)
+1. ✅ Bootstrap fork — replaced wrapper code with nh upstream + cheni
+   packaging (commit 25d2799, 2026-05-01).
+2. ✅ Pin / Unpin (f4da1e3).
+3a. ✅ Freeze / Unfreeze (1c32f71).
+3b. ✅ Version-cache infra (7013a23).
+4a. ✅ Timeline (d244c3a).
+4b. ✅ Events / generation annotation (f45b64c).
+5a. ✅ Bug-report (062afc8).
+5c. ✅ Doctor MVP (2273c59).
+5b. ✅ Versioning module + `nh os check` via nix eval (15f80ee +
+    4451cc2).
+6.  ✅ Self-update (a6b08e8).
+7.  ✅ Decommission migration narrative (memory + plan updated).
 
-Voir `/home/mae/.claude/plans/vast-meandering-peacock.md` pour le plan
-détaillé Phase 1.
+Post-pivot polish (2026-05-02):
+- ✅ Versioning option B (901a5fb).
+- ✅ Recreated 5 cheni-* agents + 1 new (3965905).
+- ✅ Audit + `cheni_util` extraction + TOCTOU/rev-validation
+   security fixes (14ba73f).
+- ✅ Comprehensive README rewrite (9158f4c).
+
+The detailed plan archive is at
+`/home/mae/.claude/plans/vast-meandering-peacock.md`.
