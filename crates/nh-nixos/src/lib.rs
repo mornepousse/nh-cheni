@@ -1,6 +1,7 @@
 pub mod args;
 pub mod bug_report;
 pub mod check;
+pub mod cheni_meta;
 pub mod doctor;
 pub mod events;
 pub mod freezes;

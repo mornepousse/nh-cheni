@@ -6,10 +6,23 @@ resolver = "3"
 edition      = "2024"
 license      = "EUPL-1.2"
 rust-version = "1.91.1"
-# Continuité depuis wrapper-era v0.8.5 — le fork est conceptuellement
-# le suivant (next patch). Le tag wrapper-archive-v0.8.5 reste le
-# rollback target ; la nouvelle ère démarre à 0.8.6.
-version      = "0.8.6"
+# Versioning option B: "nh base + cheni layer in parallel".
+#
+# Format: <nh-upstream-version>+cheni.<cheni-layer-version>
+#   - <nh-upstream-version>     = the nh upstream commit we merged
+#                                 (e.g. 4.3.2)
+#   - <cheni-layer-version>     = our cheni-specific layer on top
+#                                 (started at 0.1.0 at the pivot
+#                                 2026-05-01)
+#
+# The `+cheni.<x.y.z>` part is semver build metadata: Cargo accepts
+# it and it is ignored for version resolution. Decomposed by
+# crates/nh/build.rs and displayed as "nh 4.3.2 (cheni 0.1.0, <rev>)".
+#
+# Bump:
+#   - merging upstream nh    -> replace the base with the new nh ver
+#   - adding a cheni feature -> bump the cheni layer (semver discipline)
+version      = "4.3.2+cheni.0.1.0"
 
 [workspace.dependencies]
 nh        = { path = "crates/nh" }

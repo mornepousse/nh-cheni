@@ -50,10 +50,10 @@ impl OsBugReportArgs {
 }
 
 fn print_header() {
-  println!("# cheni bug report");
+  println!("# nh-cheni bug report");
   println!();
   println!(
-    "<!-- Paste this into https://gitlab.com/harrael/cheni/-/issues/new -->"
+    "<!-- Paste this into https://gitlab.com/harrael/nh-cheni/-/issues/new -->"
   );
   println!(
     "<!-- Then add a description of what you were trying to do below. -->"
@@ -65,8 +65,9 @@ fn print_environment_section() {
   println!("## Environment");
   println!();
   println!(
-    "- **cheni** (binary `nh`): `{}`",
-    env!("CARGO_PKG_VERSION")
+    "- **nh-cheni** (binary `nh`): `nh {} (cheni {})`",
+    crate::cheni_meta::nh_base_version(),
+    crate::cheni_meta::cheni_layer_version()
   );
   if let Some(os) = read_os_release() {
     println!("- **OS**: `{os}`");

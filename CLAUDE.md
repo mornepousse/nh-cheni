@@ -64,18 +64,39 @@ etc., listés dans le workspace.
 
 ## Versioning
 
-Pas de fichier VERSION (contrairement à l'ère wrapper). La version
-unique vit dans `Cargo.toml`, champ `[workspace.package].version`.
-Les crates l'héritent via `version.workspace = true`.
+No `VERSION` file (unlike the wrapper era). The single version
+source of truth is `Cargo.toml`, field `[workspace.package].version`.
+All crates inherit via `version.workspace = true`.
 
-Format : SemVer pur (`0.9.0-bootstrap`, `0.10.0`, ...). Affichage
-binaire = sortie de clap (qui pull `CARGO_PKG_VERSION`).
+**Format — option B**: `<nh-base>+cheni.<cheni-layer>`, e.g.
+`4.3.2+cheni.0.1.0`. The `+cheni.<x>` part is semver build metadata,
+which Cargo accepts and ignores for version resolution. Decomposed
+by `crates/nh/build.rs` and rendered as
+`nh 4.3.2 (cheni 0.1.0, <rev>)` in `nh --version`.
 
-Pour cut une release :
-1. Bump `[workspace.package].version` dans `Cargo.toml`
-2. `cargo build` pour valider que `Cargo.lock` se met à jour
-3. `git commit -am "release: vX.Y.Z"` puis `git tag vX.Y.Z`
+Two distinct things are bumped on different occasions:
+
+- **Merging upstream nh** → bump the **nh-base** part to whatever
+  version of nh upstream we just merged. The cheni-layer part stays.
+  Example: after merging nh `v4.4.0`, version becomes
+  `4.4.0+cheni.0.1.0`. Use the `cheni-upstream-merger` agent to
+  drive this workflow.
+
+- **Adding a cheni feature/fix** → bump the **cheni-layer** part
+  (semver discipline: `0.1.0` → `0.2.0` for new subcommand,
+  `0.1.0` → `0.1.1` for fix/polish). The nh-base stays.
+  Example: after adding `nh os trace`, version becomes
+  `4.3.2+cheni.0.2.0`.
+
+To cut a release:
+1. Bump `[workspace.package].version` in `Cargo.toml` (one of the two
+   bumps above, never both at once — keep the changelog clear)
+2. `cargo build` to validate that `Cargo.lock` updates cleanly
+3. `git commit -am "release: <version>"` then `git tag <version>`
+   (use the full version including `+cheni.<x>`)
 4. `git push && git push --tags`
+5. `glab release create <version> --name "<version>" --notes-file <path>`
+   so the release shows up on `gitlab.com/harrael/nh-cheni/-/releases`
 
 ## Conventions code
 
