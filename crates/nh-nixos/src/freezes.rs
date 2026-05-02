@@ -17,6 +17,24 @@
 //! - **Reject-if-pinned** cross-check is deferred until phase-3 lands
 //!   the version-cache + smart UX layer that needs to know about both
 //!   sides anyway.
+//!
+//! # Helpers used (jump table for navigation)
+//!
+//! When you read this file and hit one of these calls, the
+//! implementation lives in `crates/nh-nixos/src/cheni_util/<x>.rs`:
+//!
+//! - `atomic::write(path, bytes)` — write the freezes JSON
+//!   atomically. Used in [`write`].
+//! - `validation::package_name(name)` — reject bad names before
+//!   inserting into the map. Used in [`add`].
+//! - `validation::git_hex_rev(rev)` — reject malformed revs before
+//!   splicing into the `github:NixOS/nixpkgs/{rev}` URL passed to
+//!   `nix flake prefetch`. Used in [`prefetch_nixpkgs_rev`].
+//! - `time::today_iso()` — `YYYY-MM-DD` for the `frozen_at`
+//!   diagnostic field. Used in [`freeze_one`].
+//! - `cheni_util::flake::read_input_locked(dir, "nixpkgs")` — parses
+//!   `flake.lock` to find the locked `nixpkgs` rev. Used in
+//!   [`read_nixpkgs_rev`] (which is a thin wrapper).
 
 use std::{
   collections::BTreeMap,

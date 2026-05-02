@@ -13,6 +13,18 @@
 //! No nh-upstream code is touched. The overlay-injection mechanism on
 //! the user's flake-side is unchanged from the wrapper era, so an
 //! existing `package-pins.json` keeps working through the migration.
+//!
+//! # Helpers used (jump table for navigation)
+//!
+//! When you read this file and hit one of these calls, the
+//! implementation lives in `crates/nh-nixos/src/cheni_util/<x>.rs`:
+//!
+//! - `atomic::write(path, bytes)` — write a file atomically (tmp +
+//!   fsync + rename, mode 0o600, refuses to follow symlinks). Used
+//!   in [`write`] for the pins JSON file.
+//! - `validation::package_name(name)` — reject empty / overlong / bad-
+//!   character names before they reach the JSON or the overlay.
+//!   Used in [`add`] before mutating the state.
 
 use std::{
   fs,

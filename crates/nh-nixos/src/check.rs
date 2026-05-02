@@ -19,6 +19,23 @@
 //! no flake registry tweaks are needed and the eval is pure (no
 //! `--impure` flag). The KDE 6 namespace fallback (`kdePackages.<name>`)
 //! is tried automatically when the bare name doesn't resolve.
+//!
+//! # Helpers used (jump table for navigation)
+//!
+//! When you read this file and hit one of these calls, the
+//! implementation lives in `crates/nh-nixos/src/cheni_util/<x>.rs`:
+//!
+//! - `cheni_util::flake::read_input_locked(dir, name)` — parses
+//!   `flake.lock` to find the locked `(rev, narHash)` of an input.
+//!   Used inside [`read_input_locked`] (the local thin wrapper that
+//!   asserts narHash is present, since nix eval needs it).
+//!
+//! Defence-in-depth validation of `rev` / `nar_hash` / attribute
+//! path is INLINE in [`query_one`] rather than in `cheni_util`,
+//! because the validation rule is the same as
+//! `cheni_util::validation::{git_hex_rev, nar_hash_sri, nix_attr_path}`
+//! but kept duplicated here for now. (Audit follow-up: collapse
+//! these into a single shared call.)
 
 use std::{path::Path, process::Command};
 

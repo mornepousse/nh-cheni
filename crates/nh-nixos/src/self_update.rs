@@ -11,6 +11,16 @@
 //!
 //! Records a `self-update` event in the timeline so `nh os events`
 //! shows when the fork moved.
+//!
+//! # Helpers used (jump table for navigation)
+//!
+//! When you read this file and hit one of these calls, the
+//! implementation lives in `crates/nh-nixos/src/cheni_util/<x>.rs`:
+//!
+//! - `cheni_util::flake::read_input_locked(dir, name)` — parses
+//!   `flake.lock` to find the locked rev. Used inside the local
+//!   [`read_input_rev`] (a thin wrapper that drops the narHash
+//!   since self-update only needs the rev).
 
 use std::{path::Path, process::Command};
 

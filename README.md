@@ -25,8 +25,9 @@ via `nix build gitlab:harrael/nh-cheni/wrapper-archive-v0.8.5`.
 5. [Adding a new cheni subcommand](#adding-a-new-cheni-subcommand)
 6. [Workflows](#workflows)
 7. [Rust mini-glossary for non-Rust devs](#rust-mini-glossary-for-non-rust-devs)
-8. [Conventions](#conventions)
-9. [License](#license)
+8. [Reading walkthrough — `pins.rs` line by line](#reading-walkthrough--pinsrs-line-by-line)
+9. [Conventions](#conventions)
+10. [License](#license)
 
 ---
 
@@ -520,6 +521,180 @@ it points into the binary's data section (string literals,
 Usually you can read past `'a` in function signatures without
 worrying — it's the compiler tracking lifetimes; you only have to
 think about it when you're writing the function.
+
+---
+
+## Reading walkthrough — `pins.rs` line by line
+
+Goal of this section: let you read a cheni-spec module top-to-bottom
+without dropping into "what is this Rust thing" mode every two lines.
+We use `crates/nh-nixos/src/pins.rs` because it's the simplest
+cheni-spec module — every other one follows the same shape with
+small additions.
+
+The file has 4 chunks: **module header → state-file functions → the
+flake-dir resolver → the subcommand impl**. We walk each chunk.
+
+### Chunk 1 — module header (lines 1-30)
+
+```rust
+//! Per-package pins to a `nixpkgs-latest` overlay.
+//!
+//! cheni-specific feature carried over from the wrapper-era. The pin
+//! state lives in `<flake-dir>/package-pins.json` ...
+```
+
+Lines starting with `//!` are **module-level doc comments** —
+they're the file's README. The first line is what shows up in
+`cargo doc` and what an IDE shows when you hover the module name.
+
+Look for the **`# Helpers used`** subsection — it tells you which
+`cheni_util` items this file relies on. If you're going to read
+the body of `add()` and you see `validation::package_name(name)?`,
+the header tells you the implementation lives in
+`cheni_util/validation.rs`. No mystery.
+
+### Chunk 2 — the state-file functions (lines 30-130)
+
+```rust
+const PINS_FILE: &str = "package-pins.json";
+
+pub fn read(flake_dir: &Path) -> Result<Vec<String>> {
+    let path = flake_dir.join(PINS_FILE);
+    if !path.exists() {
+        debug!("no {} found", PINS_FILE);
+        return Ok(Vec::new());
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    // ... more reading + parsing
+}
+```
+
+What's happening:
+
+- `pub fn read(...) -> Result<Vec<String>>` — public function, takes
+  a path, returns "either a list of strings or an error". `Result`
+  is Rust's "two-outcome" return type (see Rust glossary above).
+- `flake_dir.join(PINS_FILE)` — append `"package-pins.json"` to the
+  directory path. Returns a new `PathBuf`.
+- `if !path.exists() { return Ok(Vec::new()); }` — if the file
+  doesn't exist, that's a **valid** state (no pins yet); return an
+  empty Vec wrapped in `Ok`.
+- `fs::read_to_string(...)?` — read the whole file into a String.
+  The trailing `?` says "if this errors, propagate the error up
+  out of `read()`".
+- `.with_context(|| format!("..."))` — if the error happens, add
+  this human-readable context to it. The `||` syntax is a
+  zero-arg closure (a function with no parameters) — used here
+  so the format! only runs when there IS an error.
+
+The same pattern repeats for `write`, `add`, `remove`, `clear`.
+Each is a small function doing one thing.
+
+When you see `atomic::write(&path, ...)?`, that's a call into
+`cheni_util/atomic.rs` — the helper that does tmp-file + fsync +
+rename. The header at the top of `pins.rs` told you that.
+
+### Chunk 3 — `resolve_flake_dir` (~lines 130-180)
+
+```rust
+pub fn resolve_flake_dir(cli: Option<&Path>) -> Result<PathBuf> {
+    if let Some(p) = cli {
+        if has_flake(p) {
+            return Ok(p.to_path_buf());
+        }
+        bail!("--flake-dir '{}' does not contain a flake.nix", p.display());
+    }
+    for var in ["NH_FLAKE", "CHENI_CONFIG"] {
+        // ...
+    }
+    // fallback to ~/nixos-config or /etc/nixos
+}
+```
+
+`Option<&Path>` means "either Some(path) or None" — the `--flake-dir`
+flag is optional. The function tries each source in order and bails
+out with `bail!("...")` (which constructs an error and returns it)
+when none work. `bail!` is `color_eyre`'s "shortcut" for `return
+Err(eyre!("..."))`.
+
+This is the standard pattern: explicit precedence list, each step
+verified, clear error if all fail.
+
+### Chunk 4 — the subcommand impl (~lines 180-260)
+
+```rust
+impl OsPinArgs {
+    pub fn run(self) -> Result<()> {
+        let flake_dir = resolve_flake_dir(self.flake_dir.as_deref())?;
+        if self.names.is_empty() {
+            // ... list pins
+            return Ok(());
+        }
+        let added = add(&flake_dir, &self.names)?;
+        for name in &added {
+            crate::timeline::record(...);
+        }
+        // ... print summary
+    }
+}
+```
+
+`impl OsPinArgs { fn run(self) -> Result<()> { ... } }` —
+"implement the `run` method on the `OsPinArgs` struct". `OsPinArgs`
+is defined in `args.rs` (the args struct that clap fills). When
+the user runs `nh os pin firefox`, the dispatch in `nixos.rs`
+ends up calling this `run` method.
+
+The orchestrator is intentionally short — just sequencing the steps:
+resolve, branch on "list vs add", call the state-file functions,
+record events, print. Each step is a named function (or a single
+expression). If any step needs more logic, it goes into a helper,
+not inline here.
+
+### Chunk 5 — inline tests (bottom of file)
+
+```rust
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn read_returns_empty_when_file_absent() {
+        let dir = fake_flake_dir();
+        assert_eq!(read(dir.path()).unwrap(), Vec::<String>::new());
+    }
+    // ...
+}
+```
+
+`#[cfg(test)]` says "only compile this when running `cargo test`".
+The `mod tests { ... }` block is the test suite for this module
+(see the [Conventions](#conventions) section — inline tests are
+the fork standard).
+
+`#[expect(clippy::unwrap_used, ...)]` relaxes the project's "no
+unwraps" rule for the test code only. Tests are allowed to
+`.unwrap()` because a panic in a test IS the failure signal.
+
+`fake_flake_dir()` is a small fixture defined right above the
+tests — it creates a temporary directory with an empty `flake.nix`
+inside. Each test calls it to get a fresh, isolated dir, so the
+tests don't race in parallel.
+
+### What about the cheni_util submodules?
+
+Apply the same chunk-walking to `cheni_util/atomic.rs`,
+`time.rs`, `validation.rs`, `flake.rs`. Each one is short
+(100-200 lines) and self-contained. The "Helpers used" headers in
+each cheni-spec module tell you when to drop in.
+
+When in doubt, just read the test names — they're written like
+sentences (`add_returns_only_new_names`, `prune_keeps_most_recent_n`),
+so they describe exactly what the function does.
 
 ---
 

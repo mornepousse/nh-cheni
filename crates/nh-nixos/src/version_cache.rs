@@ -26,6 +26,19 @@
 //!
 //! Callers hold a `VersionCache`, call `lookup` / `store`, then
 //! `save` once when the batch is done. There is no implicit auto-save.
+//!
+//! # Helpers used (jump table for navigation)
+//!
+//! When you read this file and hit one of these calls, the
+//! implementation lives in `crates/nh-nixos/src/cheni_util/<x>.rs`:
+//!
+//! - `atomic::write(path, bytes)` — write the cache JSON
+//!   atomically. Used inside [`VersionCache::save`].
+//!
+//! Local helper `create_private_dir` (defined at the bottom of this
+//! file) creates the cache directory with mode 0o700 explicitly,
+//! since `fs::create_dir_all` would inherit the user's umask and
+//! produce a 0o755 (world-readable-listing) directory.
 
 use std::{
   collections::HashMap,

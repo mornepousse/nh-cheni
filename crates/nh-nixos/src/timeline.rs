@@ -9,6 +9,27 @@
 //! schema (`{ts, kind, package?, details}`). An existing file from
 //! the wrapper era keeps being read by [`read_events`] and appended
 //! to by [`record`].
+//!
+//! # Helpers used (jump table for navigation)
+//!
+//! When you read this file and hit one of these calls, the
+//! implementation lives in `crates/nh-nixos/src/cheni_util/<x>.rs`:
+//!
+//! - `time::now_rfc3339()` — `YYYY-MM-DDTHH:MM:SSZ` timestamp.
+//!   Used inside [`record`] when stamping new events. Re-exported
+//!   from this module under the same name so existing call sites
+//!   that did `timeline::now_rfc3339()` still compile.
+//! - `time::format_rfc3339(unix_secs)` — render a unix timestamp
+//!   in RFC 3339. Re-exported as
+//!   [`now_rfc3339_from_secs`] for back-compat with `events.rs`
+//!   which adopted the longer name during the cheni extension phase.
+//! - `time::parse_rfc3339_to_unix(ts)` — inverse parse. Re-exported
+//!   under the same name. Used by `events::build_rows` to slot
+//!   events into generations.
+//!
+//! Local helper `create_private_dir` (defined inline) creates the
+//! cache directory with mode 0o700 explicitly so the existence of
+//! events isn't disclosed via `ls`.
 
 use std::{
   fs,
