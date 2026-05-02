@@ -1,7 +1,7 @@
 [package]
 name                   = "nh"
 license.workspace      = true
-repository             = "https://gitlab.com/harrael/cheni"
+repository             = "https://gitlab.com/harrael/nh-cheni"
 description            = "Personal fork of nh (NixOS helper) by harrael"
 keywords               = [ "nix", "nixos", "nix-darwin", "helper", "CLI" ]
 version.workspace      = true

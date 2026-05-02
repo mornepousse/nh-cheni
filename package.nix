@@ -16,10 +16,11 @@ let
   cargoToml = lib.importTOML ./Cargo.toml;
 in
 rustPlatform.buildRustPackage (finalAttrs: {
-  # Nix-store identifier stays "cheni" so it's clear this isn't upstream
-  # nh in the store path. The user-facing binary is still `nh` to keep
-  # muscle memory and tooling that already calls `nh os switch ...` working.
-  pname = "cheni";
+  # Nix-store identifier is "nh-cheni" so it's clear in the store path
+  # that this isn't upstream nh — it's harrael's nh+cheni-tools fork.
+  # The user-facing binary is still `nh` to preserve muscle memory and
+  # tooling that already calls `nh os switch ...`.
+  pname = "nh-cheni";
   version = "${cargoToml.workspace.package.version}-${rev}";
 
   src = lib.fileset.toSource {
@@ -117,7 +118,7 @@ rustPlatform.buildRustPackage (finalAttrs: {
 
   meta = {
     description = "Personal fork of nh (Yet Another Nix Helper) by harrael — adds NixOS-management tooling on top of upstream nh.";
-    homepage = "https://gitlab.com/harrael/cheni";
+    homepage = "https://gitlab.com/harrael/nh-cheni";
     license = lib.licenses.eupl12;
     mainProgram = "nh";
     maintainers = [ ];

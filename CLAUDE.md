@@ -1,7 +1,7 @@
 # cheni — Claude Code instructions
 
 Fork personnel de [nh](https://github.com/nix-community/nh) (Yet Another
-Nix Helper). Distribué via flake Nix sur `gitlab.com/harrael/cheni`.
+Nix Helper). Distribué via flake Nix sur `gitlab.com/harrael/nh-cheni`.
 
 ## Scope & non-goals
 
@@ -29,7 +29,7 @@ Aucun rayonnement community, aucune contribution upstream à nh.
 
 ## Repo
 
-- **Origin** : https://gitlab.com/harrael/cheni
+- **Origin** : https://gitlab.com/harrael/nh-cheni
 - **Upstream nh** (remote tracker) : https://github.com/viperML/nh
 - **Wrapper-era archive** : tag `wrapper-archive-v0.8.5` (préserve
   l'ancienne implémentation de cheni en wrapper Rust qui shell-out

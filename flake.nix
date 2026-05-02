@@ -1,8 +1,8 @@
 {
-  description = "cheni — personal fork of nh (NixOS helper) by harrael";
+  description = "nh-cheni — personal fork of nh (NixOS helper) by harrael";
 
   # Tracks nixos-unstable like the wrapper-era cheni did, so user-side
-  # nixos-config that pinned `cheni.inputs.nixpkgs.follows = "nixpkgs"`
+  # nixos-config that pinned `<input>.inputs.nixpkgs.follows = "nixpkgs"`
   # keeps resolving to the same channel.
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
@@ -24,11 +24,11 @@
       rev = self.shortRev or self.dirtyShortRev or "dirty";
     in
     {
-      overlays.default = final: _: { cheni = final.callPackage ./package.nix { inherit rev; }; };
+      overlays.default = final: _: { nh-cheni = final.callPackage ./package.nix { inherit rev; }; };
 
       packages = forAllSystems (pkgs: {
-        cheni = pkgs.callPackage ./package.nix { inherit rev; };
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.cheni;
+        nh-cheni = pkgs.callPackage ./package.nix { inherit rev; };
+        default = self.packages.${pkgs.stdenv.hostPlatform.system}.nh-cheni;
       });
 
       checks = self.packages // self.devShells;
