@@ -16,12 +16,13 @@
 
 use std::{
   fs,
-  io::Write,
   path::{Path, PathBuf},
 };
 
 use color_eyre::eyre::{Context, Result, bail};
 use tracing::debug;
+
+use crate::cheni_util::{atomic, validation};
 
 const PINS_FILE: &str = "package-pins.json";
 
@@ -72,7 +73,7 @@ pub fn write(flake_dir: &Path, pins: &[String]) -> Result<()> {
   let path = flake_dir.join(PINS_FILE);
   let body = serde_json::to_string_pretty(pins)
     .context("serializing pins to JSON")?;
-  atomic_write(&path, format!("{body}\n").as_bytes())?;
+  atomic::write(&path, format!("{body}\n").as_bytes())?;
   debug!("wrote {} pins to {}", pins.len(), PINS_FILE);
   Ok(())
 }
@@ -81,7 +82,7 @@ pub fn write(flake_dir: &Path, pins: &[String]) -> Result<()> {
 /// (duplicates skipped).
 pub fn add(flake_dir: &Path, names: &[String]) -> Result<Vec<String>> {
   for name in names {
-    validate_package_name(name)?;
+    validation::package_name(name)?;
   }
 
   let mut pins = read(flake_dir)?;
@@ -120,33 +121,6 @@ pub fn clear(flake_dir: &Path) -> Result<usize> {
   let count = pins.len();
   write(flake_dir, &[])?;
   Ok(count)
-}
-
-/// Reject obviously bogus package names before they reach the JSON or
-/// the overlay's `pkgs.${name}` lookup.
-fn validate_package_name(name: &str) -> Result<()> {
-  if name.is_empty() {
-    bail!("Package name is empty");
-  }
-  if name.len() > 128 {
-    bail!(
-      "Package name '{}…' is suspiciously long ({} chars, max 128)",
-      &name.chars().take(20).collect::<String>(),
-      name.len()
-    );
-  }
-  if let Some(bad) = name.chars().find(|c| {
-    c.is_control()
-      || matches!(*c, '\n' | '\r' | '/' | '\\' | '"' | '\'')
-  }) {
-    bail!(
-      "Package name '{}' contains an invalid character ({:?}). Nix \
-       package names use letters, digits, '-', '_', '.', '+'.",
-      name,
-      bad
-    );
-  }
-  Ok(())
 }
 
 /// Resolve which directory holds the user's NixOS flake.
@@ -205,41 +179,6 @@ pub fn resolve_flake_dir(cli: Option<&Path>) -> Result<PathBuf> {
 
 fn has_flake(p: &Path) -> bool {
   p.is_dir() && p.join("flake.nix").is_file()
-}
-
-/// Atomic write: tmp file in the same directory, fsync, rename. The
-/// PID suffix on the tmp name prevents two concurrent `nh os pin`
-/// runs from fighting over the same tmp path.
-fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
-  let parent = path.parent().unwrap_or_else(|| Path::new("."));
-  let tmp_name = format!(
-    "{}.tmp.{}",
-    path.file_name().and_then(|n| n.to_str()).unwrap_or("nh-pins-tmp"),
-    std::process::id()
-  );
-  let tmp = parent.join(tmp_name);
-
-  {
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-      use std::os::unix::fs::OpenOptionsExt;
-      opts.mode(0o600);
-    }
-    let mut file = opts
-      .open(&tmp)
-      .with_context(|| format!("opening {} for write", tmp.display()))?;
-    file
-      .write_all(content)
-      .with_context(|| format!("writing {}", tmp.display()))?;
-    let _ = file.sync_all();
-  }
-
-  fs::rename(&tmp, path).with_context(|| {
-    format!("renaming {} → {}", tmp.display(), path.display())
-  })?;
-  Ok(())
 }
 
 // ── Subcommand entry points ────────────────────────────────────────
@@ -444,6 +383,10 @@ mod tests {
 
   #[test]
   fn validate_accepts_typical_nixpkgs_names() {
+    // The validation logic moved to cheni_util::validation; this
+    // test now covers the integration: add() must accept the same
+    // names through the new path.
+    let dir = fake_flake_dir();
     for n in &[
       "firefox",
       "linuxKernel",
@@ -453,7 +396,7 @@ mod tests {
       "openssl_3+",
     ] {
       assert!(
-        validate_package_name(n).is_ok(),
+        add(dir.path(), &[(*n).to_string()]).is_ok(),
         "should accept {n}"
       );
     }

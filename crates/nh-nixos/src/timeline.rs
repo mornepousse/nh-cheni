@@ -13,13 +13,30 @@
 use std::{
   fs,
   io::Write,
-  path::PathBuf,
-  time::{SystemTime, UNIX_EPOCH},
+  path::{Path, PathBuf},
 };
 
 use color_eyre::eyre::Result;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
+
+use crate::cheni_util::time;
+
+// Re-export the time helpers under their wrapper-era names so call
+// sites that already do `timeline::now_rfc3339()` keep working.
+pub use crate::cheni_util::time::{
+    now_rfc3339,
+    parse_rfc3339_to_unix,
+};
+
+/// Public `now_rfc3339_from_secs` alias kept for callers like
+/// `events::render_date` that adopted this name during the cheni
+/// extension phase. New callers should use `cheni_util::time::format_rfc3339`
+/// directly.
+#[must_use]
+pub fn now_rfc3339_from_secs(unix_secs: u64) -> String {
+  time::format_rfc3339(unix_secs)
+}
 
 /// One event in the timeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,19 +88,47 @@ pub fn record(
 fn append_event(event: &Event) -> Result<()> {
   let path = timeline_path();
   if let Some(parent) = path.parent() {
-    fs::create_dir_all(parent)?;
+    create_private_dir(parent)?;
   }
   let mut line = serde_json::to_string(event)?;
   line.push('\n');
-  let mut file = fs::OpenOptions::new()
-    .create(true)
-    .append(true)
-    .open(&path)?;
+  let mut opts = fs::OpenOptions::new();
+  opts.create(true).append(true);
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::OpenOptionsExt;
+    // 0o600 on creation so the file is private to the user.
+    opts.mode(0o600);
+    // Refuse to follow a symlink at the predictable timeline path —
+    // closes the TOCTOU where a local attacker pre-plants a symlink
+    // in a shared cache directory pointing at /home/mae/.bashrc or
+    // similar. Ineffective once the cache_dir is properly 0o700
+    // (no one else can write there) but defence-in-depth.
+    opts.custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits());
+  }
+  let mut file = opts.open(&path)?;
   file.write_all(line.as_bytes())?;
   // sync_data (not sync_all) is enough — a crash mid-write leaves a
   // partial line at most, which read_events skips silently.
   file.sync_data().ok();
   Ok(())
+}
+
+/// Create the cache directory with mode 0o700 on Unix so that the
+/// existence of timeline events isn't disclosed to other local users.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+  #[cfg(unix)]
+  {
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new()
+      .recursive(true)
+      .mode(0o700)
+      .create(dir)
+  }
+  #[cfg(not(unix))]
+  {
+    fs::create_dir_all(dir)
+  }
 }
 
 /// Read all events from disk. Returns an empty Vec if the file
@@ -114,126 +159,10 @@ pub fn read_events() -> Result<Vec<Event>> {
   Ok(events)
 }
 
-/// Parse an RFC3339 timestamp (the format [`record`] writes) back to
-/// Unix seconds. Returns `None` for unparseable strings — skip-and-
-/// debug is the policy for stale/garbage events.
-pub fn parse_rfc3339_to_unix(ts: &str) -> Option<u64> {
-  // Format: "YYYY-MM-DDTHH:MM:SSZ"
-  let trimmed = ts.trim_end_matches('Z');
-  let (date, time) = trimmed.split_once('T')?;
-  let date_parts: Vec<&str> = date.split('-').collect();
-  let time_parts: Vec<&str> = time.split(':').collect();
-  if date_parts.len() != 3 || time_parts.len() != 3 {
-    return None;
-  }
-  let year: i64 = date_parts[0].parse().ok()?;
-  let month: u32 = date_parts[1].parse().ok()?;
-  let day: u32 = date_parts[2].parse().ok()?;
-  let hour: u64 = time_parts[0].parse().ok()?;
-  let minute: u64 = time_parts[1].parse().ok()?;
-  let second: u64 = time_parts[2].parse().ok()?;
-  if !(1970..=9999).contains(&year)
-    || !(1..=12).contains(&month)
-    || !(1..=31).contains(&day)
-    || hour > 23
-    || minute > 59
-    || second > 60
-  {
-    return None;
-  }
-  let mut days = 0i64;
-  for y in 1970..year {
-    let leap = (y % 4 == 0 && y % 100 != 0) || (y % 400 == 0);
-    days += if leap { 366 } else { 365 };
-  }
-  let leap =
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-  let months = [
-    31u32,
-    if leap { 29 } else { 28 },
-    31,
-    30,
-    31,
-    30,
-    31,
-    31,
-    30,
-    31,
-    30,
-    31,
-  ];
-  for m in 0..month - 1 {
-    days += i64::from(months[m as usize]);
-  }
-  days += i64::from(day - 1);
-  Some((days as u64) * 86_400 + hour * 3600 + minute * 60 + second)
-}
-
-/// RFC 3339 "now" timestamp. Same manual decomposition used by
-/// `freezes::today_iso` — kept here so timeline is self-contained.
-pub fn now_rfc3339() -> String {
-  let secs = SystemTime::now()
-    .duration_since(UNIX_EPOCH)
-    .map(|d| d.as_secs())
-    .unwrap_or(0);
-  format_rfc3339(secs)
-}
-
-/// Format `unix_secs` as an RFC 3339 timestamp. Public so other
-/// modules (e.g. `events`) can render generation mtimes in the same
-/// shape as the timeline's own event timestamps.
-#[must_use]
-pub fn now_rfc3339_from_secs(unix_secs: u64) -> String {
-  format_rfc3339(unix_secs)
-}
-
-#[allow(clippy::manual_is_multiple_of)]
-fn format_rfc3339(secs: u64) -> String {
-  let secs_in_day = 86_400u64;
-  let days = secs / secs_in_day;
-  let time_of_day = secs % secs_in_day;
-  let hour = time_of_day / 3600;
-  let minute = (time_of_day % 3600) / 60;
-  let second = time_of_day % 60;
-  let mut year = 1970i64;
-  let mut remaining_days = days as i64;
-  loop {
-    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let year_days = if leap { 366 } else { 365 };
-    if remaining_days < year_days {
-      break;
-    }
-    remaining_days -= year_days;
-    year += 1;
-  }
-  let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-  let months = [
-    31,
-    if leap { 29 } else { 28 },
-    31,
-    30,
-    31,
-    30,
-    31,
-    31,
-    30,
-    31,
-    30,
-    31,
-  ];
-  let mut month = 1u32;
-  for &m in &months {
-    if remaining_days < m {
-      break;
-    }
-    remaining_days -= m;
-    month += 1;
-  }
-  let day = remaining_days as u32 + 1;
-  format!(
-    "{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z"
-  )
-}
+// Time / date helpers (now_rfc3339, parse_rfc3339_to_unix,
+// format_rfc3339) live in cheni_util::time. They were lifted out of
+// this module during the post-pivot audit, since freezes.rs and
+// events.rs use them too.
 
 // ── Subcommand ────────────────────────────────────────────────────
 
@@ -287,48 +216,9 @@ impl OsTimelineArgs {
 mod tests {
   use super::*;
 
-  #[test]
-  fn now_rfc3339_format_is_well_formed() {
-    let ts = now_rfc3339();
-    assert_eq!(ts.len(), 20);
-    assert_eq!(&ts[4..5], "-");
-    assert_eq!(&ts[7..8], "-");
-    assert_eq!(&ts[10..11], "T");
-    assert_eq!(&ts[13..14], ":");
-    assert_eq!(&ts[16..17], ":");
-    assert_eq!(&ts[19..20], "Z");
-    assert!(ts.starts_with("20"));
-  }
-
-  #[test]
-  fn format_rfc3339_known_unix_epoch() {
-    assert_eq!(format_rfc3339(0), "1970-01-01T00:00:00Z");
-  }
-
-  #[test]
-  fn format_rfc3339_known_y2k() {
-    // 2000-01-01T00:00:00Z = 946684800 seconds since epoch.
-    assert_eq!(format_rfc3339(946_684_800), "2000-01-01T00:00:00Z");
-  }
-
-  #[test]
-  fn parse_rfc3339_round_trips_with_format_rfc3339() {
-    for &secs in
-      &[0u64, 100, 86_399, 86_400, 946_684_800, 1_700_000_000]
-    {
-      let s = format_rfc3339(secs);
-      assert_eq!(parse_rfc3339_to_unix(&s), Some(secs), "round-trip {s}");
-    }
-  }
-
-  #[test]
-  fn parse_rfc3339_rejects_garbage() {
-    assert_eq!(parse_rfc3339_to_unix(""), None);
-    assert_eq!(parse_rfc3339_to_unix("not-a-date"), None);
-    assert_eq!(parse_rfc3339_to_unix("2026-13-01T00:00:00Z"), None);
-    assert_eq!(parse_rfc3339_to_unix("2026-01-32T00:00:00Z"), None);
-    assert_eq!(parse_rfc3339_to_unix("2026-01-01T25:00:00Z"), None);
-  }
+  // Time / date format tests (now_rfc3339, format_rfc3339,
+  // parse_rfc3339_to_unix) moved with the implementations to
+  // cheni_util::time. Only Event-level serde tests remain here.
 
   #[test]
   fn event_serializes_with_expected_keys() {

@@ -15,7 +15,6 @@
 use std::{path::Path, process::Command};
 
 use color_eyre::eyre::{Context, Result, bail};
-use serde_json::Value;
 use tracing::debug;
 
 use crate::{
@@ -117,43 +116,16 @@ impl OsSelfUpdateArgs {
 
 /// Read the locked rev of `input_name` from `<flake-dir>/flake.lock`.
 ///
-/// Returns the full hex rev. The lock structure mirrors what
-/// `check::read_input_locked` parses, but we only need the rev here
-/// (no narHash) so a smaller helper avoids pulling check.rs as a dep.
+/// Thin wrapper over `cheni_util::flake::read_input_locked` for
+/// callers that don't need the narHash. Kept as a public symbol
+/// since the test module exercises it directly.
 pub fn read_input_rev(
   flake_dir: &Path,
   input_name: &str,
 ) -> Result<String> {
-  let lock_path = flake_dir.join("flake.lock");
-  let content = std::fs::read_to_string(&lock_path).with_context(|| {
-    format!("reading {}", lock_path.display())
-  })?;
-  let lock: Value = serde_json::from_str(&content)
-    .with_context(|| format!("parsing {} as JSON", lock_path.display()))?;
-  let root_inputs = lock
-    .pointer("/nodes/root/inputs")
-    .and_then(Value::as_object)
-    .ok_or_else(|| {
-      color_eyre::eyre::eyre!(
-        "{} has no /nodes/root/inputs object",
-        lock_path.display()
-      )
-    })?;
-  let node_name = root_inputs
-    .get(input_name)
-    .and_then(|v| v.as_str())
-    .unwrap_or(input_name);
-  let rev = lock
-    .pointer(&format!("/nodes/{node_name}/locked/rev"))
-    .and_then(Value::as_str)
-    .ok_or_else(|| {
-      color_eyre::eyre::eyre!(
-        "no /nodes/{node_name}/locked/rev in flake.lock"
-      )
-    })?
-    .to_string();
-  debug!("self-update: '{input_name}' locked at {rev}");
-  Ok(rev)
+  let l = crate::cheni_util::flake::read_input_locked(flake_dir, input_name)?;
+  debug!("self-update: '{input_name}' locked at {}", l.rev);
+  Ok(l.rev)
 }
 
 #[cfg(test)]

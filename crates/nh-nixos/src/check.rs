@@ -22,12 +22,12 @@
 
 use std::{path::Path, process::Command};
 
-use color_eyre::eyre::{Context, Result, eyre};
-use serde_json::Value;
+use color_eyre::eyre::{Result, eyre};
 use tracing::debug;
 
 use crate::{
   args::OsCheckArgs,
+  cheni_util::flake as cheni_flake,
   freezes,
   pins,
   versioning::{VersionDiff, compare_versions, parse_version},
@@ -35,6 +35,11 @@ use crate::{
 
 /// (rev, narHash) pair for a flake input. Both are required by
 /// `fetchTree` to keep the eval pure and content-addressed.
+///
+/// Re-exported view over `cheni_util::flake::LockedInput` with the
+/// narHash forced to a non-Option since `nh os check` requires it
+/// for content-addressed eval. Callers that don't need narHash should
+/// use `cheni_util::flake::read_input_locked` directly.
 #[derive(Debug, Clone)]
 pub struct LockedInput {
   pub rev: String,
@@ -42,62 +47,22 @@ pub struct LockedInput {
 }
 
 /// Read `<flake-dir>/flake.lock` and return the locked rev + narHash
-/// for the input named `input_name`.
-///
-/// Looks up `nodes.root.inputs.<input_name>` to find the node alias
-/// (handles cases where the user's flake uses a different name for
-/// the same upstream), then reads `nodes.<node>.locked.{rev, narHash}`.
+/// for `input_name`. Errors if either is missing — `nh os check`
+/// can't run a pure eval without the narHash.
 ///
 /// # Errors
 ///
-/// Returns an error if `flake.lock` is missing/unparseable or doesn't
-/// declare an input under `input_name`.
+/// Returns an error if `flake.lock` can't be read, the input isn't
+/// declared, or the locked block is missing the narHash.
 pub fn read_input_locked(
   flake_dir: &Path,
   input_name: &str,
 ) -> Result<LockedInput> {
-  let lock_path = flake_dir.join("flake.lock");
-  let content = std::fs::read_to_string(&lock_path).with_context(|| {
-    format!(
-      "reading {} — did you `nix flake update` at least once?",
-      lock_path.display()
-    )
+  let l = cheni_flake::read_input_locked(flake_dir, input_name)?;
+  let nar_hash = l.nar_hash.ok_or_else(|| {
+    eyre!("input '{input_name}' has no locked narHash")
   })?;
-  let lock: Value = serde_json::from_str(&content)
-    .with_context(|| format!("parsing {} as JSON", lock_path.display()))?;
-
-  let root_inputs = lock
-    .pointer("/nodes/root/inputs")
-    .and_then(Value::as_object)
-    .ok_or_else(|| {
-      eyre!("{} has no /nodes/root/inputs object", lock_path.display())
-    })?;
-  let node_name = root_inputs
-    .get(input_name)
-    .and_then(|v| v.as_str())
-    .unwrap_or(input_name);
-  let locked = lock
-    .pointer(&format!("/nodes/{node_name}/locked"))
-    .ok_or_else(|| {
-      eyre!(
-        "Input '{input_name}' is not declared in {} (looked under \
-         /nodes/{node_name}/locked).",
-        lock_path.display()
-      )
-    })?;
-  let rev = locked
-    .get("rev")
-    .and_then(Value::as_str)
-    .ok_or_else(|| eyre!("input '{input_name}' has no locked rev"))?
-    .to_string();
-  let nar_hash = locked
-    .get("narHash")
-    .and_then(Value::as_str)
-    .ok_or_else(|| {
-      eyre!("input '{input_name}' has no locked narHash")
-    })?
-    .to_string();
-  Ok(LockedInput { rev, nar_hash })
+  Ok(LockedInput { rev: l.rev, nar_hash })
 }
 
 /// Query `pkgs.<pkg_name>.version` against a nixpkgs tree pinned at

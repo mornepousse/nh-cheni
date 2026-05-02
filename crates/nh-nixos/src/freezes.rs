@@ -21,7 +21,6 @@
 use std::{
   collections::BTreeMap,
   fs,
-  io::Write,
   path::Path,
   process::Command,
 };
@@ -30,6 +29,8 @@ use color_eyre::eyre::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::debug;
+
+use crate::cheni_util::{atomic, time, validation};
 
 const FREEZES_FILE: &str = "package-freezes.json";
 
@@ -96,7 +97,7 @@ pub fn write(flake_dir: &Path, freezes: &Freezes) -> Result<()> {
   let path = flake_dir.join(FREEZES_FILE);
   let body = serde_json::to_string_pretty(freezes)
     .context("serializing freezes")?;
-  atomic_write(&path, format!("{body}\n").as_bytes())?;
+  atomic::write(&path, format!("{body}\n").as_bytes())?;
   debug!("wrote {} freezes to {}", freezes.len(), FREEZES_FILE);
   Ok(())
 }
@@ -105,7 +106,7 @@ pub fn write(flake_dir: &Path, freezes: &Freezes) -> Result<()> {
 /// `true` when the name was newly frozen, `false` when we replaced an
 /// existing entry.
 pub fn add(flake_dir: &Path, name: &str, entry: FreezeEntry) -> Result<bool> {
-  validate_package_name(name)?;
+  validation::package_name(name)?;
   validate_entry(&entry)?;
   let mut freezes = read(flake_dir)?;
   let inserted_new = !freezes.contains_key(name);
@@ -137,30 +138,11 @@ pub fn clear(flake_dir: &Path) -> Result<usize> {
 }
 
 // ── Validation ─────────────────────────────────────────────────────
-
-fn validate_package_name(name: &str) -> Result<()> {
-  if name.is_empty() {
-    bail!("Package name is empty");
-  }
-  if name.len() > 128 {
-    bail!(
-      "Package name '{}…' is suspiciously long ({} chars, max 128)",
-      &name.chars().take(20).collect::<String>(),
-      name.len()
-    );
-  }
-  if let Some(bad) = name.chars().find(|c| {
-    c.is_control()
-      || matches!(*c, '\n' | '\r' | '/' | '\\' | '"' | '\'')
-  }) {
-    bail!(
-      "Package name '{}' contains an invalid character ({:?}).",
-      name,
-      bad
-    );
-  }
-  Ok(())
-}
+//
+// Package-name validation lives in `crate::cheni_util::validation`
+// since the same rule is shared across pins/freezes/check. The
+// per-entry validator below is freeze-specific (rev hex shape,
+// narHash SRI, version/frozen_at length, majorConstraint range).
 
 fn validate_entry(entry: &FreezeEntry) -> Result<()> {
   // Git rev: 7..=64 hex chars (40 is normal, longer/shorter accepted
@@ -233,58 +215,26 @@ fn validate_entry(entry: &FreezeEntry) -> Result<()> {
 // ── nixpkgs rev + narHash detection (for the freeze command) ───────
 
 /// Read the locked rev of the `nixpkgs` input from
-/// `<flake-dir>/flake.lock`. Returns an error with an actionable
-/// message when the lock file is missing or doesn't declare the
-/// `nixpkgs` input.
+/// `<flake-dir>/flake.lock`. Thin wrapper over the shared
+/// `cheni_util::flake::read_input_locked` helper.
+///
+/// # Errors
+///
+/// Propagates the underlying lookup error when the lock file is
+/// missing, the `nixpkgs` input isn't declared, or the locked block
+/// has no `rev`.
 pub fn read_nixpkgs_rev(flake_dir: &Path) -> Result<String> {
-  let lock_path = flake_dir.join("flake.lock");
-  let content = fs::read_to_string(&lock_path).with_context(|| {
-    format!(
-      "reading {} — did you run `nix flake update` at least once?",
-      lock_path.display()
-    )
-  })?;
-  let lock: Value = serde_json::from_str(&content)
-    .with_context(|| format!("parsing {} as JSON", lock_path.display()))?;
-
-  // flake.lock layout:
-  //   { "nodes": { "<input-name>": { "locked": { "rev": "..." } } } }
-  // The root node's "inputs" maps logical names to node names; for
-  // nixpkgs the node is usually called "nixpkgs" too but we resolve
-  // through root.inputs to be safe.
-  let root_inputs = lock
-    .pointer("/nodes/root/inputs")
-    .and_then(Value::as_object)
-    .ok_or_else(|| {
-      color_eyre::eyre::eyre!(
-        "{} has no /nodes/root/inputs object",
-        lock_path.display()
-      )
-    })?;
-  let nixpkgs_node = root_inputs
-    .get("nixpkgs")
-    .and_then(|v| v.as_str())
-    .unwrap_or("nixpkgs");
-  let rev = lock
-    .pointer(&format!("/nodes/{nixpkgs_node}/locked/rev"))
-    .and_then(Value::as_str)
-    .ok_or_else(|| {
-      color_eyre::eyre::eyre!(
-        "Could not find /nodes/{}/locked/rev in {}.\nIs the nixpkgs \
-         input declared in your flake?",
-        nixpkgs_node,
-        lock_path.display()
-      )
-    })?
-    .to_string();
-  Ok(rev)
+  Ok(crate::cheni_util::flake::read_input_locked(flake_dir, "nixpkgs")?.rev)
 }
 
 /// Prefetch the `nixpkgs` tarball for `rev` and return its narHash
 /// (`sha256-…` SRI form). Shells out to `nix flake prefetch --json`.
-/// Skipped (returns an error) when `nix` isn't on PATH so the test
-/// suite stays sandbox-friendly.
+/// Validates `rev` is a plausible git hex hash BEFORE splicing into
+/// the URL so a tampered flake.lock can't make us fetch arbitrary
+/// content.
 pub fn prefetch_nixpkgs_rev(rev: &str) -> Result<String> {
+  validation::git_hex_rev(rev)
+    .context("rejecting prefetch with malformed nixpkgs rev")?;
   let url = format!("github:NixOS/nixpkgs/{rev}");
   let output = Command::new("nix")
     .args(["flake", "prefetch", "--json", &url])
@@ -313,39 +263,6 @@ pub fn prefetch_nixpkgs_rev(rev: &str) -> Result<String> {
       )
     })?;
   Ok(hash.to_string())
-}
-
-// ── Atomic write (duplicate of pins::atomic_write — extract once we
-//    pull a third caller into a shared cheni-util crate, phase 3+) ──
-
-fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
-  let parent = path.parent().unwrap_or_else(|| Path::new("."));
-  let tmp_name = format!(
-    "{}.tmp.{}",
-    path.file_name().and_then(|n| n.to_str()).unwrap_or("nh-fzs-tmp"),
-    std::process::id()
-  );
-  let tmp = parent.join(tmp_name);
-  {
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-      use std::os::unix::fs::OpenOptionsExt;
-      opts.mode(0o600);
-    }
-    let mut file = opts
-      .open(&tmp)
-      .with_context(|| format!("opening {} for write", tmp.display()))?;
-    file
-      .write_all(content)
-      .with_context(|| format!("writing {}", tmp.display()))?;
-    let _ = file.sync_all();
-  }
-  fs::rename(&tmp, path).with_context(|| {
-    format!("renaming {} → {}", tmp.display(), path.display())
-  })?;
-  Ok(())
 }
 
 // ── Subcommand entry points ────────────────────────────────────────
@@ -451,7 +368,7 @@ fn freeze_one(
   name: &str,
   version_override: Option<&str>,
 ) -> Result<()> {
-  validate_package_name(name)?;
+  validation::package_name(name)?;
 
   let rev = read_nixpkgs_rev(flake_dir)?;
   println!("nixpkgs rev: {}", &rev[..rev.len().min(7)]);
@@ -463,7 +380,7 @@ fn freeze_one(
     rev,
     nar_hash,
     version: version_override.unwrap_or("").to_string(),
-    frozen_at: today_iso(),
+    frozen_at: time::today_iso(),
     major_constraint: None,
   };
   let new = add(flake_dir, name, entry)?;
@@ -479,40 +396,6 @@ fn freeze_one(
     flake_dir.join(FREEZES_FILE).display()
   );
   Ok(())
-}
-
-/// Today as `YYYY-MM-DD` (UTC). Manual decomposition to avoid pulling
-/// `chrono` for one call — matches the wrapper-era pattern.
-fn today_iso() -> String {
-  let secs = std::time::SystemTime::now()
-    .duration_since(std::time::UNIX_EPOCH)
-    .map(|d| d.as_secs())
-    .unwrap_or(0);
-  let days = secs / 86_400;
-  let mut year = 1970i64;
-  let mut remaining = days as i64;
-  loop {
-    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-    let year_days = if leap { 366 } else { 365 };
-    if remaining < year_days {
-      break;
-    }
-    remaining -= year_days;
-    year += 1;
-  }
-  let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
-  let months =
-    [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  let mut month = 1u32;
-  for &m in &months {
-    if remaining < m {
-      break;
-    }
-    remaining -= m;
-    month += 1;
-  }
-  let day = remaining as u32 + 1;
-  format!("{year:04}-{month:02}-{day:02}")
 }
 
 #[cfg(test)]
@@ -674,14 +557,7 @@ mod tests {
     assert!(read_nixpkgs_rev(dir.path()).is_err());
   }
 
-  #[test]
-  fn today_iso_format_is_well_formed() {
-    let s = today_iso();
-    assert_eq!(s.len(), 10);
-    assert_eq!(&s[4..5], "-");
-    assert_eq!(&s[7..8], "-");
-    assert!(s.starts_with("20"));
-  }
+  // today_iso() now lives in cheni_util::time; tested there.
 
   #[test]
   fn round_trip_preserves_major_constraint() {

@@ -30,13 +30,14 @@
 use std::{
   collections::HashMap,
   fs,
-  io::Write,
   path::{Path, PathBuf},
 };
 
 use color_eyre::eyre::{Context, Result};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
+
+use crate::cheni_util::atomic;
 
 /// On-disk version cache for `(input, rev, attr) → version` lookups.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -178,47 +179,34 @@ impl VersionCache {
   /// the atomic write fails.
   pub fn save(&self, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-      fs::create_dir_all(parent)
+      create_private_dir(parent)
         .with_context(|| format!("creating {}", parent.display()))?;
     }
     let body = serde_json::to_string_pretty(self)
       .context("serialising version cache to JSON")?;
-    atomic_write(path, body.as_bytes())?;
+    atomic::write(path, body.as_bytes())?;
     debug!("version_cache: saved to {}", path.display());
     Ok(())
   }
 }
 
-// Local atomic_write — third copy in this crate. Will be lifted to a
-// shared cheni-util module on the next caller (phase 4+).
-fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
-  let parent = path.parent().unwrap_or_else(|| Path::new("."));
-  let tmp_name = format!(
-    "{}.tmp.{}",
-    path.file_name().and_then(|n| n.to_str()).unwrap_or("nh-vc-tmp"),
-    std::process::id()
-  );
-  let tmp = parent.join(tmp_name);
+/// Create the cache directory with mode 0o700 on Unix so the file
+/// listing is private to the user. `create_dir_all` alone uses the
+/// process umask (typically 0o022 → 0o755 → world-readable
+/// listing), which leaks the existence of cached entries.
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+  #[cfg(unix)]
   {
-    let mut opts = fs::OpenOptions::new();
-    opts.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-      use std::os::unix::fs::OpenOptionsExt;
-      opts.mode(0o600);
-    }
-    let mut file = opts
-      .open(&tmp)
-      .with_context(|| format!("opening {} for write", tmp.display()))?;
-    file
-      .write_all(content)
-      .with_context(|| format!("writing {}", tmp.display()))?;
-    let _ = file.sync_all();
+    use std::os::unix::fs::DirBuilderExt;
+    fs::DirBuilder::new()
+      .recursive(true)
+      .mode(0o700)
+      .create(dir)
   }
-  fs::rename(&tmp, path).with_context(|| {
-    format!("renaming {} → {}", tmp.display(), path.display())
-  })?;
-  Ok(())
+  #[cfg(not(unix))]
+  {
+    fs::create_dir_all(dir)
+  }
 }
 
 #[cfg(test)]

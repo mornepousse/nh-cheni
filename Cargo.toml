@@ -22,7 +22,7 @@ rust-version = "1.91.1"
 # Bump:
 #   - merging upstream nh    -> replace the base with the new nh ver
 #   - adding a cheni feature -> bump the cheni layer (semver discipline)
-version      = "4.3.2+cheni.0.1.0"
+version      = "4.3.2+cheni.0.1.1"
 
 [workspace.dependencies]
 nh        = { path = "crates/nh" }
