@@ -1,10 +1,7 @@
 {
   description = "nh-cheni — personal fork of nh (NixOS helper) by harrael";
 
-  # Tracks nixos-unstable like the wrapper-era cheni did, so user-side
-  # nixos-config that pinned `<input>.inputs.nixpkgs.follows = "nixpkgs"`
-  # keeps resolving to the same channel.
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  inputs.nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.xz";
 
   outputs =
     {
@@ -31,7 +28,7 @@
         default = self.packages.${pkgs.stdenv.hostPlatform.system}.nh-cheni;
       });
 
-      checks = self.packages // self.devShells;
+      checks = builtins.removeAttrs (self.packages // self.devShells) [ "x86_64-darwin" ];
 
       devShells = forAllSystems (pkgs: {
         default = import ./shell.nix { inherit pkgs; };

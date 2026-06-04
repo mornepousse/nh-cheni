@@ -223,9 +223,30 @@ experience, done so with two subcommands provided out of the box.
 
 #### `nh search`
 
-We provide a super-fast package searching tool (powered by an Elasticsearch
-client) for Nix packages in supported Nixpkgs branches, available as
-`nh search`.
+[SPAM]: https://github.com/nix-community/SPAM
+
+We provide a super-fast search tool for Nix packages and NixOS/Home Manager
+options (powered by an Elasticsearch client against search.nixos.org), as well
+as offline search against local [SPAM] databases. All available as `nh search`!
+
+The command exposes three explicit subcommands and a convenient shorthand:
+
+<!--markdownlint-disable MD013 -->
+
+[found here]: https://github.com/feel-co/spam/actions/workflows/auto-index.yml
+
+| Invocation                                    | What it does                                                                            |
+| --------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `nh search <query>`                           | Shorthand; searches packages by default (see `NH_DEFAULT_SEARCH`)                       |
+| `nh search packages <query>`                  | Search Nixpkgs packages via search.nixos.org                                            |
+| `nh search options [--scope=<SCOPE>] <query>` | Search NixOS/Home Manager options (`--scope`: `nixpkgs`, `home-manager`, `all`)         |
+| `nh search offline --db <PATH> <query>`       | Search a local SPAM database without network access. Generated DBs can be [found here]. |
+
+<!--markdownlint-enable MD013 -->
+
+Common flags (`--limit`, `--channel`, `--json`, `--platforms`) can be placed
+before or after the subcommand name. `--channel` selects the online search
+channel, and `--platforms` only affects package output.
 
 <p align="center">
     <img
@@ -252,8 +273,10 @@ the cleanup process to let you know what is to be cleaned.
 > [!NOTE]
 > By default `nh clean` will automatically clean up your
 > [gcroots](https://nixos.org/guides/nix-pills/11-garbage-collector.html#indirect-roots)
-> directory, which will remove all your built result and direnv directories. If
-> you do not want to have this behaviour you can use the flag `--no-gcroots`.
+> directory, which will remove all your built result and direnv directories.
+>
+> Use `--no-gcroots` to skip all gcroot cleanup, or `--no-direnv` to preserve
+> direnv gcroots while still cleaning everything else.
 
 ### Platform Specific Subcommands
 
@@ -375,6 +398,30 @@ the common variables that you may encounter or choose to employ are as follows:
   - Sets the tracing/log filter for NH. This uses the same format as
     `tracing_subscriber` env filters (for example: `nh=trace`).
 
+- `NH_SEARCH_CHANNEL`
+  - Default Nixpkgs channel used by `nh search packages` and `nh search options`
+    (e.g. `nixos-unstable`, `nixos-24.11`). Overridden per-invocation by
+    `--channel`.
+
+- `NH_SEARCH_JSON`
+  - When set to a truthy value, `nh search` outputs results as raw JSON instead
+    of the formatted display. Equivalent to `--json`.
+
+- `NH_SEARCH_PLATFORM`
+  - When set to a truthy value, supported platforms are shown for each package
+    result. Equivalent to `--platforms`.
+
+- `NH_DEFAULT_SEARCH`
+  - Controls the target of the `nh search <query>` shorthand when no subcommand
+    is given. Accepted values: `packages` (default), `options` (uses scope
+    `all`). Equivalent to `--default-search`.
+
+- `NH_OFFLINE_DB`
+  - Colon-separated list of paths to SPAM database files used by
+    `nh search offline`. Each path is treated as a separate database. Equivalent
+    to passing `--db` multiple times. Example:
+    `NH_OFFLINE_DB=/var/cache/spam/nixpkgs.db:/var/cache/spam/hm.db`.
+
 - `NH_NOM`
   - Control whether `nom` (nix-output-monitor) should be enabled for the build
     processes. Equivalent of `--no-nom`.
@@ -426,10 +473,8 @@ generate manpages and possibly more in the future.
 
 ### Submitting Changes
 
-Once your changes are complete, please remember to run the fixup script in
-[fix.sh](./fix.sh) to apply general formatter and linter rules that will be
-expected by the CI. This is optional, but some CI steps (such as formatting) is
-required for a merge.
+Once your changes are complete, please remember to run `just fix` to apply
+general formatter and linter rules that will be expected by the CI.
 
 You will also want to update the [changelog](/CHANGELOG.md) with sufficient
 amount of information to detail the new behaviour before you create your
