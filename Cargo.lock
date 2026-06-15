@@ -2311,9 +2311,9 @@ dependencies = [
 
 [[package]]
 name = "spam-db"
-version = "0.1.0"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04a99b517d23c869614882fb8298c050a45b923f91a2ccf036adddd9c6b3d964"
+checksum = "21e17cbce2a45fc9e64f697ac5d3beaa41c4d0f7305824ddaf6b11b479fc9131"
 dependencies = [
  "zstd",
 ]
