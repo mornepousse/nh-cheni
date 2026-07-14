@@ -115,6 +115,54 @@ pub(crate) fn try_clarify_with(
   Some(render_block(&outcome, &units))
 }
 
+use std::process::Command;
+
+/// Real probe: shells `systemctl` / `journalctl`. All failures degrade to an
+/// empty result / `None` so clarification never itself errors.
+pub(crate) struct RealProbe;
+
+impl SystemdProbe for RealProbe {
+  fn failed_units(&self) -> Vec<String> {
+    let Ok(out) = Command::new("systemctl")
+      .args(["--failed", "--no-legend", "--plain", "--no-pager"])
+      .output()
+    else {
+      return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+      .lines()
+      .filter_map(|l| l.split_whitespace().next())
+      .filter(|u| u.contains('.'))
+      .map(str::to_string)
+      .collect()
+  }
+
+  fn unit_last_error(&self, unit: &str) -> Option<String> {
+    let out = Command::new("journalctl")
+      .args(["-u", unit, "-b", "--no-pager", "-n", "50", "-o", "cat"])
+      .output()
+      .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    // Last line that looks like an application error, not systemd boilerplate.
+    text
+      .lines()
+      .filter(|l| {
+        let low = l.to_lowercase();
+        (low.contains("error") || low.contains("failed"))
+          && !low.contains("failed with result")
+          && !low.contains("failed to start")
+      })
+      .last()
+      .map(|l| l.trim().to_string())
+  }
+}
+
+/// Entry point used from `main.rs`. Returns a clarified block for recognized
+/// activation failures, else `None`.
+pub fn try_clarify(err: &color_eyre::eyre::Report) -> Option<String> {
+  try_clarify_with(err, &RealProbe)
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -232,5 +280,13 @@ mod tests {
     let err = eyre!("error: build failed");
     let probe = FakeProbe { failed: vec![], cause: None };
     assert!(try_clarify_with(&err, &probe).is_none());
+  }
+
+  #[test]
+  fn real_probe_is_a_systemd_probe() {
+    // Compile-time guarantee RealProbe implements the trait and try_clarify
+    // wires it. We do NOT call systemd here (not parallel-safe).
+    fn assert_impl(_p: &dyn SystemdProbe) {}
+    assert_impl(&RealProbe);
   }
 }
