@@ -45,6 +45,45 @@ pub(crate) fn recognize(report: &str) -> bool {
     && parse_exit_code(report).is_some()
 }
 
+/// A unit that failed to start, with an optional cause line from the journal.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FailedUnit {
+  pub name:  String,
+  pub cause: Option<String>,
+}
+
+/// Render the clarified block. Pure: given `outcome` and `units` it fully
+/// determines the output. No I/O here.
+pub(crate) fn render_block(outcome: &ActivationOutcome, units: &[FailedUnit]) -> String {
+  let mut out = String::new();
+  match outcome {
+    ActivationOutcome::UnitsFailed => {
+      out.push_str("⚠ Switch appliqué — la génération est active.\n");
+      let n = units.len();
+      let noun = if n > 1 { "services ont raté leur démarrage" } else { "service a raté son démarrage" };
+      out.push_str(&format!("  Mais {n} {noun} :\n"));
+      for u in units {
+        out.push_str(&format!("    {}\n", u.name));
+        if let Some(cause) = &u.cause {
+          out.push_str(&format!("      cause : {cause}\n"));
+        }
+        out.push_str(&format!("      → journalctl -u {}\n", u.name));
+      }
+      out.push_str("  (exit 4 de switch-to-configuration = activé, mais des units ont raté)");
+    },
+    ActivationOutcome::HardFail(code) => {
+      out.push_str(&format!(
+        "✗ L'activation a échoué (code {code}) — le système n'a PAS basculé.\n"
+      ));
+      out.push_str("  Voir la sortie de switch-to-configuration ci-dessus.");
+      for u in units {
+        out.push_str(&format!("\n    {} (actuellement en échec)", u.name));
+      }
+    },
+  }
+  out
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -92,5 +131,42 @@ mod tests {
   fn recognize_requires_parseable_code() {
     // activation-ish text but no Exited(N) → not our clarifiable case
     assert!(!recognize("Activating configuration (exit status Signal(9))"));
+  }
+
+  fn unit(name: &str, cause: Option<&str>) -> FailedUnit {
+    FailedUnit { name: name.to_string(), cause: cause.map(str::to_string) }
+  }
+
+  #[test]
+  fn render_units_failed_with_cause() {
+    let block = render_block(
+      &ActivationOutcome::UnitsFailed,
+      &[unit("flatpak-setup.service", Some("Could not resolve hostname"))],
+    );
+    assert!(block.contains("Switch appliqué"), "must reassure switch applied:\n{block}");
+    assert!(block.contains("flatpak-setup.service"));
+    assert!(block.contains("Could not resolve hostname"));
+    assert!(block.contains("journalctl -u flatpak-setup.service"));
+    assert!(block.contains("exit 4"));
+    // never surfaces nh's own source location
+    assert!(!block.contains("command.rs"), "must not leak nh source location");
+  }
+
+  #[test]
+  fn render_units_failed_without_cause_falls_back_to_hint() {
+    let block = render_block(
+      &ActivationOutcome::UnitsFailed,
+      &[unit("foo.service", None)],
+    );
+    assert!(block.contains("foo.service"));
+    assert!(block.contains("journalctl -u foo.service"));
+    assert!(!block.contains("cause :"), "no cause line when journal is unreadable");
+  }
+
+  #[test]
+  fn render_hard_fail_says_not_switched() {
+    let block = render_block(&ActivationOutcome::HardFail(1), &[]);
+    assert!(block.contains("code 1"));
+    assert!(block.contains("n'a PAS"), "hard fail must say system not switched:\n{block}");
   }
 }
