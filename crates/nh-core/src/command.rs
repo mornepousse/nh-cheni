@@ -29,8 +29,13 @@ use crate::args::NixBuildPassthroughArgs;
 /// forces a compile break at the one call site.
 pub const NIX_BUILD_ERROR_MARKER: &str = "nh-cheni:nix-build-error";
 
-/// Parse `@nix `-prefixed internal-json lines and return the `raw_msg` of each
-/// error event (`action == "msg"`, `level == 0`). Malformed lines are skipped.
+/// Parse `@nix `-prefixed internal-json lines and return the error text of each
+/// error event (`action == "msg"`, `level == 0`). Uses `raw_msg` when present,
+/// else falls back to `msg` — verified on nix 2.34.8: in a multi-derivation
+/// failure only the FINAL (propagation) event carries `raw_msg`, while the real
+/// leaf failures (`Cannot build '…'. Reason: builder failed`) come as `msg`
+/// only. Capturing both is required or the leaf cause is lost. Malformed lines
+/// are skipped.
 pub(crate) fn extract_nix_error_raw_msgs(chunk: &str) -> Vec<String> {
   chunk
     .lines()
@@ -40,7 +45,12 @@ pub(crate) fn extract_nix_error_raw_msgs(chunk: &str) -> Vec<String> {
       v.get("action").and_then(|a| a.as_str()) == Some("msg")
         && v.get("level").and_then(serde_json::Value::as_u64) == Some(0)
     })
-    .filter_map(|v| v.get("raw_msg").and_then(|m| m.as_str()).map(str::to_string))
+    .filter_map(|v| {
+      v.get("raw_msg")
+        .or_else(|| v.get("msg"))
+        .and_then(|m| m.as_str())
+        .map(str::to_string)
+    })
     .collect()
 }
 
@@ -1135,6 +1145,20 @@ mod build_error_tests {
   fn ignores_malformed_json_lines() {
     let chunk = "@nix {not json}\n@nix {\"action\":\"msg\",\"level\":0,\"raw_msg\":\"boom\"}\n";
     assert_eq!(extract_nix_error_raw_msgs(chunk), vec!["boom".to_string()]);
+  }
+
+  #[test]
+  fn falls_back_to_msg_when_raw_msg_absent() {
+    // Real nix 2.34.8 multi-derivation failure: the leaf `Cannot build` event
+    // carries only `msg` (no `raw_msg`), the propagation event carries both.
+    let chunk = concat!(
+      "@nix {\"action\":\"msg\",\"level\":0,\"msg\":\"error: Cannot build '/nix/store/leaf.drv'. Reason: builder failed with exit code 1.\"}\n",
+      "@nix {\"action\":\"msg\",\"level\":0,\"raw_msg\":\"Cannot build '/nix/store/top.drv'. Reason: 1 dependency failed.\",\"msg\":\"...\"}\n",
+    );
+    let msgs = extract_nix_error_raw_msgs(chunk);
+    assert_eq!(msgs.len(), 2, "both the msg-only leaf and the raw_msg propagation are captured");
+    assert!(msgs[0].contains("leaf.drv"), "leaf (msg-only) must be captured");
+    assert!(msgs[1].contains("1 dependency failed"), "propagation (raw_msg) captured too");
   }
 }
 
