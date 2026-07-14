@@ -193,6 +193,88 @@ pub fn try_clarify(err: &color_eyre::eyre::Report) -> Option<String> {
   try_clarify_with(err, &RealProbe)
 }
 
+/// Remove ANSI CSI escape sequences (`ESC [ … m` etc.) for clean display.
+pub(crate) fn strip_ansi(s: &str) -> String {
+  let mut out = String::with_capacity(s.len());
+  let mut chars = s.chars().peekable();
+  while let Some(c) = chars.next() {
+    if c == '\u{1b}' {
+      // Skip until the final byte of the escape (0x40..=0x7e), e.g. 'm'.
+      if chars.peek() == Some(&'[') {
+        chars.next();
+        while let Some(&n) = chars.peek() {
+          chars.next();
+          if ('\u{40}'..='\u{7e}').contains(&n) {
+            break;
+          }
+        }
+      }
+    } else {
+      out.push(c);
+    }
+  }
+  out
+}
+
+/// One failed derivation (or, for eval errors, one summary block).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct NixFailure {
+  pub drv:       Option<String>,
+  pub summary:   String,
+  pub log_lines: Vec<String>,
+  pub log_cmd:   Option<String>,
+}
+
+/// Parse the collected nix error text into root-cause failures.
+/// Splits on `Cannot build '…'.` blocks; drops blocks whose Reason is
+/// `N dependencies failed.` (pure propagation). Text with no `Cannot build`
+/// block (eval errors) becomes a single summary failure.
+pub(crate) fn parse_nix_failures(text: &str) -> Vec<NixFailure> {
+  let text = strip_ansi(text);
+  if !text.contains("Cannot build '") {
+    let summary = text.trim().to_string();
+    if summary.is_empty() {
+      return Vec::new();
+    }
+    return vec![NixFailure { drv: None, summary, log_lines: Vec::new(), log_cmd: None }];
+  }
+  let mut out = Vec::new();
+  // Each block starts at a "Cannot build '" occurrence.
+  let mut rest = text.as_str();
+  while let Some(start) = rest.find("Cannot build '") {
+    let after = &rest[start..];
+    let end = after[1..].find("Cannot build '").map_or(after.len(), |i| i + 1);
+    let block = &after[..end];
+    rest = &after[end..];
+
+    let reason = block
+      .lines()
+      .find_map(|l| l.trim().strip_prefix("Reason:"))
+      .map(str::trim)
+      .unwrap_or("");
+    // Drop pure propagation blocks.
+    if reason.contains("dependency failed") || reason.contains("dependencies failed") {
+      continue;
+    }
+    let drv = block
+      .split_once("Cannot build '")
+      .and_then(|(_, r)| r.split_once('\'').map(|(d, _)| d.to_string()));
+    let log_lines = block
+      .lines()
+      .filter_map(|l| l.trim().strip_prefix("> "))
+      .map(str::to_string)
+      .collect();
+    let log_cmd = block
+      .lines()
+      .map(str::trim)
+      .find(|l| l.starts_with("nix log "))
+      .map(str::to_string);
+    let summary = format!("builder failed{}", if reason.is_empty() { String::new() } else { format!(" ({reason})") });
+    out.push(NixFailure { drv, summary, log_lines, log_cmd });
+  }
+  out
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -389,5 +471,40 @@ systemd[1]: foo.service: Failed with result 'exit-code'.
 systemd[1]: Failed to start Foo Service.
 ";
     assert_eq!(extract_last_error(journal), None);
+  }
+
+  #[test]
+  fn strip_ansi_removes_escapes() {
+    assert_eq!(strip_ansi("\u{1b}[31;1merror:\u{1b}[0m x"), "error: x");
+    assert_eq!(strip_ansi("plain"), "plain");
+  }
+
+  #[test]
+  fn parse_collapses_dependency_blocks_keeps_leaves() {
+    // Real shape: one leaf failure + one propagation block.
+    let text = "\
+Cannot build '/nix/store/aaa-boom.drv'.\n\
+Reason: builder failed with exit code 1.\n\
+Output paths:\n  /nix/store/xxx-boom\n\
+Last 1 log lines:\n> oops\n\
+For full logs, run:\n  nix log /nix/store/aaa-boom.drv\n\
+Cannot build '/nix/store/bbb-top.drv'.\n\
+Reason: 1 dependency failed.\n\
+Output paths:\n  /nix/store/yyy-top";
+    let fails = parse_nix_failures(text);
+    assert_eq!(fails.len(), 1, "propagation block must be dropped");
+    assert_eq!(fails[0].drv.as_deref(), Some("/nix/store/aaa-boom.drv"));
+    assert!(fails[0].log_lines.iter().any(|l| l.contains("oops")));
+    assert_eq!(fails[0].log_cmd.as_deref(), Some("nix log /nix/store/aaa-boom.drv"));
+  }
+
+  #[test]
+  fn parse_eval_error_is_a_single_summary_failure() {
+    // Eval errors have no "Cannot build" block — the whole text is the summary.
+    let text = "flake 'git+file:///x' does not provide attribute 'packages.x86_64-linux.foo'";
+    let fails = parse_nix_failures(text);
+    assert_eq!(fails.len(), 1);
+    assert!(fails[0].drv.is_none());
+    assert!(fails[0].summary.contains("does not provide attribute"));
   }
 }
