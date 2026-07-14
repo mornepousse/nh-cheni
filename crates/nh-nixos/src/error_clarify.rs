@@ -144,6 +144,12 @@ pub(crate) fn try_clarify_with(
     if let Some(b) = clarify_failed_assertions(text) {
       return Some(b);
     }
+    if let Some(b) = clarify_option_does_not_exist(text) {
+      return Some(b);
+    }
+    if let Some(b) = clarify_impure_path(text) {
+      return Some(b);
+    }
     let failures = parse_nix_failures(text);
     // Only render a clarified block when at least one real leaf failure
     // survived filtering; if `parse_nix_failures` dropped everything as
@@ -906,6 +912,26 @@ Output paths:\n  /nix/store/yyy-top";
   #[test]
   fn clarify_impure_path_none_on_unrelated() {
     assert!(clarify_impure_path("error: something else").is_none());
+  }
+
+  #[test]
+  fn try_clarify_routes_to_v2_2_classes() {
+    use color_eyre::eyre::eyre;
+    let probe = FakeProbe { failed: vec![], cause: None };
+
+    let unknown = eyre!(
+      "{}\nThe option `services.foo' does not exist. Definition values:\n- In `<unknown-file>': {{ enable = true; }}",
+      nh_core::NIX_BUILD_ERROR_MARKER
+    );
+    let out = try_clarify_with(&unknown, &probe).expect("unknown option clarified");
+    assert!(out.contains("Option inconnue"), "specific block:\n{out}");
+
+    let impure = eyre!(
+      "{}\naccess to absolute path '/etc/hostname' is forbidden in pure evaluation mode (use '--impure' to override)",
+      nh_core::NIX_BUILD_ERROR_MARKER
+    );
+    let out = try_clarify_with(&impure, &probe).expect("impure path clarified");
+    assert!(out.contains("hors du flake") && out.contains("--impure"), "specific block:\n{out}");
   }
 
   #[test]
