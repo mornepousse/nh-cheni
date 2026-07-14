@@ -3,10 +3,11 @@ use std::{
   convert::Infallible,
   env,
   ffi::{OsStr, OsString},
-  io::{Read, Write},
+  io::{BufRead, BufReader, Read, Write},
   path::PathBuf,
   str::FromStr,
   sync::{Mutex, OnceLock},
+  thread,
 };
 
 use color_eyre::{
@@ -1035,34 +1036,61 @@ impl Build {
       .to_exec();
 
     if self.nom {
-      let pipeline = {
-        base_command
-          .args(["--log-format", "internal-json", "--verbose"])
-          .stderr(Redirection::Merge)
-          .stdout(Redirection::Pipe)
-          | Exec::cmd("nom").args(["--json"])
-      }
-      .stdout(Redirection::None);
-      debug!(?pipeline);
+      // Spawn nix (stdout piped to us) and nom (stdin piped from us) separately
+      // so we can tee: forward every byte to nom verbatim (display unchanged)
+      // AND collect nix's internal-json error messages.
+      let mut nix_job = base_command
+        .args(["--log-format", "internal-json", "--verbose"])
+        .stderr(Redirection::Merge)
+        .stdout(Redirection::Pipe)
+        .start()?;
+      let mut nom_job = Exec::cmd("nom")
+        .args(["--json"])
+        .stdin(Redirection::Pipe)
+        .start()?;
 
-      // Use `popen()` to get access to individual processes so we can check
-      // Nix's exit status, not nom's. The pipeline's `join()` only returns
-      // the exit status of the last command (nom), which always succeeds
-      // even when Nix fails.
-      let job = pipeline.start()?;
+      let nix_out = nix_job
+        .stdout
+        .take()
+        .ok_or_else(|| eyre::eyre!("nix stdout pipe missing"))?;
+      let nom_in = nom_job
+        .stdin
+        .take()
+        .ok_or_else(|| eyre::eyre!("nom stdin pipe missing"))?;
 
-      // Wait for all processes to finish
-      for proc in &job.processes {
-        proc.wait()?;
-      }
-
-      // Check the exit status of the FIRST process (nix build)
-      // This is the one that matters. If Nix fails, we should fail as well
-      if let Some(nix_proc) = job.processes.first() {
-        let exit_status = nix_proc.wait()?;
-        if !exit_status.success() {
-          bail!(ExitError(exit_status));
+      // Copy thread: drain nix stdout continuously (no deadlock), forward to
+      // nom verbatim, collect error raw_msgs.
+      let collector = thread::spawn(move || {
+        let mut reader = BufReader::new(nix_out);
+        let mut sink = nom_in;
+        let mut errors: Vec<String> = Vec::new();
+        let mut line = String::new();
+        loop {
+          line.clear();
+          match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+          }
+          // Forward verbatim first (byte-fidelity for nom).
+          let _ = sink.write_all(line.as_bytes());
+          errors.extend(extract_nix_error_raw_msgs(&line));
         }
+        let _ = sink.flush();
+        drop(sink); // close nom's stdin so it can finish
+        errors
+      });
+
+      // Nix's exit status, not nom's — nom always succeeds even when nix
+      // fails, so we must check the nix job independently.
+      let nix_status = nix_job.wait()?;
+      let errors = collector.join().unwrap_or_default();
+      let _ = nom_job.wait();
+
+      if !nix_status.success() {
+        if errors.is_empty() {
+          bail!(ExitError(nix_status));
+        }
+        bail!("{}\n{}", NIX_BUILD_ERROR_MARKER, errors.join("\n"));
       }
     } else {
       let cmd = base_command
