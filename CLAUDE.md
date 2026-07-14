@@ -75,7 +75,11 @@ The cheni-spec **additions to upstream nh files** are kept tiny
 | `crates/nh-nixos/src/args.rs` | `OsXxxArgs` structs + `OsSubcommand::Xxx` variants + `FeatureRequirements` arms |
 | `crates/nh-nixos/src/nixos.rs` | One dispatch arm per cheni subcommand |
 | `crates/nh-nixos/src/lib.rs` | `pub mod` declarations for cheni-spec modules |
+| `crates/nh-nixos/src/nixos.rs` | `pub(crate) const ACTIVATION_MSG` (error_clarify recognizer anchor) |
 | `crates/nh/build.rs` | Decompose option-B workspace version → `CHENI_FULL_VERSION` |
+| `crates/nh/src/main.rs` | error_clarify hook in the top-level `Err` arm |
+| `crates/nh-core/src/command.rs` | `NIX_BUILD_ERROR_MARKER` const + `extract_nix_error_raw_msgs` + tee of `Build::run`'s nom branch (error_clarify v2) |
+| `crates/nh-core/src/lib.rs` | `pub use command::NIX_BUILD_ERROR_MARKER` |
 
 See `README.md` for a deeper walkthrough.
 
