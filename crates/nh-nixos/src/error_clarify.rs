@@ -3,7 +3,7 @@
 //! v1 scope: `nh os switch/boot/test` activation failures. The entry point
 //! [`try_clarify`] is called from `crates/nh/src/main.rs`'s error arm; when it
 //! recognizes an activation failure it returns a rendered block (and the caller
-//! prints it instead of the default color_eyre report, dropping the misleading
+//! prints it instead of the default `color_eyre` report, dropping the misleading
 //! `Location:`), otherwise it returns `None` and the default report is used.
 
 /// Meaning of a `switch-to-configuration` exit code, pinned from the
@@ -55,29 +55,42 @@ pub(crate) struct FailedUnit {
 /// Render the clarified block. Pure: given `outcome` and `units` it fully
 /// determines the output. No I/O here.
 pub(crate) fn render_block(outcome: &ActivationOutcome, units: &[FailedUnit]) -> String {
+  use std::fmt::Write;
+
   let mut out = String::new();
   match outcome {
     ActivationOutcome::UnitsFailed => {
       out.push_str("⚠ Switch appliqué — la génération est active.\n");
       let n = units.len();
-      let noun = if n > 1 { "services ont raté leur démarrage" } else { "service a raté son démarrage" };
-      out.push_str(&format!("  Mais {n} {noun} :\n"));
-      for u in units {
-        out.push_str(&format!("    {}\n", u.name));
-        if let Some(cause) = &u.cause {
-          out.push_str(&format!("      cause : {cause}\n"));
+      if n == 0 {
+        out.push_str(
+          "  Un ou plusieurs services ont raté leur démarrage (voir la sortie ci-dessus).\n",
+        );
+      } else {
+        let noun = if n > 1 {
+          "services ont raté leur démarrage"
+        } else {
+          "service a raté son démarrage"
+        };
+        let _ = writeln!(out, "  Mais {n} {noun} :");
+        for u in units {
+          let _ = writeln!(out, "    {}", u.name);
+          if let Some(cause) = &u.cause {
+            let _ = writeln!(out, "      cause : {cause}");
+          }
+          let _ = writeln!(out, "      → journalctl -u {}", u.name);
         }
-        out.push_str(&format!("      → journalctl -u {}\n", u.name));
       }
       out.push_str("  (exit 4 de switch-to-configuration = activé, mais des units ont raté)");
     },
     ActivationOutcome::HardFail(code) => {
-      out.push_str(&format!(
-        "✗ L'activation a échoué (code {code}) — le système n'a PAS basculé.\n"
-      ));
+      let _ = writeln!(
+        out,
+        "✗ L'activation a échoué (code {code}) — le système n'a PAS basculé."
+      );
       out.push_str("  Voir la sortie de switch-to-configuration ci-dessus.");
       for u in units {
-        out.push_str(&format!("\n    {} (actuellement en échec)", u.name));
+        let _ = write!(out, "\n    {} (actuellement en échec)", u.name);
       }
     },
   }
@@ -117,6 +130,36 @@ pub(crate) fn try_clarify_with(
 
 use std::process::Command;
 
+/// Parse `systemctl --failed --no-legend --plain` stdout into unit names.
+/// Pure so it's testable without a real systemd. Keeps only the first
+/// whitespace-separated token per line, and only tokens that look like a
+/// unit name (contain a `.`), to skip legend/blank lines.
+fn parse_failed_units(stdout: &str) -> Vec<String> {
+  stdout
+    .lines()
+    .filter_map(|l| l.split_whitespace().next())
+    .filter(|u| u.contains('.'))
+    .map(str::to_string)
+    .collect()
+}
+
+/// Pick the last significant error line out of `journalctl` output. Pure so
+/// it's testable without a real systemd. Skips systemd's own boilerplate
+/// ("failed with result", "failed to start") to surface the application's
+/// own error line instead.
+fn extract_last_error(journal_text: &str) -> Option<String> {
+  journal_text
+    .lines()
+    .filter(|l| {
+      let low = l.to_lowercase();
+      (low.contains("error") || low.contains("failed"))
+        && !low.contains("failed with result")
+        && !low.contains("failed to start")
+    })
+    .last()
+    .map(|l| l.trim().to_string())
+}
+
 /// Real probe: shells `systemctl` / `journalctl`. All failures degrade to an
 /// empty result / `None` so clarification never itself errors.
 pub(crate) struct RealProbe;
@@ -129,12 +172,7 @@ impl SystemdProbe for RealProbe {
     else {
       return Vec::new();
     };
-    String::from_utf8_lossy(&out.stdout)
-      .lines()
-      .filter_map(|l| l.split_whitespace().next())
-      .filter(|u| u.contains('.'))
-      .map(str::to_string)
-      .collect()
+    parse_failed_units(&String::from_utf8_lossy(&out.stdout))
   }
 
   fn unit_last_error(&self, unit: &str) -> Option<String> {
@@ -142,23 +180,13 @@ impl SystemdProbe for RealProbe {
       .args(["-u", unit, "-b", "--no-pager", "-n", "50", "-o", "cat"])
       .output()
       .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    // Last line that looks like an application error, not systemd boilerplate.
-    text
-      .lines()
-      .filter(|l| {
-        let low = l.to_lowercase();
-        (low.contains("error") || low.contains("failed"))
-          && !low.contains("failed with result")
-          && !low.contains("failed to start")
-      })
-      .last()
-      .map(|l| l.trim().to_string())
+    extract_last_error(&String::from_utf8_lossy(&out.stdout))
   }
 }
 
 /// Entry point used from `main.rs`. Returns a clarified block for recognized
 /// activation failures, else `None`.
+#[must_use]
 pub fn try_clarify(err: &color_eyre::eyre::Report) -> Option<String> {
   try_clarify_with(err, &RealProbe)
 }
@@ -243,6 +271,27 @@ mod tests {
   }
 
   #[test]
+  fn render_units_failed_plural() {
+    let block = render_block(
+      &ActivationOutcome::UnitsFailed,
+      &[unit("foo.service", None), unit("bar.service", None)],
+    );
+    assert!(block.contains("services ont raté"), "must use plural noun:\n{block}");
+    assert!(block.contains("foo.service"));
+    assert!(block.contains("bar.service"));
+  }
+
+  #[test]
+  fn render_units_failed_zero_units() {
+    let block = render_block(&ActivationOutcome::UnitsFailed, &[]);
+    assert!(!block.contains("0 service"), "must not render broken grammar:\n{block}");
+    assert!(
+      block.contains("Un ou plusieurs services ont raté leur démarrage"),
+      "must render a sensible fallback line:\n{block}"
+    );
+  }
+
+  #[test]
   fn render_hard_fail_says_not_switched() {
     let block = render_block(&ActivationOutcome::HardFail(1), &[]);
     assert!(block.contains("code 1"));
@@ -288,5 +337,46 @@ mod tests {
     // wires it. We do NOT call systemd here (not parallel-safe).
     fn assert_impl(_p: &dyn SystemdProbe) {}
     assert_impl(&RealProbe);
+  }
+
+  #[test]
+  fn parse_failed_units_from_fixture() {
+    let stdout = "\
+foo.service                   loaded failed failed Foo Service
+bar.service                   loaded failed failed Bar Service
+  not-a-unit-legend-line
+";
+    assert_eq!(
+      parse_failed_units(stdout),
+      vec!["foo.service".to_string(), "bar.service".to_string()]
+    );
+  }
+
+  #[test]
+  fn parse_failed_units_empty_stdout_is_empty() {
+    assert!(parse_failed_units("").is_empty());
+  }
+
+  #[test]
+  fn extract_last_error_finds_application_error_line() {
+    let journal = "\
+systemd[1]: Starting Foo Service...
+foo[123]: error: could not resolve hostname
+systemd[1]: foo.service: Failed with result 'exit-code'.
+";
+    assert_eq!(
+      extract_last_error(journal),
+      Some("foo[123]: error: could not resolve hostname".to_string())
+    );
+  }
+
+  #[test]
+  fn extract_last_error_ignores_systemd_boilerplate_only() {
+    let journal = "\
+systemd[1]: Starting Foo Service...
+systemd[1]: foo.service: Failed with result 'exit-code'.
+systemd[1]: Failed to start Foo Service.
+";
+    assert_eq!(extract_last_error(journal), None);
   }
 }
