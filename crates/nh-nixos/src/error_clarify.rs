@@ -275,6 +275,41 @@ pub(crate) fn parse_nix_failures(text: &str) -> Vec<NixFailure> {
   out
 }
 
+/// True if the report is a captured nix build/eval failure (marker present).
+pub(crate) fn recognize_nix_build(report: &str) -> bool {
+  report.contains(nh_core::NIX_BUILD_ERROR_MARKER)
+}
+
+/// Render the clarified nix-failure block. Pure given `failures`.
+pub(crate) fn render_nix_block(failures: &[NixFailure]) -> String {
+  let mut out = String::new();
+  let n = failures.len();
+  if failures.iter().all(|f| f.drv.is_none()) {
+    // Eval error(s): just the summaries, cleanly.
+    out.push_str("✗ Évaluation nix échouée :\n");
+    for f in failures {
+      out.push_str(&format!("  {}\n", f.summary.replace('\n', "\n  ")));
+    }
+    return out.trim_end().to_string();
+  }
+  let noun = if n > 1 { "dérivations en échec (causes racines)" } else { "dérivation en échec (cause racine)" };
+  out.push_str(&format!("✗ Build nix échoué — {n} {noun} :\n"));
+  for f in failures {
+    match &f.drv {
+      Some(drv) => out.push_str(&format!("    {drv}\n")),
+      None => out.push_str(&format!("    {}\n", f.summary)),
+    }
+    for line in &f.log_lines {
+      out.push_str(&format!("      {line}\n"));
+    }
+    if let Some(cmd) = &f.log_cmd {
+      out.push_str(&format!("      → {cmd}\n"));
+    }
+  }
+  out.push_str("  (blocs intermédiaires « N dependencies failed » masqués)");
+  out
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -506,5 +541,39 @@ Output paths:\n  /nix/store/yyy-top";
     assert_eq!(fails.len(), 1);
     assert!(fails[0].drv.is_none());
     assert!(fails[0].summary.contains("does not provide attribute"));
+  }
+
+  #[test]
+  fn recognize_nix_build_via_marker() {
+    let report = format!("{}\nCannot build '/nix/store/x.drv'.", nh_core::NIX_BUILD_ERROR_MARKER);
+    assert!(recognize_nix_build(&report));
+    assert!(!recognize_nix_build("some unrelated error"));
+  }
+
+  #[test]
+  fn render_nix_block_shows_drv_cause_and_log_cmd() {
+    let fails = vec![NixFailure {
+      drv:       Some("/nix/store/aaa-boom.drv".to_string()),
+      summary:   "builder failed (builder failed with exit code 1)".to_string(),
+      log_lines: vec!["oops".to_string()],
+      log_cmd:   Some("nix log /nix/store/aaa-boom.drv".to_string()),
+    }];
+    let block = render_nix_block(&fails);
+    assert!(block.contains("Build nix échoué"));
+    assert!(block.contains("/nix/store/aaa-boom.drv"));
+    assert!(block.contains("oops"));
+    assert!(block.contains("nix log /nix/store/aaa-boom.drv"));
+    assert!(!block.contains("command.rs"), "must not leak nh source location");
+  }
+
+  #[test]
+  fn render_nix_block_eval_summary_only() {
+    let fails = vec![NixFailure {
+      drv: None,
+      summary: "flake '…' does not provide attribute 'x'".to_string(),
+      log_lines: vec![], log_cmd: None,
+    }];
+    let block = render_nix_block(&fails);
+    assert!(block.contains("does not provide attribute"));
   }
 }

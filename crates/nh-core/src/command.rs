@@ -23,6 +23,11 @@ use which::which;
 
 use crate::args::NixBuildPassthroughArgs;
 
+/// Marker cheni prepends to a captured nix build/eval error so the clarifier
+/// (in nh-nixos) can recognize it from the error report. Merge-safe: a rename
+/// forces a compile break at the one call site.
+pub const NIX_BUILD_ERROR_MARKER: &str = "nh-cheni:nix-build-error";
+
 #[must_use]
 pub fn get_sudo_opts() -> Vec<String> {
   let sudoopts = env::var("NH_SUDOOPTS")
