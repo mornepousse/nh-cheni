@@ -4,6 +4,7 @@ pub mod check;
 pub mod cheni_meta;
 pub mod cheni_util;
 pub mod doctor;
+pub mod error_clarify;
 pub mod events;
 pub mod freezes;
 pub mod generations;
