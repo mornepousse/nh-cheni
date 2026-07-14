@@ -18,9 +18,57 @@ functionality, under the "Removed" section.
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### 4.4.1
+
+### Fixed
+
+- `nh clean`'s auto-gcroot handling no longer subjects arbitrary indirect
+  gcroots (e.g., home-manager's `current-home`, or any other tool's "current
+  generation" symlink) to `--keep-since` age-based cleanup. Only roots that
+  structurally look like ephemeral `nix build` result symlinks (`result`,
+  `result-<name>`) are aged out; anything else resolving into `/nix/store` is
+  left untouched unless it becomes orphaned (its target no longer exists),
+  matching real Nix's indirect-gcroot semantics. Previously,
+  `nh clean all --ask` could delete a live, in-use gcroot on confirmation,
+  causing the next `nix store gc` to silently collect an active generation
+  ([#722](https://github.com/nix-community/nh/issues/722)).
+  - `nh clean` no longer aborts entirely when a gcroot target lives on a
+    read-only-mounted Nix store or otherwise can't be write-checked for a known,
+    expected reason (`EACCES`, `EROFS`, `EPERM`)..
+
+### Removed
+
+## 4.4.0
+
+### Added
+
+- `--option NAME VALUE` passthrough flag (repeatable) for setting arbitrary Nix
+  configuration options per-invocation, e.g. `--option sandbox false`. Forwarded
+  to all underlying `nix` commands.
+- `--override-input INPUT FLAKE_URL` passthrough flag (repeatable) for
+  overriding specific flake inputs without editing `flake.lock`.
+- `NH_SSHOPTS` environment variable as the NH-native alias for `NIX_SSHOPTS`.
+  `NH_SSHOPTS` takes precedence when both are set.
+- `NH_SUDOOPTS` environment variable for passing extra arguments to the `sudo`
+  invocation when NH elevates privileges. `NIX_SUDOOPTS` is also accepted for
+  nixos-rebuild compatibility, with `NH_SUDOOPTS` taking precedence.
+- `NIXOS_NO_CHECK` is now forwarded to `switch-to-configuration` during
+  activation, matching nixos-rebuild behaviour.
 - `nh search offline <query>` subcommand for offline search using
   [spam-db](https://github.com/feel-co/spam) databases. Requires `-D <path>` (or
   `NH_OFFLINE_DB`) pointing to the database directory.
+- `nh search prs <query>` subcommand for searching recent Nixpkgs pull requests
+  and showing which Nixpkgs branches merged PRs have reached. Numeric queries
+  and `#<number>` fetch that pull request directly.
+- `nh search issues <query>` subcommand for searching recent Nixpkgs issues
+  while excluding pull requests.
+- `nh search prs` reads GitHub authentication from `GH_TOKEN` first, then checks
+  `$XDG_STATE_HOME/nh/github-token` for a token file, falling back to
+  `~/.local/state/nh/github-token`.
 - `nh search --default-search` global option to set default search mode
   (`packages` or `options`) when no subcommand is specified.
 - `nh clean --keep-one` preserves all active direnv gcroots regardless of
@@ -31,14 +79,20 @@ functionality, under the "Removed" section.
   `/nix/var/nix/gcroots`.
 - `--no-direnv` passed to `nh clean all` will now preserve `.direnv/` paths as
   well.
+- Quoted attribute paths like `foo."bar.baz"` are now allowed. Malformed quoted
+  attributes return validation errors instead of outright panicking.
+- `nh os {boot,build,switch}` now supports diffing on remote machines.
+- nh now has an in-house `nix-command` crate, which is used for building typed
+  nixos commands. `nix-command` is also
+  [published](https://crates.io/crates/nix-command) to crates.io.
 
 ### Changed
 
 - **Breaking Change**: `nh search` CLI has been restructured to use subcommands.
   - `--options <query>` is now `nh search options <query>`
   - `--options` flag has been removed
-  - `--channel`, `--limit`, `--platforms`, and `--json` flags are now global and
-    can be placed before or after explicit subcommands
+  - `--json` is shared by all search modes, while `--channel`, `--limit`, and
+    `--platforms` now appear only on search modes that use them
   - When no subcommand is specified, the default search mode is used
     (configurable via `--default-search`)
 - `nh search` now uses search backend version 48 (previously 46) to track the
@@ -54,9 +108,25 @@ functionality, under the "Removed" section.
 - `RESULT_REGEX` (`.*result.*`) matched any path containing the word "result",
   including unrelated files. It is replaced by a structural check that only
   matches direct children of `/nix/store`.
+- Explicit local flake refs are now checked by nh before Nix runs. Local flake
+  refs like `.`, `./foo`, `/path/to/flake` or `path:/some/path` must point at a
+  directory containing a `flake.nix`. Directories where a parent directory
+  contains a flake are no longer valid.
+- Empty/malformed flake refs are now rejected early. Exempli gratia,
+  `NH_FLAKE="" nh os switch`, `nh os repl ''`, and `nh os switch '#attr'` no
+  longer work.
+- `NH_FLAKE` now also does flake feature detection. A command resolving its
+  installable from `NH_FLAKE` now also checks for the required Nix experimental
+  features.
 
 ### Fixed
 
+- Local `run0` elevation now uses `--pty-late`, avoiding terminal ownership
+  changes can break subsequent commands.
+- `--no-build-output` / `-Q` now forwards `--quiet` to `nix build` instead of
+  the unsupported `--no-build-output` flag.
+- Generated Nushell completions now mark the `installable` argument as a path
+  while keeping nh's own parser compatible with flake references.
 - `nh os switch --target-host root@host` no longer wraps the activation in
   `sudo --prompt= --stdin` when the SSH user is already uid 0. The elevation
   decision now probes `id -u` over the established ControlMaster instead of
@@ -76,6 +146,9 @@ functionality, under the "Removed" section.
   ([#635](https://github.com/nix-community/nh/pull/635))
 
 ### Removed
+
+- `nh` no longer supports `x86_64-darwin`, following Nixpkgs' decision to drop
+  support for that platform.
 
 ## 4.3.2
 
@@ -124,8 +197,8 @@ functionality, under the "Removed" section.
     compatibility (falls back to `NH_ELEVATION_STRATEGY` if set)
 - Platform commands (`nh os`, `nh home`, `nh darwin`) now support SSH-based
   remote builds via `--build-host`. The flag now uses proper remote build
-  semantics: derivations are copied to the remote host via `nix-copy-closure`,
-  built remotely, and results are transferred back. This matches `nixos-rebuild`
+  semantics: derivations are copied to the remote host via `nix copy`, built
+  remotely, and results are transferred back. This matches `nixos-rebuild`
   behavior, and is significantly more robust than the previous implementation
   where `--build-host` would use Nix's `--builders` flag inefficiently.
   ([#428](https://github.com/nix-community/nh/issues/428),

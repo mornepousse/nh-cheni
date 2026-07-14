@@ -30,7 +30,6 @@ rustPlatform.buildRustPackage (finalAttrs: {
         ./.cargo
         ./.config
         ./crates
-        ./xtask
         ./Cargo.toml
         ./Cargo.lock
       ]

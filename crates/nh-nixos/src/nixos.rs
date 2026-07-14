@@ -7,17 +7,17 @@ use std::{
 use color_eyre::eyre::{Context, Result, bail, eyre};
 use nh_core::{
   args::DiffType,
-  command::{self, Command, ElevationStrategy},
-  installable::{CommandContext, Installable},
+  command::{self, Command, CommandKind, ElevationStrategy, NixCommand},
   update::update,
   util::{
     ensure_ssh_key_login,
     get_build_image_variants,
     get_build_image_variants_flake,
     get_hostname,
-    print_dix_diff,
   },
 };
+use nh_diff::{handle_nixos_diff, print_dix_diff};
+use nh_installable::{CommandContext, Installable};
 use nh_remote::{self, RemoteBuildConfig, RemoteHost};
 use tracing::{debug, info, warn};
 
@@ -233,7 +233,13 @@ impl OsRebuildActivateArgs {
     let target_profile =
       self.rebuild.resolve_specialisation_and_profile(&out_path)?;
 
-    self.rebuild.handle_dix_diff(&target_profile);
+    handle_nixos_diff(
+      &self.rebuild.common.diff,
+      self.rebuild.target_host.as_ref(),
+      &target_profile,
+      actual_store_path.as_deref(),
+      &out_path,
+    )?;
 
     if self.rebuild.common.dry || matches!(variant, Build | BuildVm) {
       if self.rebuild.common.ask {
@@ -386,7 +392,7 @@ impl OsRebuildActivateArgs {
           .arg("test")
           .message("Activating configuration")
           .elevate(elevate.then_some(elevation.clone()))
-          .preserve_envs(["NIXOS_INSTALL_BOOTLOADER"])
+          .preserve_envs(["NIXOS_INSTALL_BOOTLOADER", "NIXOS_NO_CHECK"])
           .with_required_env()
           .show_output(self.show_activation_logs)
           .run()
@@ -428,9 +434,9 @@ impl OsRebuildActivateArgs {
           .context("Failed to resolve base output path to store path")?;
 
         Command::new("nix")
-          .elevate(elevate.then_some(elevation.clone()))
           .args(["build", "--no-link", "--profile", SYSTEM_PROFILE])
           .arg(&base_store_path)
+          .elevate(elevate.then_some(elevation.clone()))
           .with_required_env()
           .run()
           .wrap_err("Failed to set system profile")?;
@@ -439,7 +445,7 @@ impl OsRebuildActivateArgs {
           .arg("boot")
           .elevate(elevate.then_some(elevation))
           .message("Adding configuration to bootloader")
-          .preserve_envs(["NIXOS_INSTALL_BOOTLOADER"]);
+          .preserve_envs(["NIXOS_INSTALL_BOOTLOADER", "NIXOS_NO_CHECK"]);
 
         if self.rebuild.install_bootloader {
           cmd = cmd.set_env("NIXOS_INSTALL_BOOTLOADER", "1");
@@ -560,17 +566,12 @@ impl OsRebuildArgs {
       .common
       .installable
       .clone()
-      .resolve(CommandContext::Os)?;
-
-    let installable = match installable {
-      Installable::Unspecified => Installable::try_find_default_for_os()?,
-      other => other,
-    };
+      .resolve_or_default(CommandContext::Os)?;
 
     toplevel_for(
       target_hostname,
       installable,
-      final_attrs.map_or_else(|| &["toplevel"][..], |v| v),
+      final_attrs.unwrap_or_else(|| &["toplevel"][..]),
     )
   }
 
@@ -677,44 +678,6 @@ impl OsRebuildArgs {
     Ok(target_profile)
   }
 
-  fn handle_dix_diff(&self, target_profile: &Path) {
-    let current_profile = PathBuf::from(CURRENT_PROFILE);
-
-    match self.common.diff {
-      DiffType::Always => {
-        let _ = print_dix_diff(&current_profile, target_profile);
-      },
-      DiffType::Never => {
-        debug!("Not running dix as the --diff flag is set to never.");
-      },
-      DiffType::Auto => {
-        // Since dix relies on both system's derivations existing on the local
-        // machine, we only generate the diff if no remote
-        // target host is specified, implying a local system build.
-        if self.target_host.is_some() {
-          debug!("Not running dix as a remote host is involved.");
-        } else if !current_profile.exists() {
-          warn!(
-            "current profile {} does not exist, skipping dix diffing",
-            current_profile.display()
-          );
-        } else if !target_profile.exists() {
-          warn!(
-            "target profile {} does not exist, skipping dix diffing",
-            target_profile.display()
-          );
-        } else {
-          debug!(
-            "Comparing current profile {} with target profile: {}",
-            current_profile.display(),
-            target_profile.display()
-          );
-          let _ = print_dix_diff(&current_profile, target_profile);
-        }
-      },
-    }
-  }
-
   // final_attr is the attribute of config.system.build.X to evaluate.
   // Used by Build and BuildVm subcommands which don't activate
   fn build_only(
@@ -751,11 +714,17 @@ impl OsRebuildArgs {
       _ => "Building NixOS configuration",
     };
 
-    self.execute_build(toplevel, &out_path, message)?;
+    let actual_store_path = self.execute_build(toplevel, &out_path, message)?;
 
     let target_profile = self.resolve_specialisation_and_profile(&out_path)?;
 
-    self.handle_dix_diff(&target_profile);
+    handle_nixos_diff(
+      &self.common.diff,
+      self.target_host.as_ref(),
+      &target_profile,
+      actual_store_path.as_deref(),
+      &out_path,
+    )?;
 
     // Build, BuildVm and BuildIso subcommands never activate
     debug_assert!(matches!(variant, Build | BuildVm | BuildIso));
@@ -888,7 +857,7 @@ impl OsRollbackArgs {
     match Command::new(&switch_to_configuration)
       .arg("switch")
       .elevate(elevate.then_some(elevation.clone()))
-      .preserve_envs(["NIXOS_INSTALL_BOOTLOADER"])
+      .preserve_envs(["NIXOS_INSTALL_BOOTLOADER", "NIXOS_NO_CHECK"])
       .with_required_env()
       .run()
     {
@@ -942,12 +911,7 @@ impl OsBuildImageArgs {
       .common
       .installable
       .clone()
-      .resolve(CommandContext::Os)?;
-
-    let installable = match installable {
-      Installable::Unspecified => Installable::try_find_default_for_os()?,
-      other => other,
-    };
+      .resolve_or_default(CommandContext::Os)?;
 
     // Get the available image variants for validation
     let valid_variants = match &installable {
@@ -959,7 +923,9 @@ impl OsBuildImageArgs {
       Installable::File { .. } | Installable::Expression { .. } => {
         get_build_image_variants(&installable, &target_hostname)?
       },
-      _ => bail!("Unsupported installable type for image building"),
+      Installable::Store { .. } => {
+        bail!("Unsupported installable type for image building")
+      },
     };
 
     // Validate that the requested variant exists
@@ -1158,7 +1124,7 @@ fn validate_system_closure_remote(
 ) -> Result<()> {
   // Build context string for error messages
   let context = build_host.map(|build| {
-    if build == target_host {
+    if build.hostname() == target_host.hostname() {
       "also build host".to_string()
     } else {
       format!("built on '{build}'")
@@ -1296,6 +1262,12 @@ fn list_generations() -> Result<Vec<generations::GenerationInfo>> {
   Ok(generations)
 }
 
+/// Resolve a NixOS installable to the requested system build attributes.
+///
+/// # Errors
+///
+/// Returns an error if the flake attribute path is too specific to infer the
+/// requested build attributes.
 pub fn toplevel_for<S: AsRef<str>>(
   hostname: S,
   installable: Installable,
@@ -1348,13 +1320,6 @@ pub fn toplevel_for<S: AsRef<str>>(
     } => attribute.extend(toplevel),
 
     Installable::Store { .. } => {},
-
-    Installable::Unspecified => {
-      unreachable!(
-        "Unspecified installable should have been resolved before calling \
-         toplevel_for"
-      )
-    },
   }
 
   Ok(res)
@@ -1362,12 +1327,8 @@ pub fn toplevel_for<S: AsRef<str>>(
 
 impl OsReplArgs {
   fn run(self) -> Result<()> {
-    let target_installable = self.installable.resolve(CommandContext::Os)?;
-
-    let mut target_installable = match target_installable {
-      Installable::Unspecified => Installable::try_find_default_for_os()?,
-      other => other,
-    };
+    let mut target_installable =
+      self.installable.resolve_or_default(CommandContext::Os)?;
 
     if matches!(target_installable, Installable::Store { .. }) {
       bail!("Nix doesn't support nix store installables.");
@@ -1384,12 +1345,13 @@ impl OsReplArgs {
       attribute.push(hostname);
     }
 
-    Command::new("nix")
-      .arg("repl")
+    let status = NixCommand::new(CommandKind::Repl)
       .args(target_installable.to_args())
       .with_required_env()
-      .show_output(true)
-      .run()?;
+      .run_with_logs()?;
+    if !status.success() {
+      bail!("nix repl failed (exit status {status:?})");
+    }
 
     Ok(())
   }

@@ -4,15 +4,11 @@ license.workspace      = true
 repository             = "https://gitlab.com/harrael/nh-cheni"
 description            = "Personal fork of nh (NixOS helper) by harrael"
 keywords               = [ "nix", "nixos", "nix-darwin", "helper", "CLI" ]
+readme                 = "../../docs/README.md"
 version.workspace      = true
 edition.workspace      = true
 rust-version.workspace = true
 default-run            = "nh"
-
-[dev-dependencies]
-clap_mangen.workspace = true
-proptest.workspace    = true
-serial_test.workspace = true
 
 [dependencies]
 anstyle.workspace             = true

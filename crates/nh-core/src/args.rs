@@ -1,9 +1,8 @@
 use std::path::PathBuf;
 
 use clap::{Args, ValueEnum};
+use nh_installable::InstallableArgs;
 use tracing::warn;
-
-use crate::installable::Installable;
 
 #[derive(Debug, Args)]
 pub struct CommonRebuildArgs {
@@ -16,7 +15,7 @@ pub struct CommonRebuildArgs {
   pub ask: bool,
 
   #[command(flatten)]
-  pub installable: Installable,
+  pub installable: InstallableArgs,
 
   /// Don't use nix-output-monitor for the build process
   #[arg(long)]
@@ -46,7 +45,7 @@ pub enum DiffType {
   Never,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Default, Args)]
 pub struct NixBuildPassthroughArgs {
   /// Number of concurrent jobs Nix should run
   #[arg(long, short = 'j')]
@@ -147,6 +146,14 @@ pub struct NixBuildPassthroughArgs {
   /// Output results in JSON format
   #[arg(long)]
   pub json: bool,
+
+  /// Set a Nix configuration option (may be given multiple times)
+  #[arg(long, number_of_values = 2, value_names = ["NAME", "VALUE"])]
+  pub option: Vec<String>,
+
+  /// Override a specific flake input (may be given multiple times)
+  #[arg(long, number_of_values = 2, value_names = ["INPUT", "FLAKE_URL"])]
+  pub override_input: Vec<String>,
 }
 
 impl NixBuildPassthroughArgs {
@@ -224,12 +231,71 @@ impl NixBuildPassthroughArgs {
       args.push("--no-use-registries".into());
     }
     if self.no_build_output {
-      args.push("--no-build-output".into());
+      args.push("--quiet".into());
     }
     if self.json {
       args.push("--json".into());
     }
+    for pair in self.option.chunks(2) {
+      args.push("--option".into());
+      args.push(pair[0].clone());
+      args.push(pair[1].clone());
+    }
+    for pair in self.override_input.chunks(2) {
+      args.push("--override-input".into());
+      args.push(pair[0].clone());
+      args.push(pair[1].clone());
+    }
 
     args
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::NixBuildPassthroughArgs;
+
+  #[test]
+  fn no_build_output_maps_to_nix_quiet_flag() {
+    let args = NixBuildPassthroughArgs {
+      no_build_output: true,
+      ..Default::default()
+    };
+
+    assert_eq!(args.generate_passthrough_args(), ["--quiet"]);
+  }
+
+  #[test]
+  fn option_pairs_are_emitted() {
+    let args = NixBuildPassthroughArgs {
+      option: vec![
+        "sandbox".into(),
+        "false".into(),
+        "cores".into(),
+        "4".into(),
+      ],
+      ..Default::default()
+    };
+
+    assert_eq!(args.generate_passthrough_args(), [
+      "--option", "sandbox", "false", "--option", "cores", "4"
+    ]);
+  }
+
+  #[test]
+  fn override_input_pairs_are_emitted() {
+    let args = NixBuildPassthroughArgs {
+      override_input: vec![
+        "nixpkgs".into(),
+        "github:NixOS/nixpkgs/nixos-unstable".into(),
+      ],
+      ..Default::default()
+    };
+
+    assert_eq!(args.generate_passthrough_args(), [
+      "--override-input",
+      "nixpkgs",
+      "github:NixOS/nixpkgs/nixos-unstable"
+    ]);
   }
 }

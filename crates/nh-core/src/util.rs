@@ -1,20 +1,18 @@
 use std::{
   collections::HashSet,
-  fmt,
-  io,
+  ffi::OsString,
   os::unix::process::CommandExt,
-  path::Path,
   process::{Command as StdCommand, Stdio},
   sync::{LazyLock, OnceLock},
 };
 
 use color_eyre::{
   Result,
-  eyre::{self, Context, eyre},
+  eyre::{self, Context, bail, eyre},
 };
+use nix_command::{CommandKind, NixCommand};
 use regex::Regex;
-use tracing::{debug, info, warn};
-use yansi::Paint;
+use tracing::{debug, warn};
 
 use crate::command::{Command, ElevationStrategy};
 
@@ -29,25 +27,49 @@ static NIX_VERSION_OUTPUT: OnceLock<Option<String>> = OnceLock::new();
 static NIX_VARIANT: OnceLock<NixVariant> = OnceLock::new();
 static NIX_EXPERIMENTAL_FEATURES: OnceLock<HashSet<String>> = OnceLock::new();
 
+fn format_argv(argv: &[OsString]) -> String {
+  argv
+    .iter()
+    .map(|arg| {
+      let arg = arg.to_string_lossy().into_owned();
+      shlex::try_quote(&arg)
+        .map_or_else(|_| arg.clone(), std::borrow::Cow::into_owned)
+    })
+    .collect::<Vec<_>>()
+    .join(" ")
+}
+
+fn capture_nix_stdout(command: &NixCommand) -> Result<String> {
+  let argv = command.argv();
+  let command_text = format_argv(&argv);
+  let output = command
+    .output()
+    .wrap_err_with(|| format!("Failed to run {command_text}"))?;
+
+  if !output.status.success() {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stderr = stderr.trim();
+    if stderr.is_empty() {
+      bail!("{command_text} failed (exit status {:?})", output.status);
+    }
+    bail!(
+      "{command_text} failed (exit status {:?})\nstderr:\n{stderr}",
+      output.status
+    );
+  }
+
+  String::from_utf8(output.stdout)
+    .wrap_err_with(|| format!("{command_text} produced non-UTF-8 stdout"))
+}
+
 /// Fetches and caches the raw output from `nix --version` command.
 /// This is called once and shared by both variant and version detection.
 fn get_nix_version_output() -> Option<&'static String> {
   NIX_VERSION_OUTPUT
     .get_or_init(|| {
-      Command::new("nix")
-        .arg("--version")
-        .run_capture()
-        .ok()
-        .flatten()
+      capture_nix_stdout(&NixCommand::raw().arg("--version")).ok()
     })
     .as_ref()
-}
-
-struct WriteFmt<W: io::Write>(W);
-impl<W: io::Write> fmt::Write for WriteFmt<W> {
-  fn write_str(&mut self, string: &str) -> fmt::Result {
-    self.0.write_all(string.as_bytes()).map_err(|_| fmt::Error)
-  }
 }
 
 /// Get the Nix variant
@@ -308,14 +330,13 @@ pub fn get_nix_experimental_features() -> Result<HashSet<String>> {
   }
 
   // Not cached, fetch them
-  let output = Command::new("nix")
-    .args(["config", "show", "experimental-features"])
-    .run_capture()?;
+  let output = capture_nix_stdout(
+    &NixCommand::new(CommandKind::Config)
+      .args(["show", "experimental-features"]),
+  )?;
 
-  // If running with dry=true, output might be None
-  let enabled_features = output.map_or_else(HashSet::new, |output| {
-    output.split_whitespace().map(String::from).collect()
-  });
+  let enabled_features: HashSet<String> =
+    output.split_whitespace().map(String::from).collect();
 
   // Cache the result and return
   let _ = NIX_EXPERIMENTAL_FEATURES.set(enabled_features.clone());
@@ -398,11 +419,11 @@ pub fn self_elevate(strategy: ElevationStrategy) -> ! {
 /// - The JSON output cannot be parsed
 /// - The installable does not have images attribute
 pub fn get_build_image_variants(
-  installable: &crate::installable::Installable,
+  installable: &nh_installable::Installable,
   hostname: &str,
 ) -> Result<Vec<String>> {
   let expr = match installable {
-    crate::installable::Installable::File { path, .. } => {
+    nh_installable::Installable::File { path, .. } => {
       format!(
         r#"
 let
@@ -415,7 +436,7 @@ in
         path.display(),
       )
     },
-    crate::installable::Installable::Expression { expression, .. } => {
+    nh_installable::Installable::Expression { expression, .. } => {
       format!(
         r#"
 let
@@ -435,14 +456,14 @@ in
     },
   };
 
-  let result = Command::new("nix-instantiate")
-    .arg("--eval")
-    .arg("--strict")
-    .arg("--json")
-    .arg("--expr")
-    .arg(expr)
-    .run_capture()?
-    .ok_or_else(|| eyre!("No output from nix-instantiate"))?;
+  let result = capture_nix_stdout(
+    &NixCommand::nix_instantiate()
+      .arg("--eval")
+      .arg("--strict")
+      .arg("--json")
+      .arg("--expr")
+      .arg(expr),
+  )?;
 
   let variants: Vec<String> = serde_json::from_str(&result)
     .wrap_err("Failed to parse image variants JSON")?;
@@ -470,16 +491,15 @@ in
 /// - The JSON output cannot be parsed
 /// - The flake installable does not have images attribute
 pub fn get_build_image_variants_flake(
-  installable: &crate::installable::Installable,
+  installable: &nh_installable::Installable,
 ) -> Result<Vec<String>> {
-  let result = Command::new("nix")
-    .arg("eval")
-    .arg("--json")
-    .args(installable.to_args())
-    .arg("--apply")
-    .arg("builtins.attrNames")
-    .run_capture()?
-    .ok_or_else(|| eyre!("No output from nix eval"))?;
+  let result = capture_nix_stdout(
+    &NixCommand::new(CommandKind::Eval)
+      .arg("--json")
+      .args(installable.to_args())
+      .arg("--apply")
+      .arg("builtins.attrNames"),
+  )?;
 
   let variants: Vec<String> = serde_json::from_str(&result)
     .wrap_err("Failed to parse image variants JSON")?;
@@ -487,75 +507,12 @@ pub fn get_build_image_variants_flake(
   Ok(variants)
 }
 
-/// Prints the difference between two generations in terms of paths and closure
-/// sizes.
-///
-/// # Arguments
-///
-/// * `old_generation` - A reference to the path of the old generation.
-/// * `new_generation` - A reference to the path of the new generation.
-///
-/// # Returns
-///
-/// Returns `Ok(())` if the operation completed successfully, or an error
-/// wrapped in `eyre::Result` if something went wrong.
-///
-/// # Errors
-///
-/// Returns an error if the closure size thread panics or if writing size
-/// differences fails.
-pub fn print_dix_diff(
-  old_generation: &Path,
-  new_generation: &Path,
-) -> Result<()> {
-  let mut out = WriteFmt(io::stdout());
-
-  // Handle to the thread collecting closure size information.
-  let closure_size_handle = dix::spawn_size_diff(
-    old_generation.to_path_buf(),
-    new_generation.to_path_buf(),
-    true,
-  );
-
-  println!(
-    "{arrows} {old}",
-    arrows = Paint::new("<<<").bold(),
-    old = old_generation.display(),
-  );
-  println!(
-    "{arrows} {new}",
-    arrows = Paint::new(">>>").bold(),
-    new = std::fs::canonicalize(new_generation)
-      .unwrap_or_else(|_| new_generation.to_path_buf())
-      .display(),
-  );
-
-  let wrote =
-    dix::write_package_diff(&mut out, old_generation, new_generation, true)
-      .unwrap_or_default();
-
-  if let Ok((size_old, size_new)) =
-    closure_size_handle.join().map_err(|_| {
-      eyre::eyre!("Failed to join closure size computation thread")
-    })?
-  {
-    if size_old == size_new {
-      info!("No version or size changes.");
-    } else {
-      if wrote > 0 {
-        println!();
-      }
-      dix::write_size_diff(&mut out, size_old, size_new)?;
-    }
-  }
-  Ok(())
-}
-
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
+  use nh_installable::Installable;
+
   use super::*;
-  use crate::installable::Installable;
 
   #[test]
   fn test_get_build_image_variants_expression() {
@@ -628,9 +585,14 @@ mod tests {
     let test_dir = tempfile::Builder::new()
       .prefix("nh-test")
       .tempdir()
-      .expect("Failed to create temp file");
+      .expect("Failed to create temp dir");
 
-    let test_file = test_dir.path().join("flake.nix");
+    // Canonicalize to resolve symlinks
+    let canonical = test_dir
+      .path()
+      .canonicalize()
+      .expect("Failed to canonicalize temp dir");
+    let test_file = canonical.join("flake.nix");
     let test_content = r"
 {
   outputs = _: {
@@ -645,12 +607,7 @@ mod tests {
     fs::write(&test_file, test_content).expect("Failed to write test file");
 
     let installable = Installable::Flake {
-      reference: test_dir
-        .path()
-        .to_path_buf()
-        .into_os_string()
-        .into_string()
-        .unwrap(),
+      reference: format!("path:{}", canonical.display()),
       attribute: vec![
         "nixosConfigurations".to_owned(),
         "test".to_string(),

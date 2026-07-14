@@ -1,7 +1,8 @@
 [package]
 name                   = "nh-home"
-version                = "0.1.0"
-publish                = false
+description            = "This is an internal component crate of nh"
+version.workspace      = true
+publish                = true
 edition.workspace      = true
 license.workspace      = true
 rust-version.workspace = true
@@ -10,13 +11,15 @@ rust-version.workspace = true
 path = "src/home.rs"
 
 [dependencies]
-clap.workspace       = true
-color-eyre.workspace = true
-inquire.workspace    = true
-nh-core.workspace    = true
-nh-remote.workspace  = true
-tempfile.workspace   = true
-tracing.workspace    = true
+clap.workspace           = true
+color-eyre.workspace     = true
+inquire.workspace        = true
+nh-core.workspace        = true
+nh-diff.workspace        = true
+nh-installable.workspace = true
+nh-remote.workspace      = true
+tempfile.workspace       = true
+tracing.workspace        = true
 
 [lints]
 workspace = true

@@ -31,7 +31,7 @@ pub fn run_options(
   channel: &str,
   limit: u64,
   json: bool,
-  scope: &args::OptionScope,
+  scope: args::OptionScope,
   query: &[String],
 ) -> Result<()> {
   run_online(&Options { scope }, channel, limit, json, query)
@@ -138,15 +138,15 @@ impl OnlineMode for Packages {
   }
 
   fn print_results(&self, channel: &str, documents: &[Self::Document]) {
-    render::print_package_results(channel, self.platforms, documents);
+    render::packages::print(channel, self.platforms, documents);
   }
 }
 
-struct Options<'a> {
-  scope: &'a args::OptionScope,
+struct Options {
+  scope: args::OptionScope,
 }
 
-impl OnlineMode for Options<'_> {
+impl OnlineMode for Options {
   type Document = OptionSearchResult;
 
   fn log_query(&self, query_s: &str) {
@@ -190,6 +190,6 @@ impl OnlineMode for Options<'_> {
   }
 
   fn print_results(&self, channel: &str, documents: &[Self::Document]) {
-    render::print_option_results(channel, documents);
+    render::options::print(channel, documents);
   }
 }

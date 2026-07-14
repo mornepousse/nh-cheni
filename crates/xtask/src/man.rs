@@ -76,6 +76,16 @@ pub fn generate(out_dir: &str) -> Result<(), String> {
        precedence over NH_FLAKE.",
     ),
     (
+      "NH_FILE",
+      "Preferred path to a directory/file containing a Nix expression. Chosen \
+       after os/home/darwin-specific env vars, but before NH_FLAKE.",
+    ),
+    (
+      "NH_ATTRP",
+      "Nix attribute path for an expression specified with NH_FILE. For \
+       example, nixosConfigurations.<hostname>.",
+    ),
+    (
       "NH_SUDO_ASKPASS",
       "Path to a program used as SUDO_ASKPASS when NH self-elevates with sudo.",
     ),
@@ -106,13 +116,34 @@ pub fn generate(out_dir: &str) -> Result<(), String> {
        due to fragile behavior.",
     ),
     (
+      "NH_SSHOPTS",
+      "SSH options for remote operations. Takes precedence over NIX_SSHOPTS. \
+       Accepts the same format as NIX_SSHOPTS.",
+    ),
+    (
+      "NH_SUDOOPTS",
+      "Extra arguments inserted into the sudo invocation when NH elevates \
+       privileges. Takes precedence over NIX_SUDOOPTS.",
+    ),
+    (
       "NIXOS_INSTALL_BOOTLOADER",
       "Forwarded to switch-to-configuration. If true, forces bootloader \
        installation. Also available via --install-bootloader.",
     ),
     (
+      "NIXOS_NO_CHECK",
+      "Forwarded to switch-to-configuration during activation. Inhibits \
+       certain NixOS service checks.",
+    ),
+    (
       "NIX_SSHOPTS",
-      "SSH options passed to Nix commands for remote builds.",
+      "SSH options passed to Nix commands for remote builds. NH_SSHOPTS takes \
+       precedence when both are set.",
+    ),
+    (
+      "NIX_SUDOOPTS",
+      "Extra arguments inserted into the sudo invocation. Supported for \
+       nixos-rebuild compatibility; NH_SUDOOPTS takes precedence.",
     ),
     (
       "NIX_CONFIG",

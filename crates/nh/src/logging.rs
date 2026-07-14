@@ -56,6 +56,12 @@ where
   }
 }
 
+/// Configure error reporting and tracing output.
+///
+/// # Errors
+///
+/// Returns an error if installing the error hook fails or if tracing filter
+/// directives cannot be parsed.
 pub fn setup_logging(
   verbosity: clap_verbosity_flag::Verbosity<InfoLevel>,
 ) -> Result<()> {
@@ -85,7 +91,9 @@ pub fn setup_logging(
     .with_line_number(true)
     .event_format(InfoFormatter)
     .with_filter(
-      EnvFilter::from_env("NH_LOG").add_directive(fallback_level.into()),
+      EnvFilter::from_env("NH_LOG")
+        .add_directive(fallback_level.into())
+        .add_directive("dix=WARN".parse()?),
     );
 
   tracing_subscriber::registry().with(layer).init();

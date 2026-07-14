@@ -9,11 +9,12 @@ use color_eyre::{
 };
 use nh_core::{
   args::DiffType,
-  command::{Command, ElevationStrategy},
-  installable::{CommandContext, Installable},
+  command::{Command, CommandKind, ElevationStrategy, NixCommand},
   update::update,
-  util::{get_hostname, print_dix_diff},
+  util::get_hostname,
 };
+use nh_diff::print_dix_diff;
+use nh_installable::{CommandContext, Installable};
 use nh_remote::{self, RemoteBuildConfig};
 use tracing::{debug, info, warn};
 
@@ -90,12 +91,7 @@ impl DarwinRebuildArgs {
       .common
       .installable
       .clone()
-      .resolve(CommandContext::Darwin)?;
-
-    let installable = match installable {
-      Installable::Unspecified => Installable::try_find_default_for_darwin()?,
-      other => other,
-    };
+      .resolve_or_default(CommandContext::Darwin)?;
 
     if self.update_args.update_all || self.update_args.update_input.is_some() {
       update(
@@ -219,13 +215,9 @@ impl DarwinRebuildArgs {
 
 impl DarwinReplArgs {
   fn run(self) -> Result<()> {
-    let target_installable =
-      self.installable.resolve(CommandContext::Darwin)?;
-
-    let mut target_installable = match target_installable {
-      Installable::Unspecified => Installable::try_find_default_for_darwin()?,
-      other => other,
-    };
+    let mut target_installable = self
+      .installable
+      .resolve_or_default(CommandContext::Darwin)?;
 
     if matches!(target_installable, Installable::Store { .. }) {
       bail!("Nix doesn't support nix store installables.");
@@ -242,17 +234,24 @@ impl DarwinReplArgs {
       attribute.push(hostname);
     }
 
-    Command::new("nix")
-      .arg("repl")
+    let status = NixCommand::new(CommandKind::Repl)
       .args(target_installable.to_args())
       .with_required_env()
-      .show_output(true)
-      .run()?;
+      .run_with_logs()?;
+    if !status.success() {
+      bail!("nix repl failed (exit status {status:?})");
+    }
 
     Ok(())
   }
 }
 
+/// Resolve a nix-darwin installable to the requested system build attribute.
+///
+/// # Errors
+///
+/// Returns an error if the installable is a store path or if the flake
+/// attribute path is too specific to infer the requested build attribute.
 pub fn toplevel_for<S: AsRef<str>>(
   hostname: S,
   installable: Installable,
@@ -311,13 +310,6 @@ pub fn toplevel_for<S: AsRef<str>>(
 
     Installable::Store { .. } => {
       bail!("Nix doesn't support nix store installables.");
-    },
-
-    Installable::Unspecified => {
-      unreachable!(
-        "Unspecified installable should have been resolved before calling \
-         toplevel_for"
-      )
     },
   }
 
