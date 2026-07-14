@@ -511,10 +511,12 @@ pub fn get_build_image_variants_flake(
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
   use nh_installable::Installable;
+  use serial_test::serial;
 
   use super::*;
 
   #[test]
+  #[serial]
   fn test_get_build_image_variants_expression() {
     let installable = Installable::Expression {
       expression: r"
@@ -543,6 +545,7 @@ mod tests {
   }
 
   #[test]
+  #[serial]
   fn test_get_build_image_variants_file() {
     let test_file = tempfile::Builder::new()
       .prefix("nh-test")
@@ -579,6 +582,7 @@ mod tests {
   }
 
   #[test]
+  #[serial]
   fn test_get_build_image_variants_flake() {
     use std::fs;
 
