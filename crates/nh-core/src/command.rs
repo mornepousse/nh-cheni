@@ -1074,16 +1074,19 @@ impl Build {
         let mut reader = BufReader::new(nix_out);
         let mut sink = nom_in;
         let mut errors: Vec<String> = Vec::new();
-        let mut line = String::new();
+        // Read raw bytes (not `read_line`, which errors on non-UTF-8 and would
+        // truncate the stream to nom): stay byte-transparent like the old OS
+        // pipe. UTF-8 tolerance is isolated to the extraction (lossy).
+        let mut buf: Vec<u8> = Vec::new();
         loop {
-          line.clear();
-          match reader.read_line(&mut line) {
+          buf.clear();
+          match reader.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {}
           }
           // Forward verbatim first (byte-fidelity for nom).
-          let _ = sink.write_all(line.as_bytes());
-          errors.extend(extract_nix_error_raw_msgs(&line));
+          let _ = sink.write_all(&buf);
+          errors.extend(extract_nix_error_raw_msgs(&String::from_utf8_lossy(&buf)));
         }
         let _ = sink.flush();
         drop(sink); // close nom's stdin so it can finish
