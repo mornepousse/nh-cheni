@@ -42,7 +42,18 @@ because the fork owns the nh code.
 
 ## Scope
 
-**v1 = switch/activation failures only** (`nh os switch/boot/test`).
+**v1 = the activation phase only**: `nh os test`, and the activation step of
+`nh os switch`. Both tag their `switch-to-configuration` invocation with the
+same `ACTIVATION_MSG` ("Activating configuration"), which is what the
+recognizer matches on.
+
+**Bootloader-phase failures are explicitly out of scope for v1** — `nh os
+boot`, and the bootloader-install step of `switch`, run under a different
+message ("Adding configuration to bootloader") and are correctly *not*
+recognized: the exit-4 "units failed to restart" case doesn't apply there
+(boot doesn't restart units), so there is nothing to clarify. They keep the
+default `color_eyre` report.
+
 Build/eval errors (cryptic Nix traces) are explicitly **out of scope for v1**
 (v2), but the architecture is designed to extend to them.
 
@@ -146,9 +157,14 @@ iteration.
 ## Risks / watch points
 
 - **Recognizer brittleness (merge)**: `recognize()` matches a string produced by
-  upstream code (the activation `msg`). A `recognize()` test freezes the
-  expected format → turns red at the next nh merge if upstream changes the
-  wording. Documented; that red is the intended signal.
+  upstream code (the activation `msg`). Made merge-safe by construction:
+  `crates/nh-nixos/src/nixos.rs` defines a single `pub(crate) const
+  ACTIVATION_MSG`, tags the activation `Command` with it
+  (`.message(ACTIVATION_MSG)`), and `error_clarify::recognize` reads that same
+  constant (`crate::nixos::ACTIVATION_MSG`) instead of a second hardcoded
+  literal. If an upstream merge renames the activation message, editing that
+  one call site is unavoidable — Rust forces a merge conflict there rather
+  than letting the two copies silently drift apart.
 - **Exit-code table**: the exact `switch-to-configuration` exit-code → meaning
   mapping is pinned from the nixpkgs source during implementation (known anchor:
   4 = activated, some units failed). Not guessed.

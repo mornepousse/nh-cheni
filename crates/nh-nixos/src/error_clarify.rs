@@ -34,13 +34,15 @@ pub(crate) fn parse_exit_code(report: &str) -> Option<i32> {
 
 /// True if this formatted report is an nh activation failure we can clarify.
 ///
-/// Markers pinned from `nixos.rs`: the activation Command carries
-/// `.message("Activating configuration")`, so a failure renders as
-/// `"Activating configuration (exit status ExitStatus(Exited(N)))"`.
-/// Merge-watch: if upstream changes that wording, the recognizer tests turn
-/// red — that red is the signal to re-pin the markers.
+/// Markers pinned from `nixos.rs`: the activation `Command` carries
+/// `.message(ACTIVATION_MSG)`, so a failure renders as
+/// `"<ACTIVATION_MSG> (exit status ExitStatus(Exited(N)))"`. Merge-safe by
+/// construction: this reads the same `crate::nixos::ACTIVATION_MSG` constant
+/// that `nixos.rs` tags the activation `Command` with, so an upstream rename
+/// of that wording forces a merge conflict at the `nixos.rs` call site rather
+/// than silently desyncing the two literals.
 pub(crate) fn recognize(report: &str) -> bool {
-  report.contains("Activating configuration")
+  report.contains(crate::nixos::ACTIVATION_MSG)
     && report.contains("exit status")
     && parse_exit_code(report).is_some()
 }
@@ -224,9 +226,15 @@ mod tests {
 
   #[test]
   fn recognize_real_activation_failure() {
-    let report = "Activation (test) failed: Activating configuration \
-                  (exit status ExitStatus(Exited(4)))";
-    assert!(recognize(report));
+    // Built FROM the shared constant, not a decoupled literal: this test
+    // rides `crate::nixos::ACTIVATION_MSG` the same way `recognize` does, so
+    // an upstream rename of the message shows up as a merge conflict at the
+    // `nixos.rs` call site, not as a silently-desynced test string.
+    let report = format!(
+      "Activation (test) failed: {} (exit status ExitStatus(Exited(4)))",
+      crate::nixos::ACTIVATION_MSG
+    );
+    assert!(recognize(&report));
   }
 
   #[test]
@@ -237,7 +245,8 @@ mod tests {
   #[test]
   fn recognize_requires_parseable_code() {
     // activation-ish text but no Exited(N) → not our clarifiable case
-    assert!(!recognize("Activating configuration (exit status Signal(9))"));
+    let report = format!("{} (exit status Signal(9))", crate::nixos::ACTIVATION_MSG);
+    assert!(!recognize(&report));
   }
 
   fn unit(name: &str, cause: Option<&str>) -> FailedUnit {
@@ -311,9 +320,11 @@ mod tests {
 
   #[test]
   fn try_clarify_with_recognized_activation() {
-    // A report whose formatted form carries the activation markers + Exited(4).
+    // A report whose formatted form carries the activation markers + Exited(4),
+    // built from the shared constant (see `recognize_real_activation_failure`).
     let err = eyre!(
-      "Activation (test) failed: Activating configuration (exit status ExitStatus(Exited(4)))"
+      "Activation (test) failed: {} (exit status ExitStatus(Exited(4)))",
+      crate::nixos::ACTIVATION_MSG
     );
     let probe = FakeProbe {
       failed: vec!["flatpak-setup.service".to_string()],

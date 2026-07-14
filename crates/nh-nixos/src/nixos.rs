@@ -41,6 +41,12 @@ const CURRENT_PROFILE: &str = "/run/current-system";
 
 const SPEC_LOCATION: &str = "/etc/specialisation";
 
+/// Message tagged on the `switch-to-configuration` activation `Command`.
+/// Shared with `error_clarify::recognize` so an upstream rename of this
+/// wording forces a merge conflict at this call site instead of silently
+/// breaking the error-clarification recognizer.
+pub(crate) const ACTIVATION_MSG: &str = "Activating configuration";
+
 /// Essential files that must exist in a valid NixOS system closure. Each tuple
 /// contains the file path relative to the system profile and its description.
 /// The descriptions are used on log messages or errors.
@@ -390,7 +396,7 @@ impl OsRebuildActivateArgs {
       } else {
         Command::new(canonical_out_path)
           .arg("test")
-          .message("Activating configuration")
+          .message(ACTIVATION_MSG)
           .elevate(elevate.then_some(elevation.clone()))
           .preserve_envs(["NIXOS_INSTALL_BOOTLOADER", "NIXOS_NO_CHECK"])
           .with_required_env()
