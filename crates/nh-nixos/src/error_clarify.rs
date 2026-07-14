@@ -399,6 +399,41 @@ pub(crate) fn clarify_failed_assertions(text: &str) -> Option<String> {
   Some(out)
 }
 
+/// Explain a fixed-output hash mismatch and offer the got hash as the fix.
+pub(crate) fn clarify_hash_mismatch(text: &str) -> Option<String> {
+  use std::fmt::Write;
+  let text = strip_ansi(text);
+  if !text.contains("hash mismatch") {
+    return None;
+  }
+  let field = |name: &str| {
+    text
+      .lines()
+      .find_map(|l| l.trim().strip_prefix(name))
+      .map(|v| v.trim().to_string())
+  };
+  let specified = field("specified:")?;
+  let got = field("got:")?;
+  let mut out = String::new();
+  let _ = writeln!(
+    out,
+    "✗ Hash incorrect pour une source à contenu fixe. Nix a obtenu un contenu"
+  );
+  let _ = writeln!(out, "  différent de l'attendu :");
+  let _ = writeln!(out, "    attendu : {specified}");
+  let _ = writeln!(out, "    obtenu  : {got}");
+  let _ = writeln!(
+    out,
+    "  → remplace « attendu » par {got} dans le .nix qui déclare cette source"
+  );
+  let _ = write!(
+    out,
+    "    (fetchurl/fetchFromGitHub/…). Si tu n'attendais PAS de changement,\n    \
+     méfie-toi (source altérée)."
+  );
+  Some(out)
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -754,5 +789,23 @@ Output paths:\n  /nix/store/yyy-top";
   #[test]
   fn clarify_failed_assertions_none_on_unrelated() {
     assert!(clarify_failed_assertions("error: something else").is_none());
+  }
+
+  #[test]
+  fn clarify_hash_mismatch_gives_got_as_action() {
+    let text = "hash mismatch in fixed-output derivation '/nix/store/abc-boom-hash.drv':\n\
+                \x20 specified: sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n\
+                \x20 got:       sha256-Zm9vYmFyYmF6cXV4Y29ycmVjdGhhc2h2YWx1ZTE=";
+    let block = clarify_hash_mismatch(text).expect("should recognize hash mismatch");
+    assert!(block.contains("sha256-AAAAAAAA"), "shows specified");
+    assert!(block.contains("sha256-Zm9vYmFy"), "shows got");
+    // the got hash is offered as the fix action
+    assert!(block.contains("remplace"));
+    assert!(!block.contains("command.rs"));
+  }
+
+  #[test]
+  fn clarify_hash_mismatch_none_on_unrelated() {
+    assert!(clarify_hash_mismatch("error: something else").is_none());
   }
 }
