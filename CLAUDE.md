@@ -209,3 +209,47 @@ Post-pivot polish (2026-05-02):
 
 The detailed plan archive is at
 `/home/mae/.claude/plans/vast-meandering-peacock.md`.
+
+## Workflow anti-régression (OBLIGATOIRE)
+
+Source unique de vérité : `scripts/check.sh`.
+- `./scripts/check.sh --fast` — suite de tests du workspace (`cargo test --workspace`) (~secondes)
+- `./scripts/check.sh` — fast + le build complet (`cargo clippy && cargo build`)
+
+`nix flake check` / `nix build .#cheni` ne sont PAS dans check.sh : ils
+restent le gate de **release** (voir `/tripwire:release`), trop lourds pour
+tourner à chaque fin de tour.
+
+**Activation des hooks git (une fois par clone)** :
+```bash
+./scripts/install-hooks.sh   # ou: git config core.hooksPath scripts/hooks
+```
+`pre-push` lance le check complet et bloque le push si rouge. WIP : `git push --no-verify`.
+
+**Hooks Claude Code** (`.claude/settings.json`, automatiques) :
+- `PostToolUse` sur édition dans `crates/` ou `xtask/` → `check.sh --fast`.
+- `Stop` → check complet (fast + clippy + build). Si l'env de build n'est pas
+  disponible, dégrade en `--fast` seul.
+
+**Ratchet de tests** : `.tripwire-testcount` (committé) mémorise le nombre de
+tests (`grep '#[test]' crates/`). Une baisse silencieuse est signalée, et
+bloque au `pre-push`. Baisse assumée → mettre à jour `.tripwire-testcount` dans
+le commit.
+
+### Norme TDD — nouvelle logique pure
+Toute nouvelle fonction de logique pure (classification, parsing, décomposition
+de version, validation d'entrées) : test écrit **d'abord**, en `mod tests`
+inline dans le module. Le test doit être rouge avant l'implémentation, vert
+après, et parallel-safe (pas d'état global muté — cf. conventions du fork).
+
+### Économie de modèles (subagents)
+Le pipeline check.sh permet de descendre en gamme SANS risque d'hallucination,
+mais seulement là où un oracle rattrape l'erreur :
+- **Modèle économique (haiku) OK** : transcription de code déjà spécifié,
+  refactors mécaniques, extraction citée (`fichier:ligne` obligatoire) — le
+  check, la compilation ou le recoupement des citations attrapent la dérive.
+- **Jamais en dessous de sonnet** : review, audit, debug, **et l'écriture
+  d'assertions de test** — une assertion tautologique ou un verdict halluciné
+  passent l'oracle mécanique au vert. Le jugement ne descend pas en gamme.
+- Toute tâche économique DOIT finir par `./scripts/check.sh --fast` vert, et
+  un test rewiré/écrit DOIT prouver qu'il mord (bug transitoire → rouge → revert).
