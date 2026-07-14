@@ -331,6 +331,45 @@ pub(crate) fn render_nix_block(failures: &[NixFailure]) -> String {
   out
 }
 
+/// Explain a NixOS module option defined with conflicting values.
+pub(crate) fn clarify_conflicting_options(text: &str) -> Option<String> {
+  use std::fmt::Write;
+  let text = strip_ansi(text);
+  if !text.contains("has conflicting definition values:") {
+    return None;
+  }
+  let option = text
+    .split_once("The option `")
+    .and_then(|(_, r)| r.split_once('\'').map(|(o, _)| o))?;
+  let defs: Vec<(String, String)> = text
+    .lines()
+    .filter_map(|l| {
+      let rest = l.trim().strip_prefix("- In `")?;
+      let (file, after) = rest.split_once('\'')?;
+      let value = after.trim_start().trim_start_matches(':').trim();
+      Some((file.to_string(), value.to_string()))
+    })
+    .collect();
+  if defs.is_empty() {
+    return None;
+  }
+  let mut out = String::new();
+  let _ = writeln!(
+    out,
+    "⚠ Conflit de configuration — l'option « {option} » est définie à"
+  );
+  let _ = writeln!(out, "  plusieurs endroits avec des valeurs différentes :");
+  for (file, value) in &defs {
+    let _ = writeln!(out, "    {file}  → {value}");
+  }
+  let _ = write!(
+    out,
+    "  Nix ne peut pas choisir. → garde une seule définition, ou impose la\n  \
+     gagnante avec lib.mkForce (ou baisse la perdante avec lib.mkDefault)."
+  );
+  Some(out)
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -650,5 +689,24 @@ Output paths:\n  /nix/store/yyy-top";
     }];
     let block = render_nix_block(&fails);
     assert!(block.contains("does not provide attribute"));
+  }
+
+  #[test]
+  fn clarify_conflicting_options_extracts_option_files_values() {
+    let text = "The option `foo' has conflicting definition values:\n\
+                - In `/etc/nixos/module-a.nix': \"B\"\n\
+                - In `/etc/nixos/module-b.nix': \"A\"\n\
+                Use `lib.mkForce value' or `lib.mkDefault value' to change the priority.";
+    let block = clarify_conflicting_options(text).expect("should recognize conflict");
+    assert!(block.contains("foo"), "option name");
+    assert!(block.contains("/etc/nixos/module-a.nix") && block.contains("\"B\""));
+    assert!(block.contains("/etc/nixos/module-b.nix") && block.contains("\"A\""));
+    assert!(block.contains("mkForce"));
+    assert!(!block.contains("command.rs"));
+  }
+
+  #[test]
+  fn clarify_conflicting_options_none_on_unrelated() {
+    assert!(clarify_conflicting_options("error: something else").is_none());
   }
 }
