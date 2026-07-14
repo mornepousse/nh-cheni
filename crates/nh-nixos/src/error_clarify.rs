@@ -443,6 +443,29 @@ pub(crate) fn clarify_hash_mismatch(text: &str) -> Option<String> {
   Some(out)
 }
 
+/// Explain an unknown NixOS/home-manager option defined in the config.
+pub(crate) fn clarify_option_does_not_exist(text: &str) -> Option<String> {
+  use std::fmt::Write;
+  let text = strip_ansi(text);
+  if !text.contains("does not exist") || !text.contains("The option `") {
+    return None;
+  }
+  let option = text
+    .split_once("The option `")
+    .and_then(|(_, r)| r.split_once('\'').map(|(o, _)| o))?;
+  let mut out = String::new();
+  let _ = writeln!(out, "⚠ Option inconnue « {option} » (définie dans ta config).");
+  let _ = writeln!(out, "  Nix ne connaît pas cette option. Vérifie, dans l'ordre :");
+  let _ = writeln!(out, "    1. une faute de frappe dans le nom ;");
+  let _ = writeln!(out, "    2. le module qui la déclare n'est pas importé ;");
+  let _ = write!(
+    out,
+    "    3. elle a été renommée/supprimée dans un bump nixpkgs récent\n       \
+     (release notes NixOS / home-manager)."
+  );
+  Some(out)
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -816,6 +839,24 @@ Output paths:\n  /nix/store/yyy-top";
   #[test]
   fn clarify_hash_mismatch_none_on_unrelated() {
     assert!(clarify_hash_mismatch("error: something else").is_none());
+  }
+
+  #[test]
+  fn clarify_option_does_not_exist_names_option_and_checklist() {
+    let text = "The option `services.thisOptionDoesNotExistCheni' does not exist. \
+                Definition values:\n- In `<unknown-file>':\n    {\n      enable = true;\n    }";
+    let block = clarify_option_does_not_exist(text).expect("should recognize unknown option");
+    assert!(block.contains("services.thisOptionDoesNotExistCheni"));
+    assert!(block.to_lowercase().contains("faute de frappe"));
+    assert!(block.contains("nixpkgs"));
+    assert!(!block.contains("command.rs"));
+  }
+
+  #[test]
+  fn clarify_option_does_not_exist_none_on_unrelated() {
+    assert!(clarify_option_does_not_exist("error: something else").is_none());
+    // "conflicting definition values" is a DIFFERENT class — must not match here
+    assert!(clarify_option_does_not_exist("The option `x' has conflicting definition values:").is_none());
   }
 
   #[test]
