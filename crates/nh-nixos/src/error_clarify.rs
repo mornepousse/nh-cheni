@@ -32,6 +32,19 @@ pub(crate) fn parse_exit_code(report: &str) -> Option<i32> {
   rest[..end].trim().parse().ok()
 }
 
+/// True if this formatted report is an nh activation failure we can clarify.
+///
+/// Markers pinned from `nixos.rs`: the activation Command carries
+/// `.message("Activating configuration")`, so a failure renders as
+/// `"Activating configuration (exit status ExitStatus(Exited(N)))"`.
+/// Merge-watch: if upstream changes that wording, the recognizer tests turn
+/// red — that red is the signal to re-pin the markers.
+pub(crate) fn recognize(report: &str) -> bool {
+  report.contains("Activating configuration")
+    && report.contains("exit status")
+    && parse_exit_code(report).is_some()
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -61,5 +74,23 @@ mod tests {
   #[test]
   fn parse_exit_code_absent_is_none() {
     assert_eq!(parse_exit_code("some unrelated error"), None);
+  }
+
+  #[test]
+  fn recognize_real_activation_failure() {
+    let report = "Activation (test) failed: Activating configuration \
+                  (exit status ExitStatus(Exited(4)))";
+    assert!(recognize(report));
+  }
+
+  #[test]
+  fn recognize_rejects_unrelated_error() {
+    assert!(!recognize("error: build of derivation failed"));
+  }
+
+  #[test]
+  fn recognize_requires_parseable_code() {
+    // activation-ish text but no Exited(N) → not our clarifiable case
+    assert!(!recognize("Activating configuration (exit status Signal(9))"));
   }
 }
