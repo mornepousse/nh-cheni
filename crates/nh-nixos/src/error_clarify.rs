@@ -466,6 +466,37 @@ pub(crate) fn clarify_option_does_not_exist(text: &str) -> Option<String> {
   Some(out)
 }
 
+/// Explain a pure-eval impure-path access and steer to the right fix
+/// (move the file into the repo + git add) — never `--impure`.
+pub(crate) fn clarify_impure_path(text: &str) -> Option<String> {
+  use std::fmt::Write;
+  let text = strip_ansi(text);
+  if !text.contains("forbidden in pure evaluation mode") {
+    return None;
+  }
+  let path = text
+    .split_once("access to absolute path '")
+    .and_then(|(_, r)| r.split_once('\'').map(|(p, _)| p))?;
+  let mut out = String::new();
+  let _ = writeln!(
+    out,
+    "✗ Accès à un fichier hors du flake : « {path} » (évaluation pure)."
+  );
+  let _ = writeln!(
+    out,
+    "  En flake, seuls les fichiers trackés par git dans le repo sont visibles."
+  );
+  let _ = writeln!(
+    out,
+    "  → si ce fichier fait partie de ta config, déplace-le dans le repo + git add."
+  );
+  let _ = write!(
+    out,
+    "  (N'utilise PAS --impure : ça masque le problème au lieu de le régler.)"
+  );
+  Some(out)
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -857,6 +888,24 @@ Output paths:\n  /nix/store/yyy-top";
     assert!(clarify_option_does_not_exist("error: something else").is_none());
     // "conflicting definition values" is a DIFFERENT class — must not match here
     assert!(clarify_option_does_not_exist("The option `x' has conflicting definition values:").is_none());
+  }
+
+  #[test]
+  fn clarify_impure_path_names_path_and_steers_off_impure() {
+    let text = "access to absolute path '/etc/hostname' is forbidden in pure \
+                evaluation mode (use '--impure' to override)";
+    let block = clarify_impure_path(text).expect("should recognize impure path");
+    assert!(block.contains("/etc/hostname"));
+    assert!(block.contains("git add"), "steer to git add");
+    assert!(block.contains("--impure"), "must mention --impure (to say: don't use it)");
+    assert!(block.to_lowercase().contains("pas") || block.to_lowercase().contains("n'utilise"),
+      "must steer AWAY from --impure:\n{block}");
+    assert!(!block.contains("command.rs"));
+  }
+
+  #[test]
+  fn clarify_impure_path_none_on_unrelated() {
+    assert!(clarify_impure_path("error: something else").is_none());
   }
 
   #[test]
