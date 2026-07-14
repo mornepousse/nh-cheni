@@ -28,6 +28,21 @@ use crate::args::NixBuildPassthroughArgs;
 /// forces a compile break at the one call site.
 pub const NIX_BUILD_ERROR_MARKER: &str = "nh-cheni:nix-build-error";
 
+/// Parse `@nix `-prefixed internal-json lines and return the `raw_msg` of each
+/// error event (`action == "msg"`, `level == 0`). Malformed lines are skipped.
+pub(crate) fn extract_nix_error_raw_msgs(chunk: &str) -> Vec<String> {
+  chunk
+    .lines()
+    .filter_map(|l| l.strip_prefix("@nix "))
+    .filter_map(|j| serde_json::from_str::<serde_json::Value>(j).ok())
+    .filter(|v| {
+      v.get("action").and_then(|a| a.as_str()) == Some("msg")
+        && v.get("level").and_then(serde_json::Value::as_u64) == Some(0)
+    })
+    .filter_map(|v| v.get("raw_msg").and_then(|m| m.as_str()).map(str::to_string))
+    .collect()
+}
+
 #[must_use]
 pub fn get_sudo_opts() -> Vec<String> {
   let sudoopts = env::var("NH_SUDOOPTS")
@@ -1070,6 +1085,30 @@ impl Build {
 #[derive(Debug, Error)]
 #[error("Command exited with status {0:?}")]
 pub struct ExitError(ExitStatus);
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
+mod build_error_tests {
+  use super::*;
+
+  #[test]
+  fn extracts_level0_raw_msgs_only() {
+    let chunk = concat!(
+      "@nix {\"action\":\"stop\",\"id\":1}\n",
+      "@nix {\"action\":\"msg\",\"level\":3,\"raw_msg\":\"note: not an error\"}\n",
+      "@nix {\"action\":\"msg\",\"level\":0,\"raw_msg\":\"Cannot build '/nix/store/x.drv'.\"}\n",
+      "not-a-nix-line\n",
+    );
+    let msgs = extract_nix_error_raw_msgs(chunk);
+    assert_eq!(msgs, vec!["Cannot build '/nix/store/x.drv'.".to_string()]);
+  }
+
+  #[test]
+  fn ignores_malformed_json_lines() {
+    let chunk = "@nix {not json}\n@nix {\"action\":\"msg\",\"level\":0,\"raw_msg\":\"boom\"}\n";
+    assert_eq!(extract_nix_error_raw_msgs(chunk), vec!["boom".to_string()]);
+  }
+}
 
 #[cfg(test)]
 mod tests {
