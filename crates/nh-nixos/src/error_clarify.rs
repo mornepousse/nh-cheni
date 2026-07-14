@@ -135,6 +135,15 @@ pub(crate) fn try_clarify_with(
       report.as_str(),
       |i| &report[i + nh_core::NIX_BUILD_ERROR_MARKER.len()..],
     );
+    if let Some(b) = clarify_hash_mismatch(text) {
+      return Some(b);
+    }
+    if let Some(b) = clarify_conflicting_options(text) {
+      return Some(b);
+    }
+    if let Some(b) = clarify_failed_assertions(text) {
+      return Some(b);
+    }
     let failures = parse_nix_failures(text);
     // Only render a clarified block when at least one real leaf failure
     // survived filtering; if `parse_nix_failures` dropped everything as
@@ -807,5 +816,32 @@ Output paths:\n  /nix/store/yyy-top";
   #[test]
   fn clarify_hash_mismatch_none_on_unrelated() {
     assert!(clarify_hash_mismatch("error: something else").is_none());
+  }
+
+  #[test]
+  fn try_clarify_routes_to_specific_class_blocks() {
+    use color_eyre::eyre::eyre;
+    let probe = FakeProbe { failed: vec![], cause: None };
+
+    let conflict = eyre!(
+      "{}\nThe option `foo' has conflicting definition values:\n- In `/a.nix': \"B\"\n- In `/b.nix': \"A\"\nUse `lib.mkForce value'.",
+      nh_core::NIX_BUILD_ERROR_MARKER
+    );
+    let out = try_clarify_with(&conflict, &probe).expect("conflict clarified");
+    assert!(out.contains("Conflit de configuration"), "specific block, not generic:\n{out}");
+
+    let assertions = eyre!(
+      "{}\nFailed assertions:\n- The 'fileSystems' option does not specify your root file system.",
+      nh_core::NIX_BUILD_ERROR_MARKER
+    );
+    let out = try_clarify_with(&assertions, &probe).expect("assertions clarified");
+    assert!(out.contains("garde-fous NixOS"), "specific block:\n{out}");
+
+    let hash = eyre!(
+      "{}\nhash mismatch in fixed-output derivation '/nix/store/x.drv':\n  specified: sha256-AAAA\n  got: sha256-BBBB",
+      nh_core::NIX_BUILD_ERROR_MARKER
+    );
+    let out = try_clarify_with(&hash, &probe).expect("hash clarified");
+    assert!(out.contains("Hash incorrect") && out.contains("sha256-BBBB"), "specific block:\n{out}");
   }
 }
