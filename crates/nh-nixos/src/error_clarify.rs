@@ -84,6 +84,37 @@ pub(crate) fn render_block(outcome: &ActivationOutcome, units: &[FailedUnit]) ->
   out
 }
 
+/// Systemd queries, behind a trait so the rendering/glue stays pure and the
+/// tests never touch real `systemctl`/`journalctl`.
+pub(crate) trait SystemdProbe {
+  /// Units currently in the `failed` state.
+  fn failed_units(&self) -> Vec<String>;
+  /// Last significant error line from a unit's journal, if readable.
+  fn unit_last_error(&self, unit: &str) -> Option<String>;
+}
+
+/// Glue: recognize → classify → gather units → render. `probe` is injected so
+/// this is fully unit-testable without touching systemd.
+pub(crate) fn try_clarify_with(
+  err: &color_eyre::eyre::Report,
+  probe: &dyn SystemdProbe,
+) -> Option<String> {
+  let report = format!("{err:#}");
+  if !recognize(&report) {
+    return None;
+  }
+  let outcome = classify_exit_code(parse_exit_code(&report)?);
+  let units = probe
+    .failed_units()
+    .into_iter()
+    .map(|name| {
+      let cause = probe.unit_last_error(&name);
+      FailedUnit { name, cause }
+    })
+    .collect::<Vec<_>>();
+  Some(render_block(&outcome, &units))
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -168,5 +199,38 @@ mod tests {
     let block = render_block(&ActivationOutcome::HardFail(1), &[]);
     assert!(block.contains("code 1"));
     assert!(block.contains("n'a PAS"), "hard fail must say system not switched:\n{block}");
+  }
+
+  use color_eyre::eyre::eyre;
+
+  struct FakeProbe {
+    failed: Vec<String>,
+    cause:  Option<String>,
+  }
+  impl SystemdProbe for FakeProbe {
+    fn failed_units(&self) -> Vec<String> { self.failed.clone() }
+    fn unit_last_error(&self, _unit: &str) -> Option<String> { self.cause.clone() }
+  }
+
+  #[test]
+  fn try_clarify_with_recognized_activation() {
+    // A report whose formatted form carries the activation markers + Exited(4).
+    let err = eyre!(
+      "Activation (test) failed: Activating configuration (exit status ExitStatus(Exited(4)))"
+    );
+    let probe = FakeProbe {
+      failed: vec!["flatpak-setup.service".to_string()],
+      cause:  Some("Could not resolve hostname".to_string()),
+    };
+    let out = try_clarify_with(&err, &probe).expect("should clarify");
+    assert!(out.contains("flatpak-setup.service"));
+    assert!(out.contains("Could not resolve hostname"));
+  }
+
+  #[test]
+  fn try_clarify_with_unrecognized_returns_none() {
+    let err = eyre!("error: build failed");
+    let probe = FakeProbe { failed: vec![], cause: None };
+    assert!(try_clarify_with(&err, &probe).is_none());
   }
 }
