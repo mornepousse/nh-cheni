@@ -1,0 +1,62 @@
+# Release build for nh-cheni.
+#
+# This is the fork's ONLY GitHub workflow — upstream nh's CI was
+# deliberately not carried over (see CLAUDE.md: "no CI, local quality
+# gates suffice"). This workflow exists purely to publish a binary
+# artifact on tag push; it is not a quality gate. The quality gate is
+# `./scripts/check.sh` (local) plus `nix build .#nh-cheni` and
+# `nix flake check` (release sandbox gate, run by hand before tagging).
+#
+# All third-party actions are pinned by commit SHA, not by floating
+# tag, per the fork's security discipline.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v5.0.0
+      - name: Checkout
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+        with:
+          # Full history so Nix's local-git introspection (self.shortRev
+          # in flake.nix) reliably resolves the tagged commit's rev —
+          # see crates/nh/build.rs, which stamps this into `nh --version`
+          # via NH_REV.
+          fetch-depth: 0
+
+      # DeterminateSystems/nix-installer-action v22
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25
+        with:
+          extra-conf: |
+            experimental-features = nix-command flakes
+
+      - name: Build nh-cheni
+        run: nix build .#nh-cheni -L
+
+      - name: Prepare release artifact
+        run: |
+          set -euo pipefail
+          artifact="nh-cheni-${GITHUB_REF_NAME}-x86_64-linux"
+          # result/bin/nh is a symlink into /nix/store; dereference and
+          # copy so the release asset is a standalone real binary.
+          install -Dm755 "$(readlink -f result/bin/nh)" "$artifact"
+          ./"$artifact" --version
+          echo "ARTIFACT=$artifact" >> "$GITHUB_ENV"
+
+      # softprops/action-gh-release v3.0.2
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228
+        with:
+          name: ${{ github.ref_name }}
+          body: "nh-cheni release ${{ github.ref_name }}"
+          files: ${{ env.ARTIFACT }}
