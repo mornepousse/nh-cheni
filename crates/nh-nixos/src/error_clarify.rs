@@ -370,6 +370,35 @@ pub(crate) fn clarify_conflicting_options(text: &str) -> Option<String> {
   Some(out)
 }
 
+/// Explain failed NixOS module assertions (config guardrails).
+pub(crate) fn clarify_failed_assertions(text: &str) -> Option<String> {
+  use std::fmt::Write;
+  let text = strip_ansi(text);
+  let idx = text.find("Failed assertions:")?;
+  let after = &text[idx + "Failed assertions:".len()..];
+  let asserts: Vec<&str> = after
+    .lines()
+    .filter_map(|l| l.trim().strip_prefix("- "))
+    .collect();
+  if asserts.is_empty() {
+    return None;
+  }
+  let mut out = String::new();
+  let _ = writeln!(
+    out,
+    "✗ Ta config viole des garde-fous NixOS (assertions). Corrige :"
+  );
+  for a in &asserts {
+    let _ = writeln!(out, "    • {a}");
+  }
+  let _ = write!(
+    out,
+    "  Chaque ligne est une règle de cohérence non respectée — cherche l'option\n  \
+     correspondante dans tes modules récemment édités."
+  );
+  Some(out)
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, clippy::unwrap_used, reason = "Fine in tests")]
 mod tests {
@@ -708,5 +737,22 @@ Output paths:\n  /nix/store/yyy-top";
   #[test]
   fn clarify_conflicting_options_none_on_unrelated() {
     assert!(clarify_conflicting_options("error: something else").is_none());
+  }
+
+  #[test]
+  fn clarify_failed_assertions_lists_each() {
+    let text = "\nFailed assertions:\n\
+                - cheni assert fail exemple\n\
+                - The 'fileSystems' option does not specify your root file system.";
+    let block = clarify_failed_assertions(text).expect("should recognize assertions");
+    assert!(block.contains("cheni assert fail exemple"));
+    assert!(block.contains("does not specify your root file system"));
+    assert!(block.to_lowercase().contains("assertion"));
+    assert!(!block.contains("command.rs"));
+  }
+
+  #[test]
+  fn clarify_failed_assertions_none_on_unrelated() {
+    assert!(clarify_failed_assertions("error: something else").is_none());
   }
 }
