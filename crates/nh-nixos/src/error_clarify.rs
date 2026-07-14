@@ -115,19 +115,27 @@ pub(crate) fn try_clarify_with(
   probe: &dyn SystemdProbe,
 ) -> Option<String> {
   let report = format!("{err:#}");
-  if !recognize(&report) {
-    return None;
+  if recognize(&report) {
+    let outcome = classify_exit_code(parse_exit_code(&report)?);
+    let units = probe
+      .failed_units()
+      .into_iter()
+      .map(|name| {
+        let cause = probe.unit_last_error(&name);
+        FailedUnit { name, cause }
+      })
+      .collect::<Vec<_>>();
+    return Some(render_block(&outcome, &units));
   }
-  let outcome = classify_exit_code(parse_exit_code(&report)?);
-  let units = probe
-    .failed_units()
-    .into_iter()
-    .map(|name| {
-      let cause = probe.unit_last_error(&name);
-      FailedUnit { name, cause }
-    })
-    .collect::<Vec<_>>();
-  Some(render_block(&outcome, &units))
+  if recognize_nix_build(&report) {
+    // Strip the marker line before parsing the nix text.
+    let text = report.replacen(nh_core::NIX_BUILD_ERROR_MARKER, "", 1);
+    let failures = parse_nix_failures(&text);
+    if !failures.is_empty() {
+      return Some(render_nix_block(&failures));
+    }
+  }
+  None
 }
 
 use std::process::Command;
@@ -457,6 +465,21 @@ mod tests {
     let err = eyre!("error: build failed");
     let probe = FakeProbe { failed: vec![], cause: None };
     assert!(try_clarify_with(&err, &probe).is_none());
+  }
+
+  #[test]
+  fn try_clarify_handles_nix_build_error() {
+    use color_eyre::eyre::eyre;
+    let err = eyre!(
+      "{}\nCannot build '/nix/store/aaa-boom.drv'.\nReason: builder failed with exit code 1.\nLast 1 log lines:\n> oops\nFor full logs, run:\n  nix log /nix/store/aaa-boom.drv",
+      nh_core::NIX_BUILD_ERROR_MARKER
+    );
+    // Activation probe is irrelevant here; reuse the fake from earlier tests.
+    let probe = FakeProbe { failed: vec![], cause: None };
+    let out = try_clarify_with(&err, &probe).expect("should clarify nix build error");
+    assert!(out.contains("Build nix échoué"));
+    assert!(out.contains("/nix/store/aaa-boom.drv"));
+    assert!(out.contains("nix log /nix/store/aaa-boom.drv"));
   }
 
   #[test]
