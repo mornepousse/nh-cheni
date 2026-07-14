@@ -128,9 +128,14 @@ pub(crate) fn try_clarify_with(
     return Some(render_block(&outcome, &units));
   }
   if recognize_nix_build(&report) {
-    // Strip the marker line before parsing the nix text.
-    let text = report.replacen(nh_core::NIX_BUILD_ERROR_MARKER, "", 1);
-    let failures = parse_nix_failures(&text);
+    // Take the text AFTER the marker — not just remove it — so any wrap_err
+    // prefix nh added before the marker (e.g. "Failed to build configuration:")
+    // is dropped too, keeping the eval summary clean.
+    let text = report.find(nh_core::NIX_BUILD_ERROR_MARKER).map_or(
+      report.as_str(),
+      |i| &report[i + nh_core::NIX_BUILD_ERROR_MARKER.len()..],
+    );
+    let failures = parse_nix_failures(text);
     // Only render a clarified block when at least one real leaf failure
     // survived filtering; if `parse_nix_failures` dropped everything as
     // pure propagation blocks, fall through to the default report below.
@@ -488,6 +493,23 @@ mod tests {
     assert!(out.contains("Build nix échoué"));
     assert!(out.contains("/nix/store/aaa-boom.drv"));
     assert!(out.contains("nix log /nix/store/aaa-boom.drv"));
+  }
+
+  #[test]
+  fn try_clarify_eval_error_drops_wrap_err_prefix() {
+    use color_eyre::eyre::eyre;
+    // An eval error (no "Cannot build") wrapped with nh's "Failed to build
+    // configuration:" prefix before the marker. The prefix must NOT leak into
+    // the rendered summary.
+    let err = eyre!(
+      "{}\nflake 'git+file:///x' does not provide attribute 'packages.x86_64-linux.foo'",
+      nh_core::NIX_BUILD_ERROR_MARKER
+    )
+    .wrap_err("Failed to build configuration");
+    let probe = FakeProbe { failed: vec![], cause: None };
+    let out = try_clarify_with(&err, &probe).expect("should clarify eval error");
+    assert!(out.contains("does not provide attribute"));
+    assert!(!out.contains("Failed to build configuration"), "wrap_err prefix must not leak:\n{out}");
   }
 
   #[test]
