@@ -131,6 +131,9 @@ pub(crate) fn try_clarify_with(
     // Strip the marker line before parsing the nix text.
     let text = report.replacen(nh_core::NIX_BUILD_ERROR_MARKER, "", 1);
     let failures = parse_nix_failures(&text);
+    // Only render a clarified block when at least one real leaf failure
+    // survived filtering; if `parse_nix_failures` dropped everything as
+    // pure propagation blocks, fall through to the default report below.
     if !failures.is_empty() {
       return Some(render_nix_block(&failures));
     }
@@ -258,8 +261,7 @@ pub(crate) fn parse_nix_failures(text: &str) -> Vec<NixFailure> {
     let reason = block
       .lines()
       .find_map(|l| l.trim().strip_prefix("Reason:"))
-      .map(str::trim)
-      .unwrap_or("");
+      .map_or("", str::trim);
     // Drop pure propagation blocks.
     if reason.contains("dependency failed") || reason.contains("dependencies failed") {
       continue;
@@ -290,28 +292,34 @@ pub(crate) fn recognize_nix_build(report: &str) -> bool {
 
 /// Render the clarified nix-failure block. Pure given `failures`.
 pub(crate) fn render_nix_block(failures: &[NixFailure]) -> String {
+  use std::fmt::Write;
+
   let mut out = String::new();
   let n = failures.len();
   if failures.iter().all(|f| f.drv.is_none()) {
     // Eval error(s): just the summaries, cleanly.
     out.push_str("✗ Évaluation nix échouée :\n");
     for f in failures {
-      out.push_str(&format!("  {}\n", f.summary.replace('\n', "\n  ")));
+      let _ = writeln!(out, "  {}", f.summary.replace('\n', "\n  "));
     }
     return out.trim_end().to_string();
   }
   let noun = if n > 1 { "dérivations en échec (causes racines)" } else { "dérivation en échec (cause racine)" };
-  out.push_str(&format!("✗ Build nix échoué — {n} {noun} :\n"));
+  let _ = writeln!(out, "✗ Build nix échoué — {n} {noun} :");
   for f in failures {
     match &f.drv {
-      Some(drv) => out.push_str(&format!("    {drv}\n")),
-      None => out.push_str(&format!("    {}\n", f.summary)),
+      Some(drv) => {
+        let _ = writeln!(out, "    {drv}");
+      },
+      None => {
+        let _ = writeln!(out, "    {}", f.summary);
+      },
     }
     for line in &f.log_lines {
-      out.push_str(&format!("      {line}\n"));
+      let _ = writeln!(out, "      {line}");
     }
     if let Some(cmd) = &f.log_cmd {
-      out.push_str(&format!("      → {cmd}\n"));
+      let _ = writeln!(out, "      → {cmd}");
     }
   }
   out.push_str("  (blocs intermédiaires « N dependencies failed » masqués)");
@@ -587,6 +595,28 @@ Output paths:\n  /nix/store/yyy-top";
     assert!(block.contains("oops"));
     assert!(block.contains("nix log /nix/store/aaa-boom.drv"));
     assert!(!block.contains("command.rs"), "must not leak nh source location");
+  }
+
+  #[test]
+  fn render_nix_block_plural() {
+    let fails = vec![
+      NixFailure {
+        drv:       Some("/nix/store/aaa-boom.drv".to_string()),
+        summary:   "builder failed (builder failed with exit code 1)".to_string(),
+        log_lines: vec![],
+        log_cmd:   None,
+      },
+      NixFailure {
+        drv:       Some("/nix/store/bbb-bang.drv".to_string()),
+        summary:   "builder failed (builder failed with exit code 1)".to_string(),
+        log_lines: vec![],
+        log_cmd:   None,
+      },
+    ];
+    let block = render_nix_block(&fails);
+    assert!(block.contains("dérivations"), "must use plural noun:\n{block}");
+    assert!(block.contains("/nix/store/aaa-boom.drv"));
+    assert!(block.contains("/nix/store/bbb-bang.drv"));
   }
 
   #[test]
