@@ -96,6 +96,18 @@ State files written by these subcommands:
 
 All files are mode `0o600`; the cache directory is mode `0o700`.
 
+### Transparent error clarification
+
+Beyond the subcommands, the fork adds a **passive** enhancement:
+when a `nh os switch/boot/test` activation fails, or a `nix` build /
+eval returns a cryptic error, `error_clarify` (in
+`crates/nh-nixos/src/error_clarify.rs`) recognizes known error
+classes — conflicting option definitions, failed NixOS assertions,
+fixed-output hash mismatch, unknown NixOS option, impure path in
+pure eval — and prints an actionable, readable block instead of the
+default `color_eyre` report. It is not a subcommand: there is
+nothing to invoke, it just makes existing `nh os` failures legible.
+
 ---
 
 ## Architecture overview
@@ -104,17 +116,24 @@ This is a Cargo workspace inherited unchanged from upstream nh:
 
 ```
 crates/
-├── nh/         binary entry + clap top-level dispatch
-├── nh-core/    exec layer, args, installable, update
-├── nh-nixos/   NixOS rebuild, generations, rollback     ← cheni-spec modules live here
-├── nh-clean/   GC
-├── nh-darwin/  nix-darwin
-├── nh-home/    home-manager
-├── nh-remote/  remote rebuilds
-└── nh-search/  search.nixos.org
+├── nh/             binary entry + clap top-level dispatch
+├── nh-core/        exec layer, args, update
+├── nh-nixos/       NixOS rebuild, generations, rollback   ← cheni-spec modules live here
+├── nh-clean/       GC
+├── nh-config/      nh config-file handling (upstream)
+├── nh-darwin/      nix-darwin
+├── nh-diff/        generation diffing (upstream)
+├── nh-home/        home-manager
+├── nh-installable/ installable (flakeref / attr) resolution (upstream)
+├── nh-remote/      remote rebuilds
+├── nh-search/      search.nixos.org
+└── nix-command/    schema-driven builder for nix subcommands (upstream)
 
-xtask/          man-page + completions generation
+xtask/              man-page + completions generation
 ```
+
+(`nh-config`, `nh-diff`, `nh-installable`, `nix-command` arrived
+with the nh 4.4.x upstream merges — pure upstream nh, no cheni code.)
 
 The cheni-specific code is **all inside `crates/nh-nixos/`** — we
 deliberately don't touch upstream nh elsewhere, so future
@@ -133,6 +152,9 @@ self_update.rs    nix flake update <cheni> [+ chained switch]
 versioning.rs     parse / compare / is_prerelease (version helpers)
 version_cache.rs  on-disk cache for nix eval results (infra)
 cheni_meta.rs     read the option-B version components at runtime
+error_clarify.rs  turn cryptic nix build/eval + activation failures
+                  into an actionable, readable block (transparent hook,
+                  not a subcommand)
 cheni_util/       shared utilities (atomic, time, validation, flake)
    ├── atomic.rs       atomic file write (tmp + fsync + rename, 0o600, O_NOFOLLOW)
    ├── time.rs         RFC 3339 / ISO date helpers (no chrono dep)
@@ -146,9 +168,12 @@ upstream merges stay friction-free):
 | File | What we add |
 |---|---|
 | `crates/nh-nixos/src/args.rs` | `OsXxxArgs` structs and `OsSubcommand::Xxx` variants for every cheni subcommand, plus their `FeatureRequirements` arms |
-| `crates/nh-nixos/src/nixos.rs` | One dispatch arm per subcommand: `OsSubcommand::Xxx(args) => args.run()` |
+| `crates/nh-nixos/src/nixos.rs` | One dispatch arm per subcommand: `OsSubcommand::Xxx(args) => args.run()`, plus `pub(crate) const ACTIVATION_MSG` (error_clarify recognizer anchor) |
 | `crates/nh-nixos/src/lib.rs` | `pub mod` declarations for the cheni-spec modules |
+| `crates/nh/src/main.rs` | error_clarify hook in the top-level `Err` arm (renders the readable block instead of the default report) |
 | `crates/nh/build.rs` | Decomposes the option-B workspace version into `CHENI_FULL_VERSION` for clap to display |
+| `crates/nh-core/src/command.rs` | `NIX_BUILD_ERROR_MARKER` const + `extract_nix_error_raw_msgs` + tee of `Build::run`'s nom branch (error_clarify v2) |
+| `crates/nh-core/src/lib.rs` | `pub use command::NIX_BUILD_ERROR_MARKER` |
 | `Cargo.toml` (workspace) | The option-B version string + serde / regex deps for cheni-spec modules |
 | `package.nix`, `flake.nix` | `pname = "nh-cheni"`, `mainProgram = "nh"`, points to gitlab.com/harrael/nh-cheni |
 

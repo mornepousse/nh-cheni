@@ -25,8 +25,11 @@ No community ambition, no upstream contributions to nh.
   scope.
 - ❌ No upstream PRs to nh — we don't bother the maintainers.
 - ❌ Not a from-scratch reimplementation — it's a fork that follows nh.
-- ❌ No CI: local quality gates suffice (`cargo test && cargo clippy
-  && nix flake check`).
+- ❌ No *general* CI — local quality gates are the day-to-day gate
+  (`./scripts/check.sh`). The one exception is a **release CI** on
+  the GitHub mirror (`.github/workflows/release.yml`): a `v*` tag
+  pushed to GitLab mirrors to GitHub, which builds `nh-cheni` and
+  publishes a GitHub Release with the binary attached.
 
 ## Repo
 
@@ -37,9 +40,12 @@ No community ambition, no upstream contributions to nh.
   out to nh; rollback target).
 - **Local checkout**: `~/cheni/`
 
-The GitHub mirror `mornepousse/cheni` (configured on the GitLab
-side) is a historical artifact; reconfigure or delete it post-
-pivot when convenient.
+The GitHub mirror `mornepousse/nh-cheni` (configured on the GitLab
+side) is no longer just a historical artifact: since 2026-07-14 it
+hosts the **release CI** (`.github/workflows/release.yml`, its only
+workflow). A `v*` tag pushed to GitLab mirrors to GitHub, which
+builds `nh-cheni` and publishes a GitHub Release with the binary
+attached. `gh` is authenticated on the `mornepousse` account.
 
 ## Architecture
 
@@ -48,23 +54,32 @@ upstream:
 
 ```
 crates/
-├── nh/         # main binary + top-level CLI dispatch (clap)
-├── nh-core/    # exec layer, args, installable, update
-├── nh-nixos/   # rebuild, generations, rollback
-│               # ← cheni-spec modules live HERE alongside upstream files
-├── nh-clean/   # GC
-├── nh-darwin/  # nix-darwin
-├── nh-home/    # home-manager
-├── nh-remote/  # remote rebuilds
-└── nh-search/  # search.nixos.org
-xtask/          # man-page + completions generation
+├── nh/             # main binary + top-level CLI dispatch (clap)
+├── nh-core/        # exec layer, args, update
+├── nh-nixos/       # rebuild, generations, rollback
+│                   # ← cheni-spec modules live HERE alongside upstream files
+├── nh-clean/       # GC
+├── nh-config/      # nh config-file handling (upstream)
+├── nh-darwin/      # nix-darwin
+├── nh-diff/        # generation diffing (upstream)
+├── nh-home/        # home-manager
+├── nh-installable/ # installable (flakeref / attr) resolution (upstream)
+├── nh-remote/      # remote rebuilds
+├── nh-search/      # search.nixos.org
+└── nix-command/    # schema-driven builder for nix subcommands (upstream)
+xtask/              # man-page + completions generation
 ```
+
+(`nh-config`, `nh-diff`, `nh-installable`, `nix-command` are
+upstream nh crates that landed with the nh 4.4.x merges — no
+cheni code lives in them.)
 
 The cheni-specific code is **all inside `crates/nh-nixos/`**, in
 flat-named modules: `pins.rs`, `freezes.rs`, `timeline.rs`,
 `events.rs`, `check.rs`, `doctor.rs`, `bug_report.rs`,
 `self_update.rs`, `versioning.rs`, `version_cache.rs`,
-`cheni_meta.rs`. Shared utilities live under
+`cheni_meta.rs`, `error_clarify.rs` (nix build/eval + activation
+error comprehension). Shared utilities live under
 `crates/nh-nixos/src/cheni_util/{atomic,time,validation,flake}.rs`.
 
 The cheni-spec **additions to upstream nh files** are kept tiny
@@ -210,6 +225,17 @@ Post-pivot polish (2026-05-02):
 - ✅ Audit + `cheni_util` extraction + TOCTOU/rev-validation
    security fixes (14ba73f).
 - ✅ Comprehensive README rewrite (9158f4c).
+
+Feature work since the pivot:
+- ✅ Merged upstream nh 4.4.0 then 4.4.1 (nh-base bumps; new upstream
+  crates `nh-config`, `nh-diff`, `nh-installable`, `nix-command`).
+- ✅ `error_clarify` — nix build/eval + activation error comprehension
+  (`crates/nh-nixos/src/error_clarify.rs`), shipped across cheni-layer
+  0.3.0 → 0.3.2 (conflict/assert/hash-mismatch, then unknown-option
+  and impure-path-in-pure-eval).
+- ✅ Release CI on the GitHub mirror (2026-07-14, commit c448d97).
+
+**Current version: `4.4.1+cheni.0.3.3`.**
 
 The detailed plan archive is at
 `/home/mae/.claude/plans/vast-meandering-peacock.md`.
