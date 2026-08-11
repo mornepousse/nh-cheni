@@ -14,15 +14,59 @@ be put in the "Changed" section or, if it's just to remove code or
 functionality, under the "Removed" section.
 -->
 
-## Unreleased
+## 4.4.2
 
 ### Added
 
+- `nh` now supports the boolean `NH_ASK` environment variable as the environment
+  counterpart to `--ask`. When set, applicable commands behave as if `--ask` had
+  been passed explicitly, avoiding the need to specify it on every invocation
+  ([#418](https://github.com/nix-community/nh/issues/418)).
+- `nh search options` can now search nix-darwin options via a new
+  `--scope=nix-darwin` value. The default `--scope=all` now searches nix-darwin
+  options in addition to NixOS, modular service, and home-manager options.
+- `nh search packages` and `nh search options` accept `--backend-version`
+  (`NH_SEARCH_BACKEND_VERSION`) to override the search.nixos.org index version
+  and `--backend-version-fallbacks` (`NH_SEARCH_BACKEND_FALLBACKS`, default `1`)
+  to control how many newer versions are tried when the requested one is
+  outdated. This lets users point nh at a newer index without waiting for a
+  release.
+
 ### Changed
+
+- Results package queries with `nh search`/`nh search packages` now displays the
+  `meta.mainProgram` attribute of the packages where applicable.
 
 ### Fixed
 
-### 4.4.1
+- `nh search` now queries the current search.nixos.org backend index version.
+  The bundled version had fallen behind the one served by search.nixos.org,
+  which returned results from a stale index. When the bundled version is
+  outdated, nh now retries newer index versions before failing (configurable via
+  `--backend-version-fallbacks`) so a single upstream bump no longer breaks
+  search between releases
+  ([#750](https://github.com/nix-community/nh/discussions/750)).
+- `nh search` now renders package and option results immediately after the
+  search backend responds instead of blocking while fetching and evaluating a
+  mutable nixpkgs channel. Local `Defined at` links now resolve the ambient
+  nixpkgs lookup path offline
+  ([#732](https://github.com/nix-community/nh/issues/732)).
+- Parameterized local flake references such as `path:/repo?dir=nix/flakes` and
+  `./nix?submodules=1` are now passed through to Nix instead of being rejected
+  by nh's local path validation
+  ([#733](https://github.com/nix-community/nh/issues/733)).
+- `nh search prs` and `nh search issues` now search pull requests and issues
+  updated in the requested `--days` window instead of only items created in that
+  window.
+- `nh` now properly errors when the provided or stored GitHub token is invalid
+  or malformed.
+- `nh darwin` now properly caches in root user's home directory on macOS instead
+  of in working directory
+  ([#739](https://github.com/nix-community/nh/issues/739))
+
+### Removed
+
+## 4.4.1
 
 ### Fixed
 
@@ -39,8 +83,6 @@ functionality, under the "Removed" section.
   - `nh clean` no longer aborts entirely when a gcroot target lives on a
     read-only-mounted Nix store or otherwise can't be write-checked for a known,
     expected reason (`EACCES`, `EROFS`, `EPERM`)..
-
-### Removed
 
 ## 4.4.0
 

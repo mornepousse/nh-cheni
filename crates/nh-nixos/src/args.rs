@@ -14,21 +14,7 @@ use nh_core::{
 use nh_installable::{CommandContext, InstallableArgs};
 use nh_remote::RemoteHost;
 
-use crate::{
-  // Result,
-  //   checks::{
-  //     DarwinReplFeatures,
-  //     FeatureRequirements,
-  //     FlakeFeatures,
-  //     HomeReplFeatures,
-  //     LegacyFeatures,
-  //     NoFeatures,
-  //     OsReplFeatures,
-  //   },
-  //   commands::ElevationStrategy,
-  generations::Field,
-  //   remote::RemoteHost,
-};
+use crate::generations::Field;
 
 #[derive(Args, Debug)]
 #[clap(verbatim_doc_comment)]
@@ -397,7 +383,12 @@ pub struct OsRollbackArgs {
   pub dry: bool,
 
   /// Ask for confirmation
-  #[arg(long, short)]
+  #[arg(
+    long,
+    short,
+    env = "NH_ASK",
+    value_parser = clap::builder::BoolishValueParser::new()
+  )]
   pub ask: bool,
 
   /// Explicitly select some specialisation
@@ -429,7 +420,12 @@ pub struct CommonRebuildArgs {
   pub dry: bool,
 
   /// Ask for confirmation
-  #[arg(long, short)]
+  #[arg(
+    long,
+    short,
+    env = "NH_ASK",
+    value_parser = clap::builder::BoolishValueParser::new()
+  )]
   pub ask: bool,
 
   #[command(flatten)]
