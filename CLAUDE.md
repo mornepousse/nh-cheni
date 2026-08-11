@@ -235,7 +235,7 @@ Feature work since the pivot:
   and impure-path-in-pure-eval).
 - ✅ Release CI on the GitHub mirror (2026-07-14, commit c448d97).
 
-**Current version: `4.4.1+cheni.0.3.3`.**
+**Current version: `4.4.2+cheni.0.3.3`.**
 
 The detailed plan archive is at
 `/home/mae/.claude/plans/vast-meandering-peacock.md`.
