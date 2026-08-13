@@ -111,6 +111,7 @@ impl args::OsArgs {
       OsSubcommand::Doctor(args) => args.run(),
       OsSubcommand::Check(args) => args.run(),
       OsSubcommand::SelfUpdate(args) => args.run(),
+      OsSubcommand::Pkg(args) => args.run(),
     }
   }
 }

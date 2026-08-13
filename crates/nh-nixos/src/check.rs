@@ -97,14 +97,45 @@ pub fn query_pkg_version(
   pkg_name: &str,
 ) -> Option<String> {
   for attr in [pkg_name.to_string(), format!("kdePackages.{pkg_name}")] {
-    if let Some(v) = query_one(rev, nar_hash, &attr) {
+    if let Some(v) = query_field(rev, nar_hash, &attr, "version") {
       return Some(v);
     }
   }
   None
 }
 
-fn query_one(rev: &str, nar_hash: &str, attr: &str) -> Option<String> {
+/// Query `pkgs.<pkg_name>.meta.description` against nixpkgs pinned at
+/// `(rev, nar_hash)`, with the same bare/`kdePackages.` fallback as
+/// [`query_pkg_version`]. Returns `None` if the package has no
+/// description (or on any eval failure); an empty description is
+/// treated as absent.
+#[must_use]
+pub fn query_pkg_description(
+  rev: &str,
+  nar_hash: &str,
+  pkg_name: &str,
+) -> Option<String> {
+  // `field` is a trusted literal from our own code (never user input),
+  // so it is spliced without validation; only `attr` is untrusted and
+  // is validated inside `query_field`. The `or ""` guards packages
+  // that simply have no `meta.description`.
+  for attr in [pkg_name.to_string(), format!("kdePackages.{pkg_name}")] {
+    if let Some(v) = query_field(rev, nar_hash, &attr, "meta.description or \"\"")
+    {
+      if !v.is_empty() {
+        return Some(v);
+      }
+    }
+  }
+  None
+}
+
+fn query_field(
+  rev: &str,
+  nar_hash: &str,
+  attr: &str,
+  field: &str,
+) -> Option<String> {
   // Defence in depth: validate inputs before splicing into the Nix
   // expression. The pins/freezes modules already validate at write
   // time, but this function is reachable from `read_input_locked`
@@ -136,7 +167,7 @@ fn query_one(rev: &str, nar_hash: &str, attr: &str) -> Option<String> {
 type = \"github\"; owner = \"NixOS\"; repo = \"nixpkgs\"; \
 rev = \"{rev}\"; narHash = \"{nar_hash}\"; \
 }}) {{ system = \"{system}\"; config.allowUnfree = true; }}; \
-in pkgs.{attr}.version"
+in pkgs.{attr}.{field}"
   );
 
   let out = match Command::new("nix")

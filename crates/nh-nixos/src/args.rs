@@ -82,6 +82,7 @@ impl OsArgs {
       | OsSubcommand::Doctor(_) => Box::new(NoFeatures),
       OsSubcommand::Freeze(_)
       | OsSubcommand::Check(_)
+      | OsSubcommand::Pkg(_)
       | OsSubcommand::SelfUpdate(_) => Box::new(FlakeFeatures),
     }
   }
@@ -150,6 +151,10 @@ pub enum OsSubcommand {
   /// Pull the latest cheni-fork commit into your flake.
   /// (cheni extension)
   SelfUpdate(OsSelfUpdateArgs),
+
+  /// Show a package's version: installed vs available in nixpkgs.
+  /// (cheni extension)
+  Pkg(OsPkgArgs),
 }
 
 #[derive(Debug, Args)]
@@ -262,6 +267,18 @@ pub struct OsCheckArgs {
   /// Path to your NixOS flake — used to read pins/freezes and the
   /// `nixpkgs` / `nixpkgs-latest` input revs. Resolved the same way
   /// as `os pin --flake-dir`.
+  #[arg(long, value_name = "PATH")]
+  pub flake_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct OsPkgArgs {
+  /// Package name to inspect (e.g. `gparted`, `firefox`).
+  pub name: String,
+
+  /// Path to your NixOS flake — used to read the `nixpkgs` input rev
+  /// (for the available version) and the pin/freeze state. Resolved
+  /// the same way as `os pin --flake-dir`.
   #[arg(long, value_name = "PATH")]
   pub flake_dir: Option<PathBuf>,
 }

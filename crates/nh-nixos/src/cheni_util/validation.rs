@@ -23,6 +23,9 @@ pub fn package_name(name: &str) -> Result<()> {
     if name.is_empty() {
         bail!("Package name is empty");
     }
+    if name == "." || name == ".." {
+        bail!("Package name '{name}' is a path component, not a package");
+    }
     if name.len() > 128 {
         bail!(
             "Package name '{}…' is suspiciously long ({} chars, max 128)",
@@ -145,6 +148,8 @@ mod tests {
     #[test]
     fn package_name_rejects_invalid() {
         assert!(package_name("").is_err());
+        assert!(package_name(".").is_err());
+        assert!(package_name("..").is_err());
         assert!(package_name("foo/bar").is_err());
         assert!(package_name("with\nnewline").is_err());
         assert!(package_name("with\"quote").is_err());

@@ -10,6 +10,7 @@ pub mod freezes;
 pub mod generations;
 pub mod nixos;
 pub mod pins;
+pub mod pkg;
 pub mod self_update;
 pub mod timeline;
 pub mod version_cache;
