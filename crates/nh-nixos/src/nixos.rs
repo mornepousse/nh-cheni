@@ -112,6 +112,7 @@ impl args::OsArgs {
       OsSubcommand::Check(args) => args.run(),
       OsSubcommand::SelfUpdate(args) => args.run(),
       OsSubcommand::Pkg(args) => args.run(),
+      OsSubcommand::Errors(args) => args.run(),
     }
   }
 }

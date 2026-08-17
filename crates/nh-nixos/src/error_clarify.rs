@@ -155,6 +155,16 @@ pub(crate) fn try_clarify_with(
     // survived filtering; if `parse_nix_failures` dropped everything as
     // pure propagation blocks, fall through to the default report below.
     if !failures.is_empty() {
+      // Corpus: an eval error (no `.drv`) that no specific clarifier
+      // matched is a recognition gap — record it so its frequency can
+      // guide which recognizer to add next (`nh os errors`). Build
+      // failures already get the right drv + `nix log` treatment, so
+      // they are not recorded.
+      if is_eval_only(&failures) {
+        for f in &failures {
+          crate::error_corpus::record(&f.summary);
+        }
+      }
       return Some(render_nix_block(&failures));
     }
   }
@@ -308,6 +318,15 @@ pub(crate) fn parse_nix_failures(text: &str) -> Vec<NixFailure> {
 /// True if the report is a captured nix build/eval failure (marker present).
 pub(crate) fn recognize_nix_build(report: &str) -> bool {
   report.contains(nh_core::NIX_BUILD_ERROR_MARKER)
+}
+
+/// True when every parsed failure is an eval error (no derivation) —
+/// the generic eval fallback, which is the corpus recording point. A
+/// build failure (any `.drv` present) must NOT be recorded, since it
+/// already gets the right drv + `nix log` treatment. Pure; empty input
+/// is not eval-only (nothing to record).
+fn is_eval_only(failures: &[NixFailure]) -> bool {
+  !failures.is_empty() && failures.iter().all(|f| f.drv.is_none())
 }
 
 /// Render the clarified nix-failure block. Pure given `failures`.
@@ -773,6 +792,29 @@ Output paths:\n  /nix/store/yyy-top";
     let report = format!("{}\nCannot build '/nix/store/x.drv'.", nh_core::NIX_BUILD_ERROR_MARKER);
     assert!(recognize_nix_build(&report));
     assert!(!recognize_nix_build("some unrelated error"));
+  }
+
+  fn eval_failure(summary: &str) -> NixFailure {
+    NixFailure { drv: None, summary: summary.into(), log_lines: vec![], log_cmd: None }
+  }
+
+  #[test]
+  fn is_eval_only_true_when_every_failure_lacks_a_drv() {
+    let fails = vec![eval_failure("undefined variable 'x'"), eval_failure("infinite recursion")];
+    assert!(is_eval_only(&fails));
+  }
+
+  #[test]
+  fn is_eval_only_false_for_build_failures_or_empty() {
+    let mut mixed = vec![eval_failure("eval error")];
+    mixed.push(NixFailure {
+      drv:       Some("/nix/store/x.drv".into()),
+      summary:   "builder failed".into(),
+      log_lines: vec![],
+      log_cmd:   None,
+    });
+    assert!(!is_eval_only(&mixed), "any drv present → not eval-only (a build failure)");
+    assert!(!is_eval_only(&[]), "empty → nothing to record");
   }
 
   #[test]

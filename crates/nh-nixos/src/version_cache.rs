@@ -35,8 +35,8 @@
 //! - `atomic::write(path, bytes)` — write the cache JSON
 //!   atomically. Used inside [`VersionCache::save`].
 //!
-//! Local helper `create_private_dir` (defined at the bottom of this
-//! file) creates the cache directory with mode 0o700 explicitly,
+//! `cheni_util::cache::ensure_dir` creates the cache directory with
+//! mode 0o700 explicitly,
 //! since `fs::create_dir_all` would inherit the user's umask and
 //! produce a 0o755 (world-readable-listing) directory.
 
@@ -66,17 +66,7 @@ pub struct VersionCache {
 /// Matches the wrapper-era location bit-for-bit so an existing cache
 /// file is reused.
 pub fn cache_path() -> PathBuf {
-  cache_dir().join("version-cache.json")
-}
-
-fn cache_dir() -> PathBuf {
-  if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-    return PathBuf::from(xdg).join("cheni");
-  }
-  if let Some(home) = std::env::var_os("HOME") {
-    return PathBuf::from(home).join(".cache").join("cheni");
-  }
-  PathBuf::from("/tmp").join("cheni")
+  crate::cheni_util::cache::file("version-cache.json")
 }
 
 /// Best-effort delete of the cache file. Used by future
@@ -192,7 +182,7 @@ impl VersionCache {
   /// the atomic write fails.
   pub fn save(&self, path: &Path) -> Result<()> {
     if let Some(parent) = path.parent() {
-      create_private_dir(parent)
+      crate::cheni_util::cache::ensure_dir(parent)
         .with_context(|| format!("creating {}", parent.display()))?;
     }
     let body = serde_json::to_string_pretty(self)
@@ -200,25 +190,6 @@ impl VersionCache {
     atomic::write(path, body.as_bytes())?;
     debug!("version_cache: saved to {}", path.display());
     Ok(())
-  }
-}
-
-/// Create the cache directory with mode 0o700 on Unix so the file
-/// listing is private to the user. `create_dir_all` alone uses the
-/// process umask (typically 0o022 → 0o755 → world-readable
-/// listing), which leaks the existence of cached entries.
-fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-  #[cfg(unix)]
-  {
-    use std::os::unix::fs::DirBuilderExt;
-    fs::DirBuilder::new()
-      .recursive(true)
-      .mode(0o700)
-      .create(dir)
-  }
-  #[cfg(not(unix))]
-  {
-    fs::create_dir_all(dir)
   }
 }
 

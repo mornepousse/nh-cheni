@@ -79,6 +79,7 @@ impl OsArgs {
       | OsSubcommand::Timeline(_)
       | OsSubcommand::Events(_)
       | OsSubcommand::BugReport(_)
+      | OsSubcommand::Errors(_)
       | OsSubcommand::Doctor(_) => Box::new(NoFeatures),
       OsSubcommand::Freeze(_)
       | OsSubcommand::Check(_)
@@ -155,6 +156,10 @@ pub enum OsSubcommand {
   /// Show a package's version: installed vs available in nixpkgs.
   /// (cheni extension)
   Pkg(OsPkgArgs),
+
+  /// Review the corpus of nix errors `error_clarify` didn't recognize,
+  /// ranked by frequency. (cheni extension)
+  Errors(OsErrorsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -281,6 +286,17 @@ pub struct OsPkgArgs {
   /// the same way as `os pin --flake-dir`.
   #[arg(long, value_name = "PATH")]
   pub flake_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct OsErrorsArgs {
+  /// Max number of error patterns to show (default 20).
+  #[arg(long, value_name = "N")]
+  pub limit: Option<usize>,
+
+  /// Clear the collected corpus instead of showing it.
+  #[arg(long)]
+  pub clear: bool,
 }
 
 #[derive(Debug, Args)]

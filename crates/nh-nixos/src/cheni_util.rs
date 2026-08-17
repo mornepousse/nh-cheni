@@ -10,6 +10,7 @@
 //! `cheni_util/<name>.rs`.
 
 pub mod atomic;
+pub mod cache;
 pub mod flake;
 pub mod time;
 pub mod validation;

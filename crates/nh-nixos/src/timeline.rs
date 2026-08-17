@@ -27,14 +27,14 @@
 //!   under the same name. Used by `events::build_rows` to slot
 //!   events into generations.
 //!
-//! Local helper `create_private_dir` (defined inline) creates the
-//! cache directory with mode 0o700 explicitly so the existence of
-//! events isn't disclosed via `ls`.
+//! `cheni_util::cache::ensure_dir` creates the cache directory with
+//! mode 0o700 explicitly so the existence of events isn't disclosed
+//! via `ls`.
 
 use std::{
   fs,
   io::Write,
-  path::{Path, PathBuf},
+  path::PathBuf,
 };
 
 use color_eyre::eyre::Result;
@@ -75,17 +75,7 @@ fn empty_object() -> serde_json::Value {
 
 /// Canonical path to the on-disk timeline.
 pub fn timeline_path() -> PathBuf {
-  cache_dir().join("timeline.jsonl")
-}
-
-fn cache_dir() -> PathBuf {
-  if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
-    return PathBuf::from(xdg).join("cheni");
-  }
-  if let Some(home) = std::env::var_os("HOME") {
-    return PathBuf::from(home).join(".cache").join("cheni");
-  }
-  PathBuf::from("/tmp").join("cheni")
+  crate::cheni_util::cache::file("timeline.jsonl")
 }
 
 /// Append an event to the timeline. Best-effort: any IO error is
@@ -109,7 +99,7 @@ pub fn record(
 fn append_event(event: &Event) -> Result<()> {
   let path = timeline_path();
   if let Some(parent) = path.parent() {
-    create_private_dir(parent)?;
+    crate::cheni_util::cache::ensure_dir(parent)?;
   }
   let mut line = serde_json::to_string(event)?;
   line.push('\n');
@@ -133,23 +123,6 @@ fn append_event(event: &Event) -> Result<()> {
   // partial line at most, which read_events skips silently.
   file.sync_data().ok();
   Ok(())
-}
-
-/// Create the cache directory with mode 0o700 on Unix so that the
-/// existence of timeline events isn't disclosed to other local users.
-fn create_private_dir(dir: &Path) -> std::io::Result<()> {
-  #[cfg(unix)]
-  {
-    use std::os::unix::fs::DirBuilderExt;
-    fs::DirBuilder::new()
-      .recursive(true)
-      .mode(0o700)
-      .create(dir)
-  }
-  #[cfg(not(unix))]
-  {
-    fs::create_dir_all(dir)
-  }
 }
 
 /// Read all events from disk. Returns an empty Vec if the file
