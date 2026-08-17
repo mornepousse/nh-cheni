@@ -80,6 +80,7 @@ impl OsArgs {
       | OsSubcommand::Events(_)
       | OsSubcommand::BugReport(_)
       | OsSubcommand::Errors(_)
+      | OsSubcommand::Gen(_)
       | OsSubcommand::Doctor(_) => Box::new(NoFeatures),
       OsSubcommand::Freeze(_)
       | OsSubcommand::Check(_)
@@ -160,6 +161,10 @@ pub enum OsSubcommand {
   /// Review the corpus of nix errors `error_clarify` didn't recognize,
   /// ranked by frequency. (cheni extension)
   Errors(OsErrorsArgs),
+
+  /// Browse NixOS generations: list with size deltas, or diff two with
+  /// `--diff A [B]`. (cheni extension)
+  Gen(OsGenArgs),
 }
 
 #[derive(Debug, Args)]
@@ -297,6 +302,18 @@ pub struct OsErrorsArgs {
   /// Clear the collected corpus instead of showing it.
   #[arg(long)]
   pub clear: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct OsGenArgs {
+  /// Path to the Nix system profile symlink.
+  #[arg(long, short = 'P', default_value = "/nix/var/nix/profiles/system")]
+  pub profile: Option<String>,
+
+  /// Diff two generations: `--diff A [B]`. B defaults to the current
+  /// generation. Without this flag, lists all generations.
+  #[arg(long, value_name = "GEN", num_args = 1..=2)]
+  pub diff: Option<Vec<u64>>,
 }
 
 #[derive(Debug, Args)]

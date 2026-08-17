@@ -8,6 +8,7 @@ pub mod error_clarify;
 pub mod error_corpus;
 pub mod events;
 pub mod freezes;
+pub mod gen_nav;
 pub mod generations;
 pub mod nixos;
 pub mod pins;
