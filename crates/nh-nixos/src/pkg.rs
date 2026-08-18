@@ -245,7 +245,7 @@ fn strip_hash(store_name: &str) -> Option<&str> {
 
 /// The `/nix/store/<name>` directory name of a canonicalized path.
 /// `/nix/store/abc-gparted-1.8.1/bin/gparted` → `abc-gparted-1.8.1`.
-fn store_name(path: &Path) -> Option<String> {
+pub(crate) fn store_name(path: &Path) -> Option<String> {
   let rel = path.strip_prefix("/nix/store").ok()?;
   rel
     .components()
@@ -268,7 +268,7 @@ fn store_version_for(store_name: &str, name: &str) -> Option<String> {
 /// first `-`-segment that begins with a digit. `abc-gtk+3-3.24.0`
 /// → (`gtk+3`, `3.24.0`). Returns `None` if no such segment, or if the
 /// very first segment is already numeric (no room for a pname).
-fn store_version_any(store_name: &str) -> Option<(String, String)> {
+pub(crate) fn store_version_any(store_name: &str) -> Option<(String, String)> {
   let rest = strip_hash(store_name)?;
   let segs: Vec<&str> = rest.split('-').collect();
   let idx = segs

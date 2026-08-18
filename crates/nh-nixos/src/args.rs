@@ -306,14 +306,23 @@ pub struct OsErrorsArgs {
 
 #[derive(Debug, Args)]
 pub struct OsGenArgs {
+  /// A generation number: show its detail (full metadata + diff vs the
+  /// previous generation). Without it, lists all generations.
+  pub generation: Option<u64>,
+
   /// Path to the Nix system profile symlink.
   #[arg(long, short = 'P', default_value = "/nix/var/nix/profiles/system")]
   pub profile: Option<String>,
 
   /// Diff two generations: `--diff A [B]`. B defaults to the current
-  /// generation. Without this flag, lists all generations.
+  /// generation.
   #[arg(long, value_name = "GEN", num_args = 1..=2)]
   pub diff: Option<Vec<u64>>,
+
+  /// In the list, add a `+added -removed ~changed` package summary per
+  /// generation (opt-in — it diffs each consecutive pair).
+  #[arg(long)]
+  pub changes: bool,
 }
 
 #[derive(Debug, Args)]

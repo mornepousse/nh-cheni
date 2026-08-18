@@ -1,17 +1,22 @@
 //! `nh os gen` — browse NixOS generations.
 //!
-//! Two modes:
-//!   - list (default): every generation with its date, closure size, and
-//!     the size delta versus the previous generation, current one marked;
-//!   - `--diff A [B]`: the package-level diff between generations A and B
-//!     (B defaults to the current generation), via the same `dix` engine
-//!     nh shows at switch time — but on demand, between any two.
+//! Modes:
+//!   - list (default): every generation with date, closure size, size
+//!     delta vs the previous one, kernel, and current `→` / booted `●`
+//!     markers (which differ after a switch without reboot). `--changes`
+//!     adds a per-line `+added -removed ~changed` package summary (opt-in
+//!     — it diffs each consecutive pair, so it's not free).
+//!   - `<N>`: a detail view of one generation (full metadata + its
+//!     package diff versus the previous generation).
+//!   - `--diff A [B]`: the package diff between generations A and B
+//!     (B defaults to the current generation).
 //!
-//! `nh os info` (upstream) already lists generations + closure size; this
-//! adds the size delta and, crucially, the retrospective diff. Upstream
-//! `generations.rs` is reused read-only (`describe`); raw closure sizes
-//! for the delta are fetched here (upstream only exposes formatted ones)
-//! so `generations.rs` stays untouched.
+//! Coupling to nh is kept to what the shipped `gen` already used —
+//! `generations::{describe, from_dir}` (read-only) and
+//! `nh_diff::print_dix_diff`. The `--changes` package counts are computed
+//! HERE from `nix-store --requisites` + cheni's own store-name parsing
+//! (no `dix` dependency), so a future upstream diff-engine change can't
+//! break them.
 
 use std::{
   collections::HashMap,
@@ -22,9 +27,10 @@ use std::{
 use color_eyre::eyre::{Result, bail};
 use tracing::debug;
 
-use crate::{args::OsGenArgs, generations};
+use crate::{args::OsGenArgs, generations, pkg, versioning::parse_version};
 
 const DEFAULT_PROFILE: &str = "/nix/var/nix/profiles/system";
+const BOOTED_SYSTEM: &str = "/run/booted-system";
 
 impl OsGenArgs {
   /// Run `nh os gen`.
@@ -32,29 +38,35 @@ impl OsGenArgs {
   /// # Errors
   ///
   /// Returns an error if the profile is missing, a requested generation
-  /// doesn't exist, or the `dix` diff can't be produced.
+  /// doesn't exist, or the diff can't be produced.
   pub fn run(self) -> Result<()> {
     let profile =
       PathBuf::from(self.profile.as_deref().unwrap_or(DEFAULT_PROFILE));
-    self.diff.as_ref().map_or_else(
-      || run_list(&profile),
-      |sel| run_diff(&profile, sel),
-    )
+    if let Some(sel) = self.diff.as_ref() {
+      return run_diff(&profile, sel);
+    }
+    if let Some(n) = self.generation {
+      return run_detail(&profile, n);
+    }
+    run_list(&profile, self.changes)
   }
 }
 
 /// One generation row for the list.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 struct Row {
   number:        u64,
   date:          String,
   nixos_version: String,
+  kernel:        String,
   current:       bool,
+  booted:        bool,
   /// Closure size in bytes; `None` when `path-info` couldn't resolve it.
   size:          Option<u64>,
+  link:          PathBuf,
 }
 
-fn run_list(profile: &Path) -> Result<()> {
+fn run_list(profile: &Path, changes: bool) -> Result<()> {
   let links = gen_links(profile)?;
   if links.is_empty() {
     println!("Aucune génération trouvée sous {}.", profile.display());
@@ -62,25 +74,56 @@ fn run_list(profile: &Path) -> Result<()> {
   }
   let refs: Vec<&Path> = links.iter().map(PathBuf::as_path).collect();
   let sizes = raw_closure_sizes(&refs);
+  let booted = std::fs::read_link(BOOTED_SYSTEM).ok();
 
   let mut rows: Vec<Row> = links
     .iter()
     .filter_map(|link| {
-      // Pass a dummy size so `describe` doesn't re-run `nix path-info`
-      // per generation (N+1) — `Row.size` comes from the single batched
-      // `raw_closure_sizes` call above; `info.closure_size` is unused.
+      // Dummy size so `describe` doesn't re-run `nix path-info` per
+      // generation (N+1) — sizes come from the single batched call.
       let info = generations::describe(link, Some(String::new()))?;
       Some(Row {
         number:        info.number,
         date:          info.date,
         nixos_version: info.nixos_version,
+        kernel:        info.kernel_version,
         current:       info.current,
+        booted:        link.read_link().ok().as_deref() == booted.as_deref(),
         size:          sizes.get(link).copied(),
+        link:          link.clone(),
       })
     })
     .collect();
   rows.sort_by_key(|r| r.number);
-  print_list(&rows);
+
+  let counts = changes.then(|| compute_change_counts(&rows));
+  print_list(&rows, counts.as_deref());
+  Ok(())
+}
+
+fn run_detail(profile: &Path, n: u64) -> Result<()> {
+  let link = gen_link_path(profile, n);
+  if !link.exists() {
+    bail!("génération {n} introuvable ({})", link.display());
+  }
+  let Some(info) = generations::describe(&link, None) else {
+    bail!("impossible de décrire la génération {n}");
+  };
+  let booted = std::fs::read_link(BOOTED_SYSTEM).ok();
+  let is_booted = link.read_link().ok().as_deref() == booted.as_deref();
+  print_detail(&info, is_booted);
+
+  let numbers: Vec<u64> = gen_links(profile)?
+    .iter()
+    .filter_map(|l| generations::from_dir(l))
+    .collect();
+  match previous_generation(&numbers, n) {
+    Some(prev) => {
+      println!("\nDiff paquets vs génération {prev} :");
+      nh_diff::print_dix_diff(&gen_link_path(profile, prev), &link)?;
+    },
+    None => println!("\n(première génération — pas de diff)"),
+  }
   Ok(())
 }
 
@@ -142,6 +185,12 @@ fn gen_link_path(profile: &Path, n: u64) -> PathBuf {
     .and_then(|s| s.to_str())
     .unwrap_or("system");
   dir.join(format!("{name}-{n}-link"))
+}
+
+/// The largest generation number strictly below `n` (handles gaps).
+/// Pure.
+fn previous_generation(numbers: &[u64], n: u64) -> Option<u64> {
+  numbers.iter().copied().filter(|&x| x < n).max()
 }
 
 // ── raw closure sizes (own fetch; upstream exposes only formatted) ──
@@ -219,6 +268,82 @@ fn parse_closure_sizes(json_text: &str) -> HashMap<String, u64> {
   out
 }
 
+/// `(added, removed, changed)` package counts.
+type Counts = (usize, usize, usize);
+/// Per-generation change counts (`None` for the first row / when a
+/// package set couldn't be resolved).
+type ChangeRow = Option<Counts>;
+
+// ── package-change counts (own fetch; no dix dependency) ───────────
+
+/// Package `pname → numeric version` of a generation's closure, from
+/// `nix-store --requisites` + cheni store-name parsing. Outputs (`-dev`,
+/// `-lib`, …) collapse under one pname since the version's non-numeric
+/// tail is dropped by [`parse_version`]. Best-effort (empty on failure).
+fn package_versions(link: &Path) -> HashMap<String, Vec<u64>> {
+  let out = match Command::new("nix-store")
+    // `--` so a link path can never be reparsed as a flag (matches
+    // `raw_closure_sizes`; defence in depth).
+    .args(["--query", "--requisites", "--"])
+    .arg(link)
+    .output()
+  {
+    Ok(o) if o.status.success() => o.stdout,
+    Ok(o) => {
+      debug!(
+        "gen: nix-store failed: {}",
+        String::from_utf8_lossy(&o.stderr).trim()
+      );
+      return HashMap::new();
+    },
+    Err(e) => {
+      debug!("gen: nix-store spawn failed: {e}");
+      return HashMap::new();
+    },
+  };
+  let text = String::from_utf8_lossy(&out);
+  let mut map = HashMap::new();
+  for line in text.lines() {
+    if let Some(name) = pkg::store_name(Path::new(line))
+      && let Some((pname, ver)) = pkg::store_version_any(&name)
+    {
+      map.insert(pname, parse_version(&ver));
+    }
+  }
+  map
+}
+
+/// Package set for each row, then the diff of each consecutive pair
+/// (`None` for the first). Each set is computed once.
+fn compute_change_counts(rows: &[Row]) -> Vec<ChangeRow> {
+  let sets: Vec<HashMap<String, Vec<u64>>> =
+    rows.iter().map(|r| package_versions(&r.link)).collect();
+  sets
+    .iter()
+    .enumerate()
+    .map(|(i, cur)| (i > 0).then(|| diff_counts(&sets[i - 1], cur)))
+    .collect()
+}
+
+/// `(added, removed, changed)` package counts between two `pname →
+/// version` maps. Pure.
+fn diff_counts(
+  old: &HashMap<String, Vec<u64>>,
+  new: &HashMap<String, Vec<u64>>,
+) -> Counts {
+  let mut added = 0;
+  let mut changed = 0;
+  for (name, nv) in new {
+    match old.get(name) {
+      None => added += 1,
+      Some(ov) if ov != nv => changed += 1,
+      Some(_) => {},
+    }
+  }
+  let removed = old.keys().filter(|k| !new.contains_key(*k)).count();
+  (added, removed, changed)
+}
+
 // ── formatting (pure) ──────────────────────────────────────────────
 
 /// The size delta of each row versus the previous one (input must be
@@ -277,31 +402,81 @@ fn fmt_delta(delta: Option<i64>) -> String {
   })
 }
 
+/// `+added -removed ~changed`, or empty when not requested. Pure.
+fn fmt_changes(counts: ChangeRow) -> String {
+  counts.map_or_else(String::new, |(a, r, c)| format!("+{a} -{r} ~{c}"))
+}
+
+/// First 12 chars of a git rev (short form). Pure.
+fn short_rev(rev: &str) -> String {
+  rev.chars().take(12).collect()
+}
+
 /// Trim an RFC 3339 timestamp to `YYYY-MM-DD HH:MM` for a compact list.
-/// Pure; returns the input unchanged if it's shorter than expected.
+/// Byte-boundary-safe; returns the input unchanged if it's shorter than
+/// expected. Pure.
 fn short_date(rfc: &str) -> String {
-  // "2026-08-17T08:48:37.417Z" → "2026-08-17 08:48".
-  // Byte-boundary-safe (`.get`) — no panic on unexpected multibyte input.
   match (rfc.get(..10), rfc.get(11..16), rfc.as_bytes().get(10)) {
     (Some(day), Some(hm), Some(b'T')) => format!("{day} {hm}"),
     _ => rfc.to_string(),
   }
 }
 
-fn print_list(rows: &[Row]) {
+fn print_list(rows: &[Row], changes: Option<&[ChangeRow]>) {
   let deltas = size_deltas(&rows.iter().map(|r| r.size).collect::<Vec<_>>());
-  println!("Générations ({}) — taille closure et Δ vs précédente :", rows.len());
+  println!(
+    "Générations ({}) — → courante, ● bootée{} :",
+    rows.len(),
+    if changes.is_some() { " · Δ paquets +a -r ~c" } else { "" }
+  );
   // Newest first for reading; deltas were computed in ascending order.
   for (i, r) in rows.iter().enumerate().rev() {
-    let marker = if r.current { "→" } else { " " };
+    let mark = format!(
+      "{}{}",
+      if r.current { "→" } else { " " },
+      if r.booted { "●" } else { " " },
+    );
+    let chg = changes
+      .and_then(|c| c.get(i))
+      .map_or_else(String::new, |o| fmt_changes(*o));
     println!(
-      "{marker} {:>4}  {:>16}  {:>9}  {:>9}  {}",
+      "{mark} {:>4}  {:>16}  {:>9}  {:>9}  {:<22}  {:<12} {}",
       r.number,
       short_date(&r.date),
       fmt_size(r.size),
       fmt_delta(deltas[i]),
       r.nixos_version,
+      r.kernel,
+      chg,
     );
+  }
+}
+
+fn print_detail(info: &generations::GenerationInfo, booted: bool) {
+  let mut tags = Vec::new();
+  if info.current {
+    tags.push("courante");
+  }
+  if booted {
+    tags.push("bootée");
+  }
+  let tag = if tags.is_empty() {
+    String::new()
+  } else {
+    format!("  [{}]", tags.join(", "))
+  };
+  println!("Génération {}{tag}", info.number);
+  println!("  date       : {}", short_date(&info.date));
+  println!("  nixos      : {}", info.nixos_version);
+  println!("  kernel     : {}", info.kernel_version);
+  println!("  closure    : {}", info.closure_size);
+  if let Some(rev) = &info.configuration_revision {
+    println!("  config rev : {}", short_rev(rev));
+  }
+  if let Some(specs) = &info.specialisations
+    && !specs.is_empty()
+  {
+    println!("  spéciales  : {}", specs.join(", "));
   }
 }
 
@@ -323,6 +498,55 @@ mod tests {
   }
 
   #[test]
+  fn previous_generation_picks_largest_below() {
+    let nums = [237, 238, 242, 244];
+    assert_eq!(previous_generation(&nums, 242), Some(238));
+    assert_eq!(previous_generation(&nums, 244), Some(242));
+    assert_eq!(previous_generation(&nums, 237), None); // oldest
+    assert_eq!(previous_generation(&nums, 999), Some(244));
+  }
+
+  #[test]
+  fn diff_counts_adds_removes_changes() {
+    let old: HashMap<String, Vec<u64>> = [
+      ("firefox".to_string(), vec![130]),
+      ("git".to_string(), vec![2, 54]),
+      ("gone".to_string(), vec![1]),
+    ]
+    .into_iter()
+    .collect();
+    let new: HashMap<String, Vec<u64>> = [
+      ("firefox".to_string(), vec![131]), // changed
+      ("git".to_string(), vec![2, 54]),   // unchanged
+      ("hello".to_string(), vec![2]),     // added
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(diff_counts(&old, &new), (1, 1, 1));
+  }
+
+  #[test]
+  fn diff_counts_empty_sides() {
+    let empty = HashMap::new();
+    let one: HashMap<String, Vec<u64>> =
+      std::iter::once(("a".to_string(), vec![1])).collect();
+    assert_eq!(diff_counts(&empty, &one), (1, 0, 0));
+    assert_eq!(diff_counts(&one, &empty), (0, 1, 0));
+  }
+
+  #[test]
+  fn fmt_changes_formats_or_blanks() {
+    assert_eq!(fmt_changes(Some((1, 2, 3))), "+1 -2 ~3");
+    assert_eq!(fmt_changes(None), "");
+  }
+
+  #[test]
+  fn short_rev_takes_twelve() {
+    assert_eq!(short_rev("0dd31dbabcdef0123456"), "0dd31dbabcde");
+    assert_eq!(short_rev("short"), "short");
+  }
+
+  #[test]
   fn size_deltas_first_is_none_then_signed_diffs() {
     let sizes =
       vec![Some(1_000_000_000), Some(1_500_000_000), Some(1_200_000_000)];
@@ -332,7 +556,6 @@ mod tests {
   #[test]
   fn size_deltas_none_when_a_side_is_unknown() {
     let sizes = vec![Some(1_000), None, Some(2_000)];
-    // row1: prev Some / cur None → None; row2: prev None / cur Some → None
     assert_eq!(size_deltas(&sizes), vec![None, None, None]);
   }
 
@@ -362,7 +585,6 @@ mod tests {
     assert_eq!(fmt_delta(Some(0)), "±0");
     assert_eq!(fmt_delta(Some(1_073_741_824)), "+1.0 GB");
     assert_eq!(fmt_delta(Some(-1_073_741_824)), "-1.0 GB");
-    // a small delta reads in MB, not a misleading "0.0 GB"
     assert_eq!(fmt_delta(Some(31_457_280)), "+30 MB");
   }
 
@@ -376,14 +598,11 @@ mod tests {
   #[test]
   fn short_date_trims_to_minute() {
     assert_eq!(short_date("2026-08-17T08:48:37.417521418Z"), "2026-08-17 08:48");
-    // shorter / unexpected input is returned unchanged
     assert_eq!(short_date("2026-08-17"), "2026-08-17");
   }
 
   #[test]
   fn short_date_is_byte_boundary_safe() {
-    // byte 16 lands mid-'é' (2 bytes at 15-16): byte-indexed slicing
-    // would panic here; `.get` must fall back to the input unchanged.
     let s = "0123456789T2345é";
     assert_eq!(short_date(s), s);
   }
