@@ -323,6 +323,11 @@ pub struct OsGenArgs {
   /// generation (opt-in — it diffs each consecutive pair).
   #[arg(long)]
   pub changes: bool,
+
+  /// Interactive picker: choose a generation to view its detail + diff,
+  /// looping until you quit (Esc). Type to filter.
+  #[arg(long, short = 'i')]
+  pub interactive: bool,
 }
 
 #[derive(Debug, Args)]

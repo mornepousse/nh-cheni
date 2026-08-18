@@ -48,6 +48,9 @@ impl OsGenArgs {
     if let Some(n) = self.generation {
       return run_detail(&profile, n);
     }
+    if self.interactive {
+      return run_interactive(&profile);
+    }
     run_list(&profile, self.changes)
   }
 }
@@ -66,12 +69,11 @@ struct Row {
   link:          PathBuf,
 }
 
-fn run_list(profile: &Path, changes: bool) -> Result<()> {
+/// Enumerate + describe every generation, sorted ascending by number.
+/// Sizes come from one batched `path-info`; the booted flag from
+/// `/run/booted-system`.
+fn gather_rows(profile: &Path) -> Result<Vec<Row>> {
   let links = gen_links(profile)?;
-  if links.is_empty() {
-    println!("Aucune génération trouvée sous {}.", profile.display());
-    return Ok(());
-  }
   let refs: Vec<&Path> = links.iter().map(PathBuf::as_path).collect();
   let sizes = raw_closure_sizes(&refs);
   let booted = std::fs::read_link(BOOTED_SYSTEM).ok();
@@ -95,10 +97,68 @@ fn run_list(profile: &Path, changes: bool) -> Result<()> {
     })
     .collect();
   rows.sort_by_key(|r| r.number);
+  Ok(rows)
+}
 
+fn run_list(profile: &Path, changes: bool) -> Result<()> {
+  let rows = gather_rows(profile)?;
+  if rows.is_empty() {
+    println!("Aucune génération trouvée sous {}.", profile.display());
+    return Ok(());
+  }
   let counts = changes.then(|| compute_change_counts(&rows));
   print_list(&rows, counts.as_deref());
   Ok(())
+}
+
+/// One row wrapped as an `inquire::Select` choice.
+#[derive(Clone)]
+struct GenChoice {
+  number: u64,
+  label:  String,
+}
+
+impl std::fmt::Display for GenChoice {
+  fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    write!(f, "{}", self.label)
+  }
+}
+
+fn run_interactive(profile: &Path) -> Result<()> {
+  let rows = gather_rows(profile)?;
+  if rows.is_empty() {
+    println!("Aucune génération trouvée sous {}.", profile.display());
+    return Ok(());
+  }
+  let deltas = size_deltas(&rows.iter().map(|r| r.size).collect::<Vec<_>>());
+  // Built once — the generation list is stable while browsing; gathering
+  // per selection would re-run `nix path-info` on every generation each
+  // loop. Newest first for the picker.
+  let choices: Vec<GenChoice> = rows
+    .iter()
+    .enumerate()
+    .rev()
+    .map(|(i, r)| GenChoice { number: r.number, label: format_row(r, deltas[i]) })
+    .collect();
+  loop {
+    match inquire::Select::new(
+      "Génération (Échap pour quitter) :",
+      choices.clone(),
+    )
+    .prompt()
+    {
+      Ok(choice) => {
+        println!();
+        run_detail(profile, choice.number)?;
+        println!();
+      },
+      Err(
+        inquire::InquireError::OperationCanceled
+        | inquire::InquireError::OperationInterrupted,
+      ) => return Ok(()),
+      Err(e) => return Err(e.into()),
+    }
+  }
 }
 
 fn run_detail(profile: &Path, n: u64) -> Result<()> {
@@ -422,6 +482,26 @@ fn short_date(rfc: &str) -> String {
   }
 }
 
+/// The rich list line for one row (marker, number, date, size, Δ, nixos,
+/// kernel), without the optional `--changes` column. Pure — shared by
+/// the list and the interactive picker labels.
+fn format_row(r: &Row, delta: Option<i64>) -> String {
+  let mark = format!(
+    "{}{}",
+    if r.current { "→" } else { " " },
+    if r.booted { "●" } else { " " },
+  );
+  format!(
+    "{mark} {:>4}  {:>16}  {:>9}  {:>9}  {:<22}  {:<12}",
+    r.number,
+    short_date(&r.date),
+    fmt_size(r.size),
+    fmt_delta(delta),
+    r.nixos_version,
+    r.kernel,
+  )
+}
+
 fn print_list(rows: &[Row], changes: Option<&[ChangeRow]>) {
   let deltas = size_deltas(&rows.iter().map(|r| r.size).collect::<Vec<_>>());
   println!(
@@ -431,24 +511,10 @@ fn print_list(rows: &[Row], changes: Option<&[ChangeRow]>) {
   );
   // Newest first for reading; deltas were computed in ascending order.
   for (i, r) in rows.iter().enumerate().rev() {
-    let mark = format!(
-      "{}{}",
-      if r.current { "→" } else { " " },
-      if r.booted { "●" } else { " " },
-    );
     let chg = changes
       .and_then(|c| c.get(i))
       .map_or_else(String::new, |o| fmt_changes(*o));
-    println!(
-      "{mark} {:>4}  {:>16}  {:>9}  {:>9}  {:<22}  {:<12} {}",
-      r.number,
-      short_date(&r.date),
-      fmt_size(r.size),
-      fmt_delta(deltas[i]),
-      r.nixos_version,
-      r.kernel,
-      chg,
-    );
+    println!("{} {chg}", format_row(r, deltas[i]));
   }
 }
 
@@ -593,6 +659,27 @@ mod tests {
     assert_eq!(fmt_size(None), "?");
     assert_eq!(fmt_size(Some(1_073_741_824)), "1.0 GB");
     assert_eq!(fmt_size(Some(31_457_280)), "30 MB");
+  }
+
+  #[test]
+  fn format_row_shows_markers_and_fields() {
+    let r = Row {
+      number:        244,
+      date:          "2026-08-17T08:48:37Z".to_string(),
+      nixos_version: "26.05.abc".to_string(),
+      kernel:        "7.1.8-cachyos".to_string(),
+      current:       false,
+      booted:        true,
+      size:          Some(1_073_741_824),
+      link:          PathBuf::from("/nix/var/nix/profiles/system-244-link"),
+    };
+    let line = format_row(&r, Some(31_457_280));
+    assert!(line.starts_with(" ●"), "booted-only marker: {line}");
+    assert!(line.contains("244"));
+    assert!(line.contains("2026-08-17 08:48"));
+    assert!(line.contains("1.0 GB"));
+    assert!(line.contains("+30 MB"));
+    assert!(line.contains("7.1.8-cachyos"));
   }
 
   #[test]
